@@ -152,18 +152,12 @@ Rcpp::NumericVector LeafThermalSystem_get_current_drivers(SEXP LeafThermalSystem
 SEXP LeafSolver_new(SEXP system_xp, SEXP control_xp, SEXP drivers_xp, bool active = false) {
   Rcpp::XPtr<SystemType> sys(system_xp);
   Rcpp::XPtr<ode::OdeControl> ctrl(control_xp);
-  Rcpp::XPtr<drivers::Drivers> drv(drivers_xp);
 
   if (active) {
-    auto pars = sys->get_pars();
-
-    std::vector<double> initial_state(sys->ode_size());
-    sys->ode_initial_state(initial_state.begin());
-    auto t0 = sys->ode_t0();
-
-    ActiveSystemType sys_active(LeafThermalPars{pars[0], pars[1], pars[2], pars[3]}, *drv);
-    sys_active.set_initial_state(initial_state.begin(), t0);
-
+    // Lift the double system to its active mould (RIF-2) -- no hand-construction.
+    // Uses the system's own drivers (as the double branch does), so drivers_xp is
+    // vestigial here now.
+    auto sys_active = sys->rebind_from<ActiveSystemType::value_type>();
     auto* solver = new ode::Solver<ActiveSystemType>(sys_active, *ctrl);
     return Rcpp::XPtr<ode::Solver<ActiveSystemType>>(solver, true);
   } else {

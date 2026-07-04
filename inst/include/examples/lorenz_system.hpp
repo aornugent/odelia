@@ -20,6 +20,21 @@ public:
     reset();  // initialises state & time
   }
 
+  // Lift this system's configuration into a copy templated on a different scalar
+  // (double -> active): the AD driver builds the active system from the plain one
+  // generically, with no per-system hand-construction. Only values cross, so the
+  // new system carries no tape identity; the driver seeds its inputs afterwards
+  // via set_params / set_initial_state. (RIF-2.)
+  template <class S2> using rebind = LorenzSystem<S2>;
+
+  template <class S2>
+  rebind<S2> rebind_from() const {
+    rebind<S2> out(xad::value(sigma), xad::value(R), xad::value(b));
+    const double ic[] = {xad::value(y0_init), xad::value(y1_init), xad::value(y2_init)};
+    out.set_initial_state(ic, t0);
+    return out;
+  }
+
   // ODE interface
   size_t ode_size() const { return ode_dimension; }
 

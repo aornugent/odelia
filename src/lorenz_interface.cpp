@@ -100,18 +100,9 @@ SEXP Solver_new(SEXP system_xp, SEXP control_xp, bool active = false) {
   Rcpp::XPtr<ode::OdeControl> ctrl(control_xp);
   
   if (active) {
-    // Initialize new AD compatible system
-    auto params = sys->pars();
-    
-    std::vector<double> initial_state(sys->ode_size());
-    sys->ode_initial_state(initial_state.begin());
-    auto t0 = sys->ode_t0();
-    
-    ActiveSystemType sys_active(params[0], params[1], params[2]);
-    sys_active.set_initial_state(initial_state.begin(), t0);
-    
+    // Lift the double system to its active mould (RIF-2) -- no hand-construction.
+    auto sys_active = sys->rebind_from<ActiveSystemType::value_type>();
     auto* solver = new ode::Solver<ActiveSystemType>(sys_active, *ctrl);
-    
     return Rcpp::XPtr<ode::Solver<ActiveSystemType>>(solver, true);
   } else {
     // Create regular solver

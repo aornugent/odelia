@@ -39,6 +39,23 @@ public:
     reset();
   }
 
+  // Lift this system's configuration into a copy templated on a different scalar
+  // (double -> active): the AD driver builds the active system from the plain one
+  // generically, with no per-system hand-construction. Only values cross, so the
+  // new system carries no tape identity; the driver seeds its inputs afterwards
+  // via set_params / set_initial_state. (RIF-2.)
+  template <class S2> using rebind = LeafThermalSystem<S2>;
+
+  template <class S2>
+  rebind<S2> rebind_from() const {
+    const LeafThermalPars p{xad::value(k_H), xad::value(g_tr_max),
+                            xad::value(m_tr), xad::value(T_tr_mid)};
+    rebind<S2> out(p, drivers);
+    const double ic = xad::value(T_LC_init);
+    out.set_initial_state(&ic, t0);
+    return out;
+  }
+
   void initialize_drivers(const drivers::Drivers &drv) {
     drivers = drv;
     temperature_fn = drivers.get_function_ptr("temperature");
