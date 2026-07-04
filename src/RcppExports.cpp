@@ -10,6 +10,17 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// analytic_edge_demo
+Rcpp::List analytic_edge_demo(double a);
+RcppExport SEXP _odelia_analytic_edge_demo(SEXP aSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type a(aSEXP);
+    rcpp_result_gen = Rcpp::wrap(analytic_edge_demo(a));
+    return rcpp_result_gen;
+END_RCPP
+}
 // System_new
 SEXP System_new(double sigma, double R, double b);
 RcppExport SEXP _odelia_System_new(SEXP sigmaSEXP, SEXP RSEXP, SEXP bSEXP) {
@@ -570,6 +581,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_odelia_analytic_edge_demo", (DL_FUNC) &_odelia_analytic_edge_demo, 1},
     {"_odelia_System_new", (DL_FUNC) &_odelia_System_new, 3},
     {"_odelia_System_pars", (DL_FUNC) &_odelia_System_pars, 1},
     {"_odelia_System_set_params", (DL_FUNC) &_odelia_System_set_params, 2},
