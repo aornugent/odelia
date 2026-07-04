@@ -101,6 +101,10 @@ Solver_fit <- function(solver_xp, ic = NULL, params = NULL) {
     .Call(`_odelia_Solver_fit`, solver_xp, ic, params)
 }
 
+Solver_gradient_final_state <- function(solver_xp, times, params) {
+    .Call(`_odelia_Solver_gradient_final_state`, solver_xp, times, params)
+}
+
 lorenz_rhs <- function(t, state, pars) {
     .Call(`_odelia_lorenz_rhs`, t, state, pars)
 }

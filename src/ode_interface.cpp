@@ -438,8 +438,9 @@ Rcpp::List Solver_fit_impl(SEXP solver_xp,
     params_opt = std::vector<double>(params_vec.begin(), params_vec.end());
   }
   
-  // Compute gradient using unified function
-  auto [loss, gradient] = ode::compute_gradient(*solver, ic_opt, params_opt);
+  // Compute gradient of the sum-of-squares loss (the default functional)
+  auto [loss, gradient] = ode::compute_gradient(*solver, ode::sum_of_squares_loss{},
+                                                ic_opt, params_opt);
   
   return Rcpp::List::create(
     Rcpp::Named("loss") = loss,

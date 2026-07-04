@@ -22,6 +22,8 @@ template <typename System>
 class Solver
 {
 public:
+  using value_type = typename System::value_type;
+
   Solver(System sys_, OdeControl control) : system(sys_), solver(system, control)
   {
     collect = true;
