@@ -224,6 +224,38 @@ Rcpp::List Solver_fit(SEXP solver_xp,
 }
 
 //-------------------------------------------------------------------------
+// A second functional, exercising the seam generalised in ode_fit.hpp: the
+// gradient of the summed final state after a fixed-grid advance, w.r.t. the
+// parameters. Nothing here mentions targets or sum-of-squares -- it is a
+// stand-in for an emergent-metric functional, and proves compute_gradient no
+// longer hard-codes the loss.
+struct sum_final_state {
+  std::vector<double> times;
+  template<typename Solver>
+  typename Solver::value_type operator()(Solver& solver) const {
+    solver.advance_fixed(times);
+    typename Solver::value_type total(0.0);
+    for (auto const& s : solver.state()) {
+      total += s;
+    }
+    return total;
+  }
+};
+
+// [[Rcpp::export]]
+Rcpp::List Solver_gradient_final_state(SEXP solver_xp,
+                                       Rcpp::NumericVector times,
+                                       Rcpp::NumericVector params) {
+  auto solver = odelia::solver::get_solver<ActiveSystemType>(solver_xp);
+  std::vector<double> t(times.begin(), times.end());
+  std::vector<double> p(params.begin(), params.end());
+  auto [value, gradient] =
+    ode::compute_gradient(*solver, sum_final_state{t}, std::nullopt, p);
+  return Rcpp::List::create(Rcpp::Named("value") = value,
+                            Rcpp::Named("gradient") = Rcpp::wrap(gradient));
+}
+
+//-------------------------------------------------------------------------
 // Comparison function for deSolve
 
 // [[Rcpp::export]]
