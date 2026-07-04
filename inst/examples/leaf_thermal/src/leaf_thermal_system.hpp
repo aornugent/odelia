@@ -68,15 +68,6 @@ public:
     return it;
   }
 
-  // Set the initial state and register on tape for AD gradient computation
-  template <typename Tape, typename Iterator>
-  std::vector<T*> set_initial_state(Tape& tape, Iterator it, double t0_) {
-    t0 = t0_;
-    T_LC_init = *it++;
-    tape.registerInput(T_LC_init);
-    return {&T_LC_init};
-  }
-
   // Set parameters - no tape registration
   template <typename Iterator>
   Iterator set_params(Iterator it) {
@@ -87,18 +78,25 @@ public:
     return it;
   }
 
-  // Set parameters and register on tape for AD gradient computation
-  template <typename Tape, typename Iterator>
-  std::vector<T*> set_params(Tape& tape, Iterator it) {
-    k_H = *it++;
-    g_tr_max = *it++;
-    m_tr = *it++;
-    T_tr_mid = *it++;
-    tape.registerInput(k_H);
-    tape.registerInput(g_tr_max);
-    tape.registerInput(m_tr);
-    tape.registerInput(T_tr_mid);
-    return {&k_H, &g_tr_max, &m_tr, &T_tr_mid};
+  // Number of parameter leaves, so a caller can lay out the AD leaf slots
+  // (params first, then the ODE initial state).
+  size_t n_params() const { return 4; }
+
+  // AD input contract: route each seeded leaf value onto the field its slot
+  // names. Slot layout: 0=k_H, 1=g_tr_max, 2=m_tr, 3=T_tr_mid, 4=T_LC_init
+  // (params first, then initial state).
+  template <typename Iterator>
+  void scatter(Iterator it, const std::vector<int>& slots) {
+    for (int s : slots) {
+      switch (s) {
+        case 0: k_H       = *it++; break;
+        case 1: g_tr_max  = *it++; break;
+        case 2: m_tr      = *it++; break;
+        case 3: T_tr_mid  = *it++; break;
+        case 4: T_LC_init = *it++; break;
+        default: util::stop("LeafThermalSystem::scatter: unknown Independents slot");
+      }
+    }
   }
 
 void set_drivers() {

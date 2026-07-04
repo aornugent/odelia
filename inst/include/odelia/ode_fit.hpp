@@ -27,10 +27,8 @@ T sum_of_squares(const std::vector<std::vector<T>>& obs,
 }
 
 // A "functional" is any callable that takes a seeded, freshly-reset Solver,
-// drives it, and returns the scalar to differentiate. Driving is the
-// functional's job, so odelia never learns what is being solved or scored --
-// calibration here, an emergent metric in plant. This one, the default, scores
-// the trajectory against its configured targets.
+// drives it, and returns the scalar to differentiate. This default scores the
+// trajectory against its configured targets.
 struct sum_of_squares_loss {
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {
@@ -50,32 +48,48 @@ struct tape_deactivate_guard {
 };
 } // namespace detail
 
+// The active inputs a gradient is taken with respect to: leaf values, each
+// addressed to a System field by a slot index. The System owns the slot->field
+// routing (its scatter method); odelia only carries opaque (slot, value) pairs,
+// so it never learns whether a leaf is a trait, an initial density, or a
+// boundary flux. Any subset is expressible -- seed only ICs for IC sensitivity,
+// only traits for calibration, or both -- with no per-kind branching. Column j
+// of the Jacobian corresponds to (slots[j], values[j]).
+struct Independents {
+  std::vector<int>    slots;
+  std::vector<double> values;   // parallel to slots
+
+  bool empty() const { return values.empty(); }
+};
+
 // Reverse-mode Jacobian of a multi-output functional -- `functional(solver)`
-// returns the m outputs -- w.r.t. the n initial conditions and/or parameters.
+// returns the m outputs -- w.r.t. the active inputs named by `independents`.
 // Delegates the record-once/row-sweep to xad::computeJacobian (the adjoint
 // driver, optimal here: outputs << inputs, few metrics vs many traits). We
-// supply the seam it doesn't know about: a `foo` that scatters the registered
-// inputs into the System and drives the solver. Returns the m output values and
-// the m x n Jacobian (row i = d(output_i)/d(input)).
+// supply the seam it doesn't know about: the forward callback that scatters the
+// registered inputs into the System and drives the solver. Returns the m output
+// values and the m x n Jacobian (row i = d(output_i)/d(input)).
 //
 // `codomain` is the number of outputs m. Passing it is not cosmetic: XAD runs
-// `foo` an extra time just to size the output when it is left at 0 (the docs are
-// explicit) -- one wasted forward eval, i.e. a full model replay when plant
-// drives this. The caller knows m (the functional's codomain), so it threads it
-// through.
+// the forward callback an extra time just to size the output when it is left at
+// 0 (the docs are explicit) -- one wasted forward eval, i.e. a full model replay
+// when plant drives this. The caller knows m (the functional's codomain), so it
+// threads it through.
 template<typename Solver, typename Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobian(
     Solver& solver,
+    const Independents& independents,
     Functional&& functional,
-    std::size_t codomain,
-    std::optional<std::vector<double>> ic = std::nullopt,
-    std::optional<std::vector<double>> params = std::nullopt
+    std::size_t codomain
 ) {
     using ad = xad::adj<double>;
     using ad_type = ad::active_type;
 
-    if (!ic && !params) {
-        util::stop("Must provide at least one of 'ic' or 'params'");
+    if (independents.empty()) {
+        util::stop("Independents must seed at least one leaf");
+    }
+    if (independents.slots.size() != independents.values.size()) {
+        util::stop("Independents: 'slots' and 'values' must be the same length");
     }
 
     // Reuse tape across calls to avoid invalidating slots
@@ -86,20 +100,14 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
     detail::tape_deactivate_guard<ad::tape_type> guard{solver.tape};
 
     // xad::computeJacobian owns the input registration, so it takes the inputs as
-    // one flat vector and calls us back to map them onto the System; the plain
-    // (non-registering) setters propagate those active values into the fields.
-    std::vector<ad_type> inputs;
-    if (params) inputs.insert(inputs.end(), params->begin(), params->end());
-    if (ic)     inputs.insert(inputs.end(), ic->begin(), ic->end());
-    const double t0 = solver.fit_times().empty() ? 0.0 : solver.fit_times()[0];
+    // one flat vector and calls the forward callback to map them onto the System;
+    // the System's scatter routes each active value to the field its slot names.
+    std::vector<ad_type> inputs(independents.values.begin(), independents.values.end());
 
     std::vector<double> values;
     std::function<std::vector<ad_type>(std::vector<ad_type>&)> forward =
         [&](std::vector<ad_type>& x) {
-            auto& system = solver.get_system_ref();
-            auto it = x.begin();
-            if (params) it = system.set_params(it);
-            if (ic)     it = system.set_initial_state(it, t0);
+            solver.get_system_ref().scatter(x.begin(), independents.slots);
             solver.reset();
             auto outputs = functional(solver);
             values.resize(outputs.size());
@@ -113,26 +121,22 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
     return {values, jacobian};
 }
 
-// Reverse-mode gradient of a scalar `functional(solver)` w.r.t. the initial
-// conditions and/or parameters seeded active. A gradient is the one-row Jacobian
-// of a scalar functional -- in adjoint mode with codomain = 1 the cost is
-// identical (record once, one sweep) -- so this is a thin adapter over the one
-// driver: wrap the scalar functional into a 1-vector functional and unwrap the
-// single row. Keeping a single tape-management path means each System needs only
-// the plain scatter setters, not the registering overloads compute_gradient used
-// to require.
+// Reverse-mode gradient of a scalar `functional(solver)` w.r.t. the active
+// inputs named by `independents`. A gradient is the one-row Jacobian of a scalar
+// functional -- in adjoint mode with codomain = 1 the cost is identical (record
+// once, one sweep) -- so this is a thin adapter over the one driver: wrap the
+// scalar functional into a 1-vector functional and unwrap the single row.
 template<typename Solver, typename Functional>
 std::pair<double, std::vector<double>> compute_gradient(
     Solver& solver,
-    Functional&& functional,
-    std::optional<std::vector<double>> ic = std::nullopt,
-    std::optional<std::vector<double>> params = std::nullopt
+    const Independents& independents,
+    Functional&& functional
 ) {
     using value_type = typename Solver::value_type;
     auto as_vector = [&](Solver& s) {
         return std::vector<value_type>{ functional(s) };
     };
-    auto [values, jacobian] = compute_jacobian(solver, as_vector, 1, ic, params);
+    auto [values, jacobian] = compute_jacobian(solver, independents, as_vector, 1);
     return {values[0], jacobian[0]};
 }
 

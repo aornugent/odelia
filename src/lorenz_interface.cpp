@@ -248,9 +248,14 @@ Rcpp::List Solver_gradient_final_state(SEXP solver_xp,
                                        Rcpp::NumericVector params) {
   auto solver = odelia::solver::get_solver<ActiveSystemType>(solver_xp);
   std::vector<double> t(times.begin(), times.end());
-  std::vector<double> p(params.begin(), params.end());
+  // Seed the parameter leaves (slots 0..n_params-1).
+  ode::Independents independents;
+  for (int i = 0; i < params.size(); ++i) {
+    independents.slots.push_back(i);
+    independents.values.push_back(params[i]);
+  }
   auto [value, gradient] =
-    ode::compute_gradient(*solver, sum_final_state{t}, std::nullopt, p);
+    ode::compute_gradient(*solver, independents, sum_final_state{t});
   return Rcpp::List::create(Rcpp::Named("value") = value,
                             Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }
@@ -272,11 +277,16 @@ Rcpp::List Solver_jacobian_final_state(SEXP solver_xp,
                                        Rcpp::NumericVector params) {
   auto solver = odelia::solver::get_solver<ActiveSystemType>(solver_xp);
   std::vector<double> t(times.begin(), times.end());
-  std::vector<double> p(params.begin(), params.end());
+  // Seed the parameter leaves (slots 0..n_params-1).
+  ode::Independents independents;
+  for (int i = 0; i < params.size(); ++i) {
+    independents.slots.push_back(i);
+    independents.values.push_back(params[i]);
+  }
   // codomain = m = the full ODE state the functional returns.
   const std::size_t codomain = solver->get_system_ref().ode_size();
   auto [values, jacobian] =
-    ode::compute_jacobian(*solver, final_state{t}, codomain, std::nullopt, p);
+    ode::compute_jacobian(*solver, independents, final_state{t}, codomain);
 
   const size_t m = jacobian.size(), n = m ? jacobian[0].size() : 0;
   Rcpp::NumericMatrix J(m, n);

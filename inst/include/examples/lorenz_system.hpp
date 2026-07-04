@@ -62,6 +62,30 @@ public:
     return it;
   }
 
+  // Number of parameter leaves, so a caller can lay out the AD leaf slots
+  // (params first, then the ODE initial state).
+  size_t n_params() const { return 3; }
+
+  // AD input contract: route each seeded leaf value onto the field its slot
+  // names. Slot layout: 0=sigma, 1=R, 2=b, 3=y0_init, 4=y1_init, 5=y2_init
+  // (params first, then initial state). odelia hands us active values and the
+  // slots they address; we never see whether a caller asked for trait or IC
+  // sensitivity -- we just write each value home.
+  template <typename Iterator>
+  void scatter(Iterator it, const std::vector<int>& slots) {
+    for (int s : slots) {
+      switch (s) {
+        case 0: sigma   = *it++; break;
+        case 1: R       = *it++; break;
+        case 2: b       = *it++; break;
+        case 3: y0_init = *it++; break;
+        case 4: y1_init = *it++; break;
+        case 5: y2_init = *it++; break;
+        default: util::stop("LorenzSystem::scatter: unknown Independents slot");
+      }
+    }
+  }
+
   template <typename Iterator>
   Iterator ode_state(Iterator it) const {
     *it++ = y0;

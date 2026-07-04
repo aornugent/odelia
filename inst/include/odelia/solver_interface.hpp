@@ -273,22 +273,29 @@ inline Rcpp::List Solver_fit_impl(SEXP solver_xp,
     Rcpp::stop("Must call set_target() before Solver_fit()");
   }
   
-  // Convert to std::optional
-  std::optional<std::vector<double>> ic_opt;
-  if (!ic.isNull()) {
-    Rcpp::NumericVector ic_vec(ic);
-    ic_opt = std::vector<double>(ic_vec.begin(), ic_vec.end());
-  }
-  
-  std::optional<std::vector<double>> params_opt;
+  // Bundle the seeded inputs as addressed leaves. ic and params arrive as
+  // separate R args; the System lays its leaf slots out params-first, then the
+  // ODE initial state, so param i -> slot i and ic j -> slot n_params + j.
+  ode::Independents independents;
+  const int n_params = static_cast<int>(solver->get_system_ref().n_params());
   if (!params.isNull()) {
     Rcpp::NumericVector params_vec(params);
-    params_opt = std::vector<double>(params_vec.begin(), params_vec.end());
+    for (int i = 0; i < params_vec.size(); ++i) {
+      independents.slots.push_back(i);
+      independents.values.push_back(params_vec[i]);
+    }
   }
-  
+  if (!ic.isNull()) {
+    Rcpp::NumericVector ic_vec(ic);
+    for (int j = 0; j < ic_vec.size(); ++j) {
+      independents.slots.push_back(n_params + j);
+      independents.values.push_back(ic_vec[j]);
+    }
+  }
+
   // Compute gradient of the sum-of-squares loss (the default functional)
-  auto [loss, gradient] = ode::compute_gradient(*solver, ode::sum_of_squares_loss{},
-                                                ic_opt, params_opt);
+  auto [loss, gradient] = ode::compute_gradient(*solver, independents,
+                                                ode::sum_of_squares_loss{});
   
   return Rcpp::List::create(
     Rcpp::Named("loss") = loss,
