@@ -214,6 +214,18 @@ Rcpp::List Solver_fit(SEXP solver_xp,
   );
 }
 
+// value + sum-of-squares-loss gradient on the DOUBLE handle (RIF-1): the
+// double-handle successor to Solver_fit; the active replay is built, used, and
+// destroyed inside the call.
+// [[Rcpp::export]]
+Rcpp::List Solver_value_and_gradient(SEXP solver_xp,
+                                     Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
+                                     Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
+  return odelia::solver::Solver_value_and_gradient_impl<SystemType, ActiveSystemType>(
+    solver_xp, ic, params
+  );
+}
+
 //-------------------------------------------------------------------------
 // A second functional, exercising the seam generalised in ode_fit.hpp: the
 // gradient of the summed final state after a fixed-grid advance, w.r.t. the
@@ -233,11 +245,11 @@ struct sum_final_state {
   }
 };
 
+// DOUBLE solver handle; the active replay is built internally.
 // [[Rcpp::export]]
 Rcpp::List Solver_gradient_final_state(SEXP solver_xp,
                                        Rcpp::NumericVector times,
                                        Rcpp::NumericVector params) {
-  auto solver = odelia::solver::get_solver<ActiveSystemType>(solver_xp);
   std::vector<double> t(times.begin(), times.end());
   // Seed the parameter leaves (slots 0..n_params-1).
   ode::Independents independents;
@@ -245,8 +257,8 @@ Rcpp::List Solver_gradient_final_state(SEXP solver_xp,
     independents.slots.push_back(i);
     independents.values.push_back(params[i]);
   }
-  auto [value, gradient] =
-    ode::compute_gradient(*solver, independents, sum_final_state{t});
+  auto [value, gradient] = odelia::solver::gradient_on_double<SystemType, ActiveSystemType>(
+    solver_xp, independents, sum_final_state{t});
   return Rcpp::List::create(Rcpp::Named("value") = value,
                             Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }
@@ -262,11 +274,11 @@ struct final_state {
   }
 };
 
+// DOUBLE solver handle; the active replay is built internally.
 // [[Rcpp::export]]
 Rcpp::List Solver_jacobian_final_state(SEXP solver_xp,
                                        Rcpp::NumericVector times,
                                        Rcpp::NumericVector params) {
-  auto solver = odelia::solver::get_solver<ActiveSystemType>(solver_xp);
   std::vector<double> t(times.begin(), times.end());
   // Seed the parameter leaves (slots 0..n_params-1).
   ode::Independents independents;
@@ -275,9 +287,10 @@ Rcpp::List Solver_jacobian_final_state(SEXP solver_xp,
     independents.values.push_back(params[i]);
   }
   // codomain = m = the full ODE state the functional returns.
-  const std::size_t codomain = solver->get_system_ref().ode_size();
-  auto [values, jacobian] =
-    ode::compute_jacobian(*solver, independents, final_state{t}, codomain);
+  const std::size_t codomain =
+    odelia::solver::get_solver<SystemType>(solver_xp)->get_system_ref().ode_size();
+  auto [values, jacobian] = odelia::solver::jacobian_on_double<SystemType, ActiveSystemType>(
+    solver_xp, independents, final_state{t}, codomain);
 
   const size_t m = jacobian.size(), n = m ? jacobian[0].size() : 0;
   Rcpp::NumericMatrix J(m, n);

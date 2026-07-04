@@ -24,7 +24,8 @@ class Solver
 public:
   using value_type = typename System::value_type;
 
-  Solver(System sys_, OdeControl control) : system(sys_), solver(system, control)
+  Solver(System sys_, OdeControl control)
+    : system(sys_), control_(control), solver(system, control)
   {
     collect = true;
   }
@@ -55,6 +56,10 @@ public:
 
   System get_system() const { return system; }
   System& get_system_ref() { return system; }
+
+  // The control this solver was built with -- lets a driver construct the active
+  // replay (RIF-2 rebind) with the same integration settings (RIF-1).
+  OdeControl get_control() const { return control_; }
 
   // Synchronize internal ODE buffers from the current system state without
   // resetting solver history/step-size state.
@@ -233,9 +238,10 @@ std::vector<std::vector<typename System::value_type>> advance_target() {
   // TODO: should this be part of ode_solver?
 std::vector<System> history;
 
-private:  
+private:
   bool collect;
   System system;
+  OdeControl control_;
   SolverInternal<System> solver;
   
   // Fit configuration for AD gradient computation

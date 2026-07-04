@@ -303,6 +303,69 @@ inline Rcpp::List Solver_fit_impl(SEXP solver_xp,
   );
 }
 
+// ---- Gradients on the DOUBLE handle (RIF-1) --------------------------------
+// R holds only the double Solver. These helpers build the active replay inside
+// the call -- lift the double System to active (RIF-2 rebind), reuse its control
+// and target -- differentiate, and return doubles. The active system is created,
+// used, and destroyed here; R never sees an active type or an `active` flag.
+
+template <class SystemType, class ActiveSystemType>
+ode::Solver<ActiveSystemType> active_replay(SEXP solver_xp) {
+  auto d = get_solver<SystemType>(solver_xp);
+  ode::Solver<ActiveSystemType> active(
+      d->get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
+      d->get_control());
+  active.set_target(d->fit_times(), d->targets(), d->obs_indices());
+  return active;
+}
+
+template <class SystemType, class ActiveSystemType, class Functional>
+std::pair<double, std::vector<double>>
+gradient_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& functional) {
+  auto active = active_replay<SystemType, ActiveSystemType>(solver_xp);
+  return ode::compute_gradient(active, ind, std::forward<Functional>(functional));
+}
+
+template <class SystemType, class ActiveSystemType, class Functional>
+std::pair<std::vector<double>, std::vector<std::vector<double>>>
+jacobian_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& functional,
+                   std::size_t codomain) {
+  auto active = active_replay<SystemType, ActiveSystemType>(solver_xp);
+  return ode::compute_jacobian(active, ind, std::forward<Functional>(functional), codomain);
+}
+
+// Combined value + gradient of the sum-of-squares loss from ONE recording -- the
+// calibration entry (user story §6.3): an optimiser's fn/gr share the tape rather
+// than each re-running it. Replaces the active-handle Solver_fit.
+template <class SystemType, class ActiveSystemType>
+Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
+                                          Rcpp::Nullable<Rcpp::NumericVector> ic,
+                                          Rcpp::Nullable<Rcpp::NumericVector> params) {
+  // Lay leaves out params-first, then the ODE initial state (param i -> slot i,
+  // ic j -> slot n_params + j).
+  ode::Independents ind;
+  const int n_params =
+      static_cast<int>(get_solver<SystemType>(solver_xp)->get_system_ref().n_params());
+  if (!params.isNull()) {
+    Rcpp::NumericVector v(params);
+    for (int i = 0; i < v.size(); ++i) {
+      ind.slots.push_back(i);
+      ind.values.push_back(v[i]);
+    }
+  }
+  if (!ic.isNull()) {
+    Rcpp::NumericVector v(ic);
+    for (int j = 0; j < v.size(); ++j) {
+      ind.slots.push_back(n_params + j);
+      ind.values.push_back(v[j]);
+    }
+  }
+  auto [value, gradient] = gradient_on_double<SystemType, ActiveSystemType>(
+      solver_xp, ind, ode::sum_of_squares_loss{});
+  return Rcpp::List::create(Rcpp::Named("value") = value,
+                            Rcpp::Named("gradient") = Rcpp::wrap(gradient));
+}
+
 } // namespace solver
 } // namespace odelia
 

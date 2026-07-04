@@ -105,6 +105,10 @@ Solver_fit <- function(solver_xp, ic = NULL, params = NULL) {
     .Call(`_odelia_Solver_fit`, solver_xp, ic, params)
 }
 
+Solver_value_and_gradient <- function(solver_xp, ic = NULL, params = NULL) {
+    .Call(`_odelia_Solver_value_and_gradient`, solver_xp, ic, params)
+}
+
 Solver_gradient_final_state <- function(solver_xp, times, params) {
     .Call(`_odelia_Solver_gradient_final_state`, solver_xp, times, params)
 }

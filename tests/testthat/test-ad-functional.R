@@ -25,9 +25,9 @@ test_that("compute_gradient differentiates a custom functional", {
 
   sys <- LorenzSystem$new(pars[1], pars[2], pars[3])
   sys$set_initial_state(y0, t0 = times[1])
-  ad_solver <- Lorenz_Solver$new(sys$ptr, ctrl$ptr, active = TRUE)
+  solver <- Lorenz_Solver$new(sys$ptr, ctrl$ptr)  # double handle; active built internally
 
-  res <- Solver_gradient_final_state(ad_solver$ptr, times, pars)
+  res <- Solver_gradient_final_state(solver$ptr, times, pars)
 
   # Value reproduces the forward solve.
   expect_equal(res$value, final_state_sum(pars, y0, times, ctrl), tolerance = 1e-8)

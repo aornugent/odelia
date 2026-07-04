@@ -320,6 +320,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// Solver_value_and_gradient
+Rcpp::List Solver_value_and_gradient(SEXP solver_xp, Rcpp::Nullable<Rcpp::NumericVector> ic, Rcpp::Nullable<Rcpp::NumericVector> params);
+RcppExport SEXP _odelia_Solver_value_and_gradient(SEXP solver_xpSEXP, SEXP icSEXP, SEXP paramsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type ic(icSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type params(paramsSEXP);
+    rcpp_result_gen = Rcpp::wrap(Solver_value_and_gradient(solver_xp, ic, params));
+    return rcpp_result_gen;
+END_RCPP
+}
 // Solver_gradient_final_state
 Rcpp::List Solver_gradient_final_state(SEXP solver_xp, Rcpp::NumericVector times, Rcpp::NumericVector params);
 RcppExport SEXP _odelia_Solver_gradient_final_state(SEXP solver_xpSEXP, SEXP timesSEXP, SEXP paramsSEXP) {
@@ -607,6 +620,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Solver_get_history", (DL_FUNC) &_odelia_Solver_get_history, 2},
     {"_odelia_Solver_set_target", (DL_FUNC) &_odelia_Solver_set_target, 5},
     {"_odelia_Solver_fit", (DL_FUNC) &_odelia_Solver_fit, 3},
+    {"_odelia_Solver_value_and_gradient", (DL_FUNC) &_odelia_Solver_value_and_gradient, 3},
     {"_odelia_Solver_gradient_final_state", (DL_FUNC) &_odelia_Solver_gradient_final_state, 3},
     {"_odelia_Solver_jacobian_final_state", (DL_FUNC) &_odelia_Solver_jacobian_final_state, 3},
     {"_odelia_lorenz_rhs", (DL_FUNC) &_odelia_lorenz_rhs, 3},

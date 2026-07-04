@@ -23,9 +23,9 @@ test_that("compute_jacobian matches finite differences", {
 
   sys <- LorenzSystem$new(pars[1], pars[2], pars[3])
   sys$set_initial_state(y0, t0 = times[1])
-  ad_solver <- Lorenz_Solver$new(sys$ptr, ctrl$ptr, active = TRUE)
+  solver <- Lorenz_Solver$new(sys$ptr, ctrl$ptr)  # double handle; active built internally
 
-  res <- Solver_jacobian_final_state(ad_solver$ptr, times, pars)
+  res <- Solver_jacobian_final_state(solver$ptr, times, pars)
 
   # Values reproduce the forward solve.
   expect_equal(res$values, final_state_vec(pars, y0, times, ctrl), tolerance = 1e-8)
@@ -45,7 +45,7 @@ test_that("compute_jacobian matches finite differences", {
   expect_equal(res$jacobian, unname(fd), tolerance = 1e-5)
 })
 
-test_that("compute_jacobian reuses the Solver-owned tape across calls", {
+test_that("repeated jacobian calls on one double solver reproduce", {
   testthat::skip_if(is_pkgload_dll(), "Skipping AD workflow in pkgload load_all sessions due unstable native-pointer lifecycle.")
 
   pars <- c(sigma = 10.0, R = 28.0, b = 8.0 / 3.0)
@@ -55,13 +55,13 @@ test_that("compute_jacobian reuses the Solver-owned tape across calls", {
 
   sys <- LorenzSystem$new(pars[1], pars[2], pars[3])
   sys$set_initial_state(y0, t0 = times[1])
-  ad_solver <- Lorenz_Solver$new(sys$ptr, ctrl$ptr, active = TRUE)
+  solver <- Lorenz_Solver$new(sys$ptr, ctrl$ptr)  # double handle; active built internally
 
-  first <- Solver_jacobian_final_state(ad_solver$ptr, times, pars)
-  second <- Solver_jacobian_final_state(ad_solver$ptr, times, pars)
+  first <- Solver_jacobian_final_state(solver$ptr, times, pars)
+  second <- Solver_jacobian_final_state(solver$ptr, times, pars)
 
-  # A second call on the same solver reuses the persistent tape; the recording
-  # must be rebuilt cleanly, not corrupted by the first.
+  # Each call builds a fresh active replay + tape internally (cross-call tape reuse
+  # is RIF-3); a second call on the same double solver must reproduce the first.
   expect_equal(second$values, first$values)
   expect_equal(second$jacobian, first$jacobian)
 })
