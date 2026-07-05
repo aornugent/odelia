@@ -322,6 +322,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// Solver_jacobian_final_state
+Rcpp::List Solver_jacobian_final_state(SEXP solver_xp, Rcpp::NumericVector times, Rcpp::NumericVector params);
+RcppExport SEXP _odelia_Solver_jacobian_final_state(SEXP solver_xpSEXP, SEXP timesSEXP, SEXP paramsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type times(timesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type params(paramsSEXP);
+    rcpp_result_gen = Rcpp::wrap(Solver_jacobian_final_state(solver_xp, times, params));
+    return rcpp_result_gen;
+END_RCPP
+}
 // lorenz_rhs
 List lorenz_rhs(double t, NumericVector state, NumericVector pars);
 RcppExport SEXP _odelia_lorenz_rhs(SEXP tSEXP, SEXP stateSEXP, SEXP parsSEXP) {
@@ -583,6 +596,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Solver_set_target", (DL_FUNC) &_odelia_Solver_set_target, 5},
     {"_odelia_Solver_fit", (DL_FUNC) &_odelia_Solver_fit, 3},
     {"_odelia_Solver_gradient_final_state", (DL_FUNC) &_odelia_Solver_gradient_final_state, 3},
+    {"_odelia_Solver_jacobian_final_state", (DL_FUNC) &_odelia_Solver_jacobian_final_state, 3},
     {"_odelia_lorenz_rhs", (DL_FUNC) &_odelia_lorenz_rhs, 3},
     {"_odelia_test_param_types", (DL_FUNC) &_odelia_test_param_types, 1},
     {"_odelia_OdeControl_new", (DL_FUNC) &_odelia_OdeControl_new, 0},

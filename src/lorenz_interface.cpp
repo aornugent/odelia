@@ -255,6 +255,40 @@ Rcpp::List Solver_gradient_final_state(SEXP solver_xp,
                             Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }
 
+// A multi-output functional: the whole final state after a fixed-grid advance.
+// Drives compute_jacobian's row-sweep with m = ode_size outputs.
+struct final_state {
+  std::vector<double> times;
+  template<typename Solver>
+  std::vector<typename Solver::value_type> operator()(Solver& solver) const {
+    solver.advance_fixed(times);
+    return solver.state();
+  }
+};
+
+// [[Rcpp::export]]
+Rcpp::List Solver_jacobian_final_state(SEXP solver_xp,
+                                       Rcpp::NumericVector times,
+                                       Rcpp::NumericVector params) {
+  auto solver = odelia::solver::get_solver<ActiveSystemType>(solver_xp);
+  std::vector<double> t(times.begin(), times.end());
+  std::vector<double> p(params.begin(), params.end());
+  // codomain = m = the full ODE state the functional returns.
+  const std::size_t codomain = solver->get_system_ref().ode_size();
+  auto [values, jacobian] =
+    ode::compute_jacobian(*solver, final_state{t}, codomain, std::nullopt, p);
+
+  const size_t m = jacobian.size(), n = m ? jacobian[0].size() : 0;
+  Rcpp::NumericMatrix J(m, n);
+  for (size_t i = 0; i < m; ++i) {
+    for (size_t j = 0; j < n; ++j) {
+      J(i, j) = jacobian[i][j];
+    }
+  }
+  return Rcpp::List::create(Rcpp::Named("values") = Rcpp::wrap(values),
+                            Rcpp::Named("jacobian") = J);
+}
+
 //-------------------------------------------------------------------------
 // Comparison function for deSolve
 

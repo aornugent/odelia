@@ -54,39 +54,12 @@ public:
     return it;
   }
 
-  // Registers initial state on tape for AD gradient computation
-  template <typename Tape, typename Iterator>
-  std::vector<T*> set_initial_state(Tape& tape, Iterator it, double t0_) {
-    t0 = t0_;
-    y0_init = *it++;
-    y1_init = *it++;
-    y2_init = *it++;
-    
-    tape.registerInput(y0_init);
-    tape.registerInput(y1_init);
-    tape.registerInput(y2_init);
-    
-    return {&y0_init, &y1_init, &y2_init};
-  }
-
   template <typename Iterator>
   Iterator set_params(Iterator it) {
     sigma = *it++;
     R = *it++;
     b = *it++;
     return it;
-  }
-
-  // Registers inputs, returns pointers for AD gradient computation
-  template <typename Tape, typename Iterator>
-  std::vector<T*> set_params(Tape& tape, Iterator it) {
-    sigma = *it++;
-    R = *it++;
-    b = *it++;
-    tape.registerInput(sigma);
-    tape.registerInput(R);
-    tape.registerInput(b);
-    return {&sigma, &R, &b};
   }
 
   template <typename Iterator>
