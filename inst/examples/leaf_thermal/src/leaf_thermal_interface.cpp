@@ -147,129 +147,118 @@ Rcpp::NumericVector LeafThermalSystem_get_current_drivers(SEXP LeafThermalSystem
 
 // Solver interface (Leaf-specific creation, generic operations)
 
-// Solver creation - Leaf-specific (must know LeafThermalSystem type)
+// Solver creation - Leaf-specific (must know LeafThermalSystem type). R holds only
+// the double solver (RIF-1); gradients build the active replay internally. The
+// system carries its own drivers, so drivers_xp is retained only for signature
+// compatibility.
 // [[Rcpp::export]]
-SEXP LeafSolver_new(SEXP system_xp, SEXP control_xp, SEXP drivers_xp, bool active = false) {
+SEXP LeafSolver_new(SEXP system_xp, SEXP control_xp, SEXP drivers_xp) {
   Rcpp::XPtr<SystemType> sys(system_xp);
   Rcpp::XPtr<ode::OdeControl> ctrl(control_xp);
-
-  if (active) {
-    // Lift the double system to its active mould (RIF-2) -- no hand-construction.
-    // Uses the system's own drivers (as the double branch does), so drivers_xp is
-    // vestigial here now.
-    auto sys_active = sys->rebind_from<ActiveSystemType::value_type>();
-    auto* solver = new ode::Solver<ActiveSystemType>(sys_active, *ctrl);
-    return Rcpp::XPtr<ode::Solver<ActiveSystemType>>(solver, true);
-  } else {
-    SystemType sys_copy(*sys);
-    auto* solver = new ode::Solver<SystemType>(sys_copy, *ctrl);
-    return Rcpp::XPtr<ode::Solver<SystemType>>(solver, true);
-  }
+  SystemType sys_copy(*sys);
+  auto* solver = new ode::Solver<SystemType>(sys_copy, *ctrl);
+  return Rcpp::XPtr<ode::Solver<SystemType>>(solver, true);
 }
 
 // Helper to get column names (Leaf-specific)
-inline Rcpp::CharacterVector get_leaf_column_names(SEXP solver_xp, bool active) {
-  if (active) {
-    auto solver = odelia::solver::get_solver<ActiveSystemType>(solver_xp);
-    return Rcpp::wrap(solver->get_system().record_colnames());
-  } else {
-    auto solver = odelia::solver::get_solver<SystemType>(solver_xp);
-    return Rcpp::wrap(solver->get_system().record_colnames());
-  }
+inline Rcpp::CharacterVector get_leaf_column_names(SEXP solver_xp) {
+  auto solver = odelia::solver::get_solver<SystemType>(solver_xp);
+  return Rcpp::wrap(solver->get_system().record_colnames());
 }
 
-// All other Solver functions call generic templates with LeafThermalSystem types
+// All other Solver functions call the generic (double-only) templates.
 
 // [[Rcpp::export]]
-void LeafSolver_reset(SEXP solver_xp, bool active = false) {
-  odelia::solver::Solver_reset_impl<SystemType, ActiveSystemType>(solver_xp, active);
+void LeafSolver_reset(SEXP solver_xp) {
+  odelia::solver::Solver_reset_impl<SystemType>(solver_xp);
 }
 
 // [[Rcpp::export]]
-double LeafSolver_time(SEXP solver_xp, bool active = false) {
-  return odelia::solver::Solver_time_impl<SystemType, ActiveSystemType>(solver_xp, active);
+double LeafSolver_time(SEXP solver_xp) {
+  return odelia::solver::Solver_time_impl<SystemType>(solver_xp);
 }
 
 // [[Rcpp::export]]
-Rcpp::NumericVector LeafSolver_state(SEXP solver_xp, bool active = false) {
-  return odelia::solver::Solver_state_impl<SystemType, ActiveSystemType>(solver_xp, active);
+Rcpp::NumericVector LeafSolver_state(SEXP solver_xp) {
+  return odelia::solver::Solver_state_impl<SystemType>(solver_xp);
 }
 
 // [[Rcpp::export]]
-Rcpp::NumericVector LeafSolver_times(SEXP solver_xp, bool active = false) {
-  return odelia::solver::Solver_times_impl<SystemType, ActiveSystemType>(solver_xp, active);
+Rcpp::NumericVector LeafSolver_times(SEXP solver_xp) {
+  return odelia::solver::Solver_times_impl<SystemType>(solver_xp);
 }
 
 // [[Rcpp::export]]
-void LeafSolver_set_state(SEXP solver_xp, Rcpp::NumericVector y, double time, bool active = false) {
-  odelia::solver::Solver_set_state_impl<SystemType, ActiveSystemType>(solver_xp, y, time, active);
+void LeafSolver_set_state(SEXP solver_xp, Rcpp::NumericVector y, double time) {
+  odelia::solver::Solver_set_state_impl<SystemType>(solver_xp, y, time);
 }
 
 // [[Rcpp::export]]
-void LeafSolver_advance_adaptive(SEXP solver_xp, Rcpp::NumericVector times, bool active = false) {
-  odelia::solver::Solver_advance_adaptive_impl<SystemType, ActiveSystemType>(solver_xp, times, active);
+void LeafSolver_advance_adaptive(SEXP solver_xp, Rcpp::NumericVector times) {
+  odelia::solver::Solver_advance_adaptive_impl<SystemType>(solver_xp, times);
 }
 
 // [[Rcpp::export]]
-void LeafSolver_advance_fixed(SEXP solver_xp, Rcpp::NumericVector times, bool active = false) {
-  odelia::solver::Solver_advance_fixed_impl<SystemType, ActiveSystemType>(solver_xp, times, active);
+void LeafSolver_advance_fixed(SEXP solver_xp, Rcpp::NumericVector times) {
+  odelia::solver::Solver_advance_fixed_impl<SystemType>(solver_xp, times);
 }
 
 // [[Rcpp::export]]
-void LeafSolver_advance_euler(SEXP solver_xp, Rcpp::NumericVector times, bool active = false) {
-  odelia::solver::Solver_advance_euler_impl<SystemType, ActiveSystemType>(solver_xp, times, active);
+void LeafSolver_advance_euler(SEXP solver_xp, Rcpp::NumericVector times) {
+  odelia::solver::Solver_advance_euler_impl<SystemType>(solver_xp, times);
 }
 
 // [[Rcpp::export]]
-void LeafSolver_step(SEXP solver_xp, bool active = false) {
-  odelia::solver::Solver_step_impl<SystemType, ActiveSystemType>(solver_xp, active);
+void LeafSolver_step(SEXP solver_xp) {
+  odelia::solver::Solver_step_impl<SystemType>(solver_xp);
 }
 
 // [[Rcpp::export]]
-bool LeafSolver_get_collect(SEXP solver_xp, bool active = false) {
-  return odelia::solver::Solver_get_collect_impl<SystemType, ActiveSystemType>(solver_xp, active);
+bool LeafSolver_get_collect(SEXP solver_xp) {
+  return odelia::solver::Solver_get_collect_impl<SystemType>(solver_xp);
 }
 
 // [[Rcpp::export]]
-void LeafSolver_set_collect(SEXP solver_xp, bool x, bool active = false) {
-  odelia::solver::Solver_set_collect_impl<SystemType, ActiveSystemType>(solver_xp, x, active);
+void LeafSolver_set_collect(SEXP solver_xp, bool x) {
+  odelia::solver::Solver_set_collect_impl<SystemType>(solver_xp, x);
 }
 
 // [[Rcpp::export]]
-std::size_t LeafSolver_get_history_size(SEXP solver_xp, bool active = false) {
-  return odelia::solver::Solver_get_history_size_impl<SystemType, ActiveSystemType>(solver_xp, active);
+std::size_t LeafSolver_get_history_size(SEXP solver_xp) {
+  return odelia::solver::Solver_get_history_size_impl<SystemType>(solver_xp);
 }
 
 // [[Rcpp::export]]
-Rcpp::DataFrame LeafSolver_get_history_step(SEXP solver_xp, std::size_t i, bool active = false) {
-  return odelia::solver::Solver_get_history_step_impl<SystemType, ActiveSystemType>(
-    solver_xp, i, get_leaf_column_names(solver_xp, active), active
+Rcpp::DataFrame LeafSolver_get_history_step(SEXP solver_xp, std::size_t i) {
+  return odelia::solver::Solver_get_history_step_impl<SystemType>(
+    solver_xp, i, get_leaf_column_names(solver_xp)
   );
 }
 
 // [[Rcpp::export]]
-Rcpp::List LeafSolver_get_history(SEXP solver_xp, bool active = false) {
-  return odelia::solver::Solver_get_history_impl<SystemType, ActiveSystemType>(
-    solver_xp, get_leaf_column_names(solver_xp, active), active
+Rcpp::List LeafSolver_get_history(SEXP solver_xp) {
+  return odelia::solver::Solver_get_history_impl<SystemType>(
+    solver_xp, get_leaf_column_names(solver_xp)
   );
 }
 
 // [[Rcpp::export]]
-void LeafSolver_set_target(SEXP solver_xp, 
+void LeafSolver_set_target(SEXP solver_xp,
                           Rcpp::NumericVector times,
                           Rcpp::NumericMatrix target,
-                          Rcpp::IntegerVector obs_indices,
-                          bool active = false) {
-  odelia::solver::Solver_set_target_impl<SystemType, ActiveSystemType>(
-    solver_xp, times, target, obs_indices, active
+                          Rcpp::IntegerVector obs_indices) {
+  odelia::solver::Solver_set_target_impl<SystemType>(
+    solver_xp, times, target, obs_indices
   );
 }
 
+// value + sum-of-squares-loss gradient on the double handle (RIF-1): the
+// double-handle successor to the retired LeafSolver_fit.
 // [[Rcpp::export]]
-Rcpp::List LeafSolver_fit(SEXP solver_xp,
+Rcpp::List LeafSolver_value_and_gradient(SEXP solver_xp,
                          Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
                          Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
-  return odelia::solver::Solver_fit_impl<SystemType, ActiveSystemType>(
+  return odelia::solver::Solver_value_and_gradient_impl<SystemType, ActiveSystemType>(
     solver_xp, ic, params
   );
 }

@@ -8,7 +8,7 @@
 final_state_vec <- function(pars, y0, times, ctrl) {
   sys <- LorenzSystem$new(pars[1], pars[2], pars[3])
   sys$set_initial_state(y0, t0 = times[1])
-  solver <- Lorenz_Solver$new(sys$ptr, ctrl$ptr, active = FALSE)
+  solver <- Lorenz_Solver$new(sys$ptr, ctrl$ptr)
   solver$advance_fixed(times)
   solver$state()
 }

@@ -109,7 +109,7 @@ testthat::test_that("lorenz AD IC gradients are NON-ZERO", {
   lz_true$set_initial_state(c(1, 1, 1), 0)
 
   ctrl <- OdeControl$new()
-  runner_true <- Lorenz_Solver$new(lz_true$ptr, ctrl$ptr, active = FALSE)
+  runner_true <- Lorenz_Solver$new(lz_true$ptr, ctrl$ptr)
   runner_true$advance_adaptive(seq(0, 5, by=0.25))
   hist_true <- runner_true$history()
 
@@ -119,13 +119,13 @@ testthat::test_that("lorenz AD IC gradients are NON-ZERO", {
   lz_fit <- LorenzSystem$new(10, 28, 8/3)
   lz_fit$set_initial_state(c(1, 1, 1), 0)
 
-  ad_runner <- Lorenz_Solver$new(lz_fit$ptr, ctrl$ptr, active = TRUE)
+  ad_runner <- Lorenz_Solver$new(lz_fit$ptr, ctrl$ptr)
   ad_runner$set_target(target_times, target_vals, c(1L, 2L, 3L))
 
   wrong_ic <- c(2, 2, 2)
-  result <- ad_runner$fit(ic = wrong_ic, params = NULL)
+  result <- ad_runner$value_and_gradient(ic = wrong_ic, params = NULL)
 
-  expect_true(is.finite(result$loss))
+  expect_true(is.finite(result$value))
   expect_true(all(is.finite(result$gradient)))
   expect_equal(length(result$gradient), 3)
   
@@ -140,7 +140,7 @@ testthat::test_that("lorenz AD parameter gradients are NON-ZERO", {
   lz_true$set_initial_state(c(1, 1, 1), 0)
 
   ctrl <- OdeControl$new()
-  runner_true <- Lorenz_Solver$new(lz_true$ptr, ctrl$ptr, active = FALSE)
+  runner_true <- Lorenz_Solver$new(lz_true$ptr, ctrl$ptr)
   runner_true$advance_adaptive(seq(0, 10, by=0.5))
   hist_true <- runner_true$history()
 
@@ -152,12 +152,12 @@ testthat::test_that("lorenz AD parameter gradients are NON-ZERO", {
   lz_fit$set_initial_state(c(1, 1, 1), 0)
   lz_fit$set_params(wrong_pars)
 
-  ad_runner <- Lorenz_Solver$new(lz_fit$ptr, ctrl$ptr, active = TRUE)
+  ad_runner <- Lorenz_Solver$new(lz_fit$ptr, ctrl$ptr)
   ad_runner$set_target(target_times, target_vals, c(1L, 2L, 3L))
 
-  result <- ad_runner$fit(ic = NULL, params = wrong_pars)
+  result <- ad_runner$value_and_gradient(ic = NULL, params = wrong_pars)
 
-  expect_true(is.finite(result$loss))
+  expect_true(is.finite(result$value))
   expect_true(all(is.finite(result$gradient)))
   expect_equal(length(result$gradient), 3)
   
