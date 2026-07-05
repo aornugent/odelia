@@ -157,26 +157,41 @@ inline void Solver_set_target_impl(SEXP solver_xp,
   get_solver<SystemType>(solver_xp)->set_target(times_vec, targets_vec, obs_idx_vec);
 }
 
-// ---- Gradients on the DOUBLE handle (RIF-1) --------------------------------
-// R holds only the double Solver. These helpers build the active replay inside
-// the call -- lift the double System to active (RIF-2 rebind), reuse its control
-// and target -- differentiate, and return doubles. The active system is created,
-// used, and destroyed here; R never sees an active type or an `active` flag.
-
+// ---- Gradients on the DOUBLE handle (RIF-1, RIF-3) -------------------------
+// R holds only the double Solver. These helpers differentiate on an active
+// replay -- the double System lifted to active (RIF-2 rebind) -- and return
+// doubles; R never sees an active type or an `active` flag.
+//
+// The replay (and its tape) is cached on the double solver's external-pointer
+// `prot` slot, so an optimiser loop over value_and_gradient reuses one recording
+// buffer instead of rebuilding the active system each iteration (RIF-3). The
+// cache shares R's GC lifetime -- it is freed with the double solver and stays
+// invisible to R. Only the structural config (drivers, initial state) is frozen
+// at first build; the trait/parameter values are re-seeded from the Independents
+// on every call, and the target is refreshed each call.
 template <class SystemType, class ActiveSystemType>
-ode::Solver<ActiveSystemType> active_replay(SEXP solver_xp) {
+ode::Solver<ActiveSystemType>& cached_active_replay(SEXP solver_xp) {
+  using ActiveSolver = ode::Solver<ActiveSystemType>;
   auto d = get_solver<SystemType>(solver_xp);
-  ode::Solver<ActiveSystemType> active(
-      d->get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
-      d->get_control());
-  active.set_target(d->fit_times(), d->targets(), d->obs_indices());
-  return active;
+
+  SEXP prot = R_ExternalPtrProtected(solver_xp);
+  ActiveSolver* active;
+  if (prot == R_NilValue) {
+    active = new ActiveSolver(
+        d->get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
+        d->get_control());
+    R_SetExternalPtrProtected(solver_xp, Rcpp::XPtr<ActiveSolver>(active, true));
+  } else {
+    active = Rcpp::XPtr<ActiveSolver>(prot).get();
+  }
+  active->set_target(d->fit_times(), d->targets(), d->obs_indices());
+  return *active;
 }
 
 template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<double, std::vector<double>>
 gradient_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& functional) {
-  auto active = active_replay<SystemType, ActiveSystemType>(solver_xp);
+  auto& active = cached_active_replay<SystemType, ActiveSystemType>(solver_xp);
   return ode::compute_gradient(active, ind, std::forward<Functional>(functional));
 }
 
@@ -184,7 +199,7 @@ template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>>
 jacobian_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& functional,
                    std::size_t codomain) {
-  auto active = active_replay<SystemType, ActiveSystemType>(solver_xp);
+  auto& active = cached_active_replay<SystemType, ActiveSystemType>(solver_xp);
   return ode::compute_jacobian(active, ind, std::forward<Functional>(functional), codomain);
 }
 
