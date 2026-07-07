@@ -193,3 +193,15 @@ Drivers_clear <- function(drivers_xp) {
     invisible(.Call(`_odelia_Drivers_clear`, drivers_xp))
 }
 
+Relaxation_new <- function(gain, y0 = 1.0) {
+    .Call(`_odelia_Relaxation_new`, gain, y0)
+}
+
+Relaxation_adaptive_final <- function(system_xp, control_xp, Tmax) {
+    .Call(`_odelia_Relaxation_adaptive_final`, system_xp, control_xp, Tmax)
+}
+
+Relaxation_record_replay_gradient <- function(system_xp, control_xp, Tmax, frozen = FALSE) {
+    .Call(`_odelia_Relaxation_record_replay_gradient`, system_xp, control_xp, Tmax, frozen)
+}
+

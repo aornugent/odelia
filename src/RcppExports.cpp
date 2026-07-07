@@ -563,6 +563,45 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// Relaxation_new
+SEXP Relaxation_new(double gain, double y0);
+RcppExport SEXP _odelia_Relaxation_new(SEXP gainSEXP, SEXP y0SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type gain(gainSEXP);
+    Rcpp::traits::input_parameter< double >::type y0(y0SEXP);
+    rcpp_result_gen = Rcpp::wrap(Relaxation_new(gain, y0));
+    return rcpp_result_gen;
+END_RCPP
+}
+// Relaxation_adaptive_final
+double Relaxation_adaptive_final(SEXP system_xp, SEXP control_xp, double Tmax);
+RcppExport SEXP _odelia_Relaxation_adaptive_final(SEXP system_xpSEXP, SEXP control_xpSEXP, SEXP TmaxSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
+    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
+    rcpp_result_gen = Rcpp::wrap(Relaxation_adaptive_final(system_xp, control_xp, Tmax));
+    return rcpp_result_gen;
+END_RCPP
+}
+// Relaxation_record_replay_gradient
+Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp, double Tmax, bool frozen);
+RcppExport SEXP _odelia_Relaxation_record_replay_gradient(SEXP system_xpSEXP, SEXP control_xpSEXP, SEXP TmaxSEXP, SEXP frozenSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
+    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
+    Rcpp::traits::input_parameter< bool >::type frozen(frozenSEXP);
+    rcpp_result_gen = Rcpp::wrap(Relaxation_record_replay_gradient(system_xp, control_xp, Tmax, frozen));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_odelia_analytic_edge_demo", (DL_FUNC) &_odelia_analytic_edge_demo, 1},
@@ -613,6 +652,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Drivers_evaluate_range", (DL_FUNC) &_odelia_Drivers_evaluate_range, 3},
     {"_odelia_Drivers_get_names", (DL_FUNC) &_odelia_Drivers_get_names, 1},
     {"_odelia_Drivers_clear", (DL_FUNC) &_odelia_Drivers_clear, 1},
+    {"_odelia_Relaxation_new", (DL_FUNC) &_odelia_Relaxation_new, 2},
+    {"_odelia_Relaxation_adaptive_final", (DL_FUNC) &_odelia_Relaxation_adaptive_final, 3},
+    {"_odelia_Relaxation_record_replay_gradient", (DL_FUNC) &_odelia_Relaxation_record_replay_gradient, 4},
     {NULL, NULL, 0}
 };
 

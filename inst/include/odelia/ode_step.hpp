@@ -73,16 +73,13 @@ size_t Step<System>::order() const {
   return 5;
 }
 
+// Record the per-RK-stage field values on a Replayable System; a no-op otherwise.
 template <typename System>
-typename std::enable_if<has_cache<System>::value, void>::type
-cache(System& system, int rk_step) {
-  system.cache_RK45_step(rk_step);
+void cache(System& system, int rk_step) {
+  if constexpr (Replayable<System>) {
+    system.cache_RK45_step(rk_step);
+  }
 }
-
-
-template <typename System>
-typename std::enable_if<!has_cache<System>::value, void>::type
-cache(System& system, int /* rk_step */) {}
 
 
 // Think carefully about ownership of data, draw a diagram, and go

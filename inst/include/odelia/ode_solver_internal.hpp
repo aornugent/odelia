@@ -78,30 +78,25 @@ void SolverInternal<System>::reset(const System& system) {
   set_state_from_system(system);
 }
 
-// saving ode steps during adaptive solve
+// Flush the per-ODE-step recording (node positions) on a Replayable System during
+// the adaptive (double) pass; a no-op for any System that doesn't record.
 template <typename System>
-typename std::enable_if<has_cache<System>::value, void>::type
-cache(System& system) {
-  system.cache_ode_step();
+void cache(System& system) {
+  if constexpr (Replayable<System>) {
+    system.cache_ode_step();
+  }
 }
 
+// On the active pass, a Replayable System restores its recorded step (e.g. loads the
+// 6 per-stage frozen environments a full RK step reads); a no-op otherwise. Called
+// from step_to. Whether this loads a frozen field (mutant) or does nothing so the
+// field is recomputed live (resident) is the System's own runtime choice.
 template <typename System>
-typename std::enable_if<!has_cache<System>::value, void>::type
-cache(System& system) {}
-
-// During mutant run, load ode history
-// the history is a vector of 6 states for env, needed to make a 
-// full RK step. Called as part of `step_to`
-template <typename System>
-typename std::enable_if<has_cache<System>::value, void>::type
-load(System& system) {
-  system.load_ode_step();
+void load(System& system) {
+  if constexpr (Replayable<System>) {
+    system.load_ode_step();
+  }
 }
-
-// During resident run, no cache loaded, proceed as normal
-template <typename System>
-typename std::enable_if<!has_cache<System>::value, void>::type
-load(System& system) {}
 
 template <class System>
 void SolverInternal<System>::set_state_from_system(const System& system) {

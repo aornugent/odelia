@@ -26,14 +26,22 @@ public:
   enum { value = sizeof(test<T>(0)) == sizeof(true_type) };
 };
 
+// A System opts into record -> replay by providing the stepper hooks below: it
+// records where the adaptive (double) pass placed its nodes, and on the active
+// pass replays pinned to them (design doc ad-record-replay.md). Detected at
+// compile time -- an absent hook makes every call site a zero-cost no-op, so an
+// ordinary (non-replayable) System is entirely unaffected; nothing forces a System
+// to be differentiable or replayable.
+//
+// The three hooks keep their current names here; they rename to record_* / replay_*
+// under odelia#19 / plant#3 (the standalone hook rename, deferred). "Replayable" is
+// the settled concept name -- distinct from the RIF-3 "cache", which is the
+// amortized tape/scratch (a speed optimisation), not this recording (a semantic one).
 template <typename System>
-class has_cache {
-  typedef char true_type;
-  typedef long false_type;
-  template <typename C> static true_type test(decltype(&C::cache_RK45_step)) ;
-  template <typename C> static false_type test(...);
-public:
-  enum { value = sizeof(test<System>(0)) == sizeof(true_type) };
+concept Replayable = requires(System s, int stage) {
+  s.cache_RK45_step(stage);  // per RK stage  (frozen field VALUES, when kept)
+  s.cache_ode_step();        // per ODE step  (node POSITIONS; flush)
+  s.load_ode_step();         // per step on the active pass (restore / no-op if live)
 };
 
 // The recursive interface
@@ -123,8 +131,8 @@ set_ode_state(T& obj, const StateType& y, double /* time */) {
 }
 
 template <typename T, typename StateType>
-typename std::enable_if<has_cache<T>::value, void>::type
-set_ode_state(T& obj, const StateType& y, int index) {
+  requires Replayable<T>
+void set_ode_state(T& obj, const StateType& y, int index) {
   obj.set_ode_state(y.begin(), index);
 }
 }
@@ -138,28 +146,22 @@ void derivs(T& obj, const StateType& y, StateType& dydt,
   obj.ode_rates(dydt.begin());
 }
 
-// for ODE stepping
+// for ODE stepping (and mutant replay). A Replayable System in cached-environment
+// mode reads the frozen field by step index; otherwise (and for every non-Replayable
+// System) it sets state at the current time. The branch compiles away entirely for a
+// System that isn't Replayable.
 template <typename T, typename StateType>
-typename std::enable_if<!has_cache<T>::value, void>::type
-derivs(T& obj, const StateType& y, StateType& dydt,
-            const double time, const int /* index */) {
-
-  internal::set_ode_state(obj, y, time);
-  obj.ode_rates(dydt.begin());
-}
-
-// for mutants or ODE stepping
-template <typename T, typename StateType>
-typename std::enable_if<has_cache<T>::value, void>::type
-derivs(T& obj, const StateType& y, StateType& dydt,
+void derivs(T& obj, const StateType& y, StateType& dydt,
             const double time, const int index) {
-
-    if(obj.use_cached_environment) {
+  if constexpr (Replayable<T>) {
+    if (obj.use_cached_environment) {
       internal::set_ode_state(obj, y, index);
     } else {
       internal::set_ode_state(obj, y, time);
     }
-  
+  } else {
+    internal::set_ode_state(obj, y, time);
+  }
   obj.ode_rates(dydt.begin());
 }
 
