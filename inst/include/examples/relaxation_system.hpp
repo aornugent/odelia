@@ -117,14 +117,17 @@ public:
   // ---- AD input contract (ODELIA-3a) --------------------------------------
   size_t n_params() const { return 1; }
 
-  // Slot layout: 0 = gain (the trait), 1 = y0_init (initial state).
+  // Slot layout: 0 = gain, the single differentiable input. RelaxationSystem exists
+  // to demonstrate record -> replay, so it deliberately has one trait and no seedable
+  // initial state -- the IC is a construction-time constant (Lorenz already
+  // demonstrates initial-state sensitivity). One input keeps the L1/L2 finite-
+  // difference oracle and the teaching focus sharp.
   template <typename Iterator>
   void scatter(Iterator it, const std::vector<int>& slots) {
     for (int s : slots) {
       switch (s) {
-        case 0: gain    = *it++; break;
-        case 1: y0_init = xad::value(*it++); break;
-        default: util::stop("RelaxationSystem::scatter: unknown Independents slot");
+        case 0: gain = *it++; break;
+        default: util::stop("RelaxationSystem::scatter: only slot 0 (gain) is seedable");
       }
     }
   }
