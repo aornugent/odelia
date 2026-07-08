@@ -3,6 +3,7 @@
 
 #include <odelia/ode_solver_internal.hpp>
 #include <XAD/Tape.hpp>
+#include <memory>
 
 namespace odelia {
 namespace ode {
@@ -28,13 +29,6 @@ public:
     : system(sys_), control_(control), solver(system, control)
   {
     collect = true;
-  }
-
-  // destructor to delete XAD tape
-  ~Solver() {
-    if (tape) {
-      delete tape;
-    }
   }
 
   // TODO: solver.reset() will set time within the solver to zero.
@@ -231,8 +225,32 @@ std::vector<std::vector<typename System::value_type>> advance_target() {
   const std::vector<std::vector<double>>& targets() const { return targets_; }
   const std::vector<size_t>& obs_indices() const { return obs_indices_; }
 
-  // Persistent tape for AD gradient computation
-  xad::Tape<double>* tape = nullptr;
+  // The honest surface behind the "forgot to record" guard (ad-r-interface.md
+  // §6.7): whether an adaptive pass has resolved a schedule on this (double) solver,
+  // and what that schedule is. The schedule is the L1 recording every solver carries
+  // -- a replay-gradient reads it (as the advance_fixed grid) and can check it first.
+  bool has_recording() const { return times().size() > 1; }
+  std::vector<double> recorded_steps() const { return times(); }
+
+  // ---- AD scratch, reused across gradient calls (RIF-3) ----------------------
+  // Both are lazily built on the first gradient call and reused thereafter, so an
+  // optimiser loop amortizes them instead of reallocating each iteration; both are
+  // null for a solver that never takes a gradient (nothing forces a System to be
+  // differentiable). They live on the solver OBJECT -- not an R handle -- so a C++
+  // caller that owns the solver as a plain member (plant's SCM) shares the reuse.
+  // Reusing them is pure speed: it never changes a number. The recording, read per
+  // call from the immutable double System, is what carries semantics.
+  //
+  //   active_replay -- this System lifted to the active scalar (RIF-2 rebind): the
+  //     differentiable twin the gradient actually runs on. Opaque because a double
+  //     Solver cannot name the active type; the driver static_casts it back. The
+  //     twin's own `tape` is the reused tape -- there is nothing else to cache.
+  // mutable: incidental scratch, reusable through an otherwise-const solver.
+  mutable std::shared_ptr<void> active_replay;
+
+  // Reverse-mode tape, created on the first gradient and reused (only ever exercised
+  // on the active twin). unique_ptr so ownership is self-evident -- no destructor.
+  std::unique_ptr<xad::Tape<double>> tape;
 
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?

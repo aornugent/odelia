@@ -94,10 +94,10 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
 
     // Reuse tape across calls to avoid invalidating slots
     if (!solver.tape) {
-        solver.tape = new ad::tape_type(false); // create without activating
+        solver.tape = std::make_unique<ad::tape_type>(false); // create without activating
     }
     solver.tape->activate();
-    detail::tape_deactivate_guard<ad::tape_type> guard{solver.tape};
+    detail::tape_deactivate_guard<ad::tape_type> guard{solver.tape.get()};
 
     // xad::computeJacobian owns the input registration, so it takes the inputs as
     // one flat vector and calls the forward callback to map them onto the System;
@@ -117,7 +117,7 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
             return outputs;
         };
 
-    auto jacobian = xad::computeJacobian(inputs, forward, codomain, solver.tape);
+    auto jacobian = xad::computeJacobian(inputs, forward, codomain, solver.tape.get());
     return {values, jacobian};
 }
 

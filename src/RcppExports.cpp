@@ -602,6 +602,42 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// Relaxation_Solver_new
+SEXP Relaxation_Solver_new(SEXP system_xp, SEXP control_xp);
+RcppExport SEXP _odelia_Relaxation_Solver_new(SEXP system_xpSEXP, SEXP control_xpSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
+    rcpp_result_gen = Rcpp::wrap(Relaxation_Solver_new(system_xp, control_xp));
+    return rcpp_result_gen;
+END_RCPP
+}
+// Relaxation_record
+int Relaxation_record(SEXP solver_xp, double Tmax);
+RcppExport SEXP _odelia_Relaxation_record(SEXP solver_xpSEXP, SEXP TmaxSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
+    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
+    rcpp_result_gen = Rcpp::wrap(Relaxation_record(solver_xp, Tmax));
+    return rcpp_result_gen;
+END_RCPP
+}
+// Relaxation_replay_gradient
+Rcpp::List Relaxation_replay_gradient(SEXP solver_xp, bool frozen);
+RcppExport SEXP _odelia_Relaxation_replay_gradient(SEXP solver_xpSEXP, SEXP frozenSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
+    Rcpp::traits::input_parameter< bool >::type frozen(frozenSEXP);
+    rcpp_result_gen = Rcpp::wrap(Relaxation_replay_gradient(solver_xp, frozen));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_odelia_analytic_edge_demo", (DL_FUNC) &_odelia_analytic_edge_demo, 1},
@@ -655,6 +691,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Relaxation_new", (DL_FUNC) &_odelia_Relaxation_new, 2},
     {"_odelia_Relaxation_adaptive_final", (DL_FUNC) &_odelia_Relaxation_adaptive_final, 3},
     {"_odelia_Relaxation_record_replay_gradient", (DL_FUNC) &_odelia_Relaxation_record_replay_gradient, 4},
+    {"_odelia_Relaxation_Solver_new", (DL_FUNC) &_odelia_Relaxation_Solver_new, 2},
+    {"_odelia_Relaxation_record", (DL_FUNC) &_odelia_Relaxation_record, 2},
+    {"_odelia_Relaxation_replay_gradient", (DL_FUNC) &_odelia_Relaxation_replay_gradient, 2},
     {NULL, NULL, 0}
 };
 

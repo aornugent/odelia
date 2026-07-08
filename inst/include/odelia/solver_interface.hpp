@@ -162,45 +162,41 @@ inline void Solver_set_target_impl(SEXP solver_xp,
 // replay -- the double System lifted to active (RIF-2 rebind) -- and return
 // doubles; R never sees an active type or an `active` flag.
 //
-// The replay (and its tape) is cached on the double solver's external-pointer
-// `prot` slot, so an optimiser loop over value_and_gradient reuses one recording
-// buffer instead of rebuilding the active system each iteration (RIF-3). The
-// cache shares R's GC lifetime -- it is freed with the double solver and stays
-// invisible to R. Only the structural config (drivers, initial state) is frozen
-// at first build; the trait/parameter values are re-seeded from the Independents
-// on every call, and the target is refreshed each call.
+// The active replay is cached on the double solver OBJECT (its `active_replay`
+// member, RIF-3), so an optimiser loop reuses one twin -- tape included -- instead
+// of rebuilding the active system each call. Anchoring it on the object, not the R
+// XPtr's `prot` slot, means a C++ caller that holds the solver as a plain member
+// (plant's SCM, which never wraps it in an XPtr) shares the reuse. Reusing the twin
+// is pure speed: only its structural config is frozen at first build; the
+// trait/parameter values are re-seeded from the Independents every call, and the
+// per-call semantic state (observations, or the record->replay recording) is handed
+// over by the caller (see below).
 template <class SystemType, class ActiveSystemType>
-ode::Solver<ActiveSystemType>& cached_active_replay(SEXP solver_xp) {
+ode::Solver<ActiveSystemType>& active_replay(ode::Solver<SystemType>& d) {
   using ActiveSolver = ode::Solver<ActiveSystemType>;
-  auto d = get_solver<SystemType>(solver_xp);
-
-  SEXP prot = R_ExternalPtrProtected(solver_xp);
-  ActiveSolver* active;
-  if (prot == R_NilValue) {
-    active = new ActiveSolver(
-        d->get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
-        d->get_control());
-    R_SetExternalPtrProtected(solver_xp, Rcpp::XPtr<ActiveSolver>(active, true));
-  } else {
-    active = Rcpp::XPtr<ActiveSolver>(prot).get();
+  if (!d.active_replay) {
+    d.active_replay = std::make_shared<ActiveSolver>(
+        d.get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
+        d.get_control());
   }
-  active->set_target(d->fit_times(), d->targets(), d->obs_indices());
-  return *active;
+  return *static_cast<ActiveSolver*>(d.active_replay.get());
 }
 
 template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<double, std::vector<double>>
 gradient_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& functional) {
-  auto& active = cached_active_replay<SystemType, ActiveSystemType>(solver_xp);
-  return ode::compute_gradient(active, ind, std::forward<Functional>(functional));
+  auto d = get_solver<SystemType>(solver_xp);
+  auto& twin = active_replay<SystemType, ActiveSystemType>(*d);
+  return ode::compute_gradient(twin, ind, std::forward<Functional>(functional));
 }
 
 template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>>
 jacobian_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& functional,
                    std::size_t codomain) {
-  auto& active = cached_active_replay<SystemType, ActiveSystemType>(solver_xp);
-  return ode::compute_jacobian(active, ind, std::forward<Functional>(functional), codomain);
+  auto d = get_solver<SystemType>(solver_xp);
+  auto& twin = active_replay<SystemType, ActiveSystemType>(*d);
+  return ode::compute_jacobian(twin, ind, std::forward<Functional>(functional), codomain);
 }
 
 // Combined value + gradient of the sum-of-squares loss from ONE recording -- the
@@ -212,9 +208,9 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
                                           Rcpp::Nullable<Rcpp::NumericVector> params) {
   // Lay leaves out params-first, then the ODE initial state (param i -> slot i,
   // ic j -> slot n_params + j).
+  auto d = get_solver<SystemType>(solver_xp);
   ode::Independents ind;
-  const int n_params =
-      static_cast<int>(get_solver<SystemType>(solver_xp)->get_system_ref().n_params());
+  const int n_params = static_cast<int>(d->get_system_ref().n_params());
   if (!params.isNull()) {
     Rcpp::NumericVector v(params);
     for (int i = 0; i < v.size(); ++i) {
@@ -229,8 +225,14 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
       ind.values.push_back(v[j]);
     }
   }
-  auto [value, gradient] = gradient_on_double<SystemType, ActiveSystemType>(
-      solver_xp, ind, ode::sum_of_squares_loss{});
+  // Calibration's per-call semantic state is the fit observations: hand them to
+  // the reused twin each call, from the immutable double solver (the sum-of-squares
+  // functional scores the trajectory against them). This is the observations slice
+  // of "read the recording per call" -- kept off gradient_on_double, which serves
+  // emergent functionals that carry no observations.
+  auto& twin = active_replay<SystemType, ActiveSystemType>(*d);
+  twin.set_target(d->fit_times(), d->targets(), d->obs_indices());
+  auto [value, gradient] = ode::compute_gradient(twin, ind, ode::sum_of_squares_loss{});
   return Rcpp::List::create(Rcpp::Named("value") = value,
                             Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }

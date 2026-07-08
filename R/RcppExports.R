@@ -205,3 +205,15 @@ Relaxation_record_replay_gradient <- function(system_xp, control_xp, Tmax, froze
     .Call(`_odelia_Relaxation_record_replay_gradient`, system_xp, control_xp, Tmax, frozen)
 }
 
+Relaxation_Solver_new <- function(system_xp, control_xp) {
+    .Call(`_odelia_Relaxation_Solver_new`, system_xp, control_xp)
+}
+
+Relaxation_record <- function(solver_xp, Tmax) {
+    .Call(`_odelia_Relaxation_record`, solver_xp, Tmax)
+}
+
+Relaxation_replay_gradient <- function(solver_xp, frozen = FALSE) {
+    .Call(`_odelia_Relaxation_replay_gradient`, solver_xp, frozen)
+}
+
