@@ -30,8 +30,8 @@ using namespace odelia;
 //   * record  (adaptive double pass): refine nodes, stash their positions per step;
 //   * replay-live  (resident): frozen node POSITIONS, values recomputed with the
 //     active scalar so the field self-responds to the trait (self-shading);
-//   * replay-frozen (mutant): the field VALUES loaded per RK stage as constants, so
-//     the derivative through the field is zero.
+//   * replay-frozen (mutant): the field VALUES read per RK stage as plain DOUBLE
+//     background (off the tape), so the derivative through the field is zero.
 template <typename T = double>
 class RelaxationSystem {
 public:
@@ -72,18 +72,28 @@ public:
   }
 
   // Replay-frozen path (mutant): the field for this step's stage `index` was
-  // recorded on the double pass and is loaded as a constant -- no rebuild, so the
-  // derivative through the field is zero. odelia routes here via derivs when
-  // use_cached_environment is set.
+  // recorded on the double pass and is read as plain DOUBLE background -- no rebuild
+  // and never on the tape, so the derivative through the field is zero by
+  // construction (ad-record-replay.md sec 4.1: the frozen field is simply double
+  // data, not an active constant with a zeroed derivative). odelia routes here via
+  // derivs when use_cached_environment is set.
   template <typename Iterator>
   Iterator set_ode_state(Iterator it, int index) {
     y = *it++;
-    field = T(field_history.at(current_step).at(index));
+    bg_field = field_history.at(current_step).at(index);
     compute_rates();
     return it;
   }
 
-  void compute_rates() { dydt = -k * y + field; }
+  // The rate reads the coupling field. Live/record: the active interpolator value,
+  // whose derivative flows (self-shading). Frozen (mutant): the recorded value added
+  // as plain DOUBLE background -- off the tape, so d(rate)/d(field) is structurally
+  // zero without casting a double to an active constant.
+  void compute_rates() {
+    dydt = -k * y;
+    if (use_cached_environment) dydt += bg_field;  // frozen: double background (L3)
+    else                        dydt += field;     // live/record: active field (L2)
+  }
 
   template <typename Iterator>
   Iterator set_initial_state(Iterator it, double t0_ = 0.0) {
@@ -107,7 +117,7 @@ public:
       current_knots = knot_history.front();
     }
     if (use_cached_environment && !field_history.empty()) {
-      field = T(field_history.front().front());  // frozen field at t0 (mutant)
+      bg_field = field_history.front().front();  // frozen field at t0 (double bg, mutant)
     } else {
       field = compute_field();
     }
@@ -245,6 +255,7 @@ private:
   double t0;
 
   T y, dydt, field;
+  double bg_field = 0.0;  // frozen (L3) coupling field: plain double background, off-tape
   double time;
 
   // Recording (owned here as System state; odelia grows no Recording noun).
