@@ -176,49 +176,6 @@ public:
 
   System get_history_step(std::size_t i) const { return history.at(i); }
 
-  // Advance through `times`, sampling the model state at the scheduled
-  // observation indices. A generic trajectory-sampling primitive: it holds no
-  // calibration data and knows nothing of "targets" or a loss. A functional that
-  // scores the run against measured data (ode::least_squares) owns the
-  // observations and passes the schedule in; any other functional ignores this
-  // and reads the solved state its own way. Returns the model's predicted
-  // observations -- state() at each time index named in `obs_indices`.
-  std::vector<std::vector<typename System::value_type>> advance_observations(
-      const std::vector<double>& times,
-      const std::vector<size_t>& obs_indices) {
-    if (times.empty()) {
-      util::stop("advance_observations: 'times' must not be empty");
-    }
-    if (!util::identical(times[0], time())) {
-      util::stop("First element in times must be same as current time");
-    }
-
-    std::vector<std::vector<typename System::value_type>> observations;
-    observations.reserve(obs_indices.size());
-
-    // Track which observation we're looking for
-    size_t obs_idx = 0;
-
-    // Check if initial time is an observation
-    if (obs_idx < obs_indices.size() && obs_indices[obs_idx] == 0) {
-      observations.push_back(state());
-      obs_idx++;
-    }
-
-    // Step through times
-    for (size_t i = 1; i < times.size(); ++i) {
-      solver.step_to(system, times[i]);
-
-      // Check if this time index is an observation point
-      while (obs_idx < obs_indices.size() && obs_indices[obs_idx] == i) {
-        observations.push_back(state());
-        obs_idx++;
-      }
-    }
-
-    return observations;
-  }
-
   // The honest surface behind the "forgot to record" guard (ad-r-interface.md
   // §6.7): whether an adaptive pass has resolved a schedule on this (double) solver,
   // and what that schedule is. The schedule is the L1 recording every solver carries

@@ -133,14 +133,14 @@ inline Rcpp::List Solver_get_history_impl(SEXP solver_xp, Rcpp::CharacterVector 
   return Rcpp::DataFrame(out);
 }
 
-// Marshal an R (times, observation matrix, 1-based obs_indices) triple into the
+// Marshal an R (observation matrix, 1-based obs_indices) pair into the
 // least_squares functional that owns them. Calibration state is no longer solver
-// state: it lives in the functional the caller hands to the gradient driver.
-inline ode::least_squares least_squares_from_r(Rcpp::NumericVector times,
-                                               Rcpp::NumericMatrix observations,
+// state: it lives in the functional the caller hands to the gradient driver. The
+// functional carries no schedule -- the sampling grid is the recording's
+// (`recorded_steps()`), replayed by the driver (odelia#27).
+inline ode::least_squares least_squares_from_r(Rcpp::NumericMatrix observations,
                                                Rcpp::IntegerVector obs_indices) {
   ode::least_squares f;
-  f.times.assign(times.begin(), times.end());
 
   int nrows = observations.nrow(), ncols = observations.ncol();
   f.observations.resize(nrows);
@@ -184,19 +184,21 @@ ode::Solver<ActiveSystemType>& active_solver(ode::Solver<SystemType>& d) {
 
 template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<double, std::vector<double>>
-gradient_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind, Functional&& functional) {
+gradient_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
+                   const std::vector<double>& schedule, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  return ode::compute_gradient(active, ind, std::forward<Functional>(functional));
+  return ode::compute_gradient(active, ind, schedule, std::forward<Functional>(functional));
 }
 
 template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>>
-jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind, Functional&& functional,
+jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
+                   const std::vector<double>& schedule, Functional&& functional,
                    std::size_t codomain) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  return ode::compute_jacobian(active, ind, std::forward<Functional>(functional), codomain);
+  return ode::compute_jacobian(active, ind, schedule, std::forward<Functional>(functional), codomain);
 }
 
 // Combined value + gradient of the sum-of-squares loss from ONE recording -- the
@@ -234,8 +236,11 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
   // observations slice of "read the recording per call" -- kept off
   // gradient_on_double, which serves emergent functionals that carry no data.
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  auto functional = least_squares_from_r(times, observations, obs_indices);
-  auto [value, gradient] = ode::compute_gradient(active, ind, functional);
+  auto functional = least_squares_from_r(observations, obs_indices);
+  // `times` from R IS the recorded schedule; the driver owns the replay over it
+  // and least_squares samples the collected trajectory at obs_indices.
+  std::vector<double> schedule(times.begin(), times.end());
+  auto [value, gradient] = ode::compute_gradient(active, ind, schedule, functional);
   return Rcpp::List::create(Rcpp::Named("value") = value,
                             Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }

@@ -29,25 +29,46 @@ T sum_of_squares(const std::vector<std::vector<T>>& predicted,
     return loss;
 }
 
-// A "functional" is any callable that takes a seeded, freshly-reset Solver,
-// drives it, and returns the scalar(s) to differentiate. odelia never learns
-// what the scalar means -- a calibration loss, an emergent summary of the state
-// (a stand's basal area), whatever the caller drives the solver to compute.
+// A "functional" is a *pure reduction*: it reads a seeded, already-replayed
+// Solver and returns the scalar(s) to differentiate. It does NOT drive the
+// solver and carries no schedule -- the driver (compute_gradient /
+// compute_jacobian) owns the L1 replay and hands the functional a positioned
+// solver (odelia#27). odelia never learns what the scalar means -- a calibration
+// loss, an emergent summary of the state (a stand's basal area), whatever the
+// caller reduces the replayed trajectory to.
 //
 // `least_squares` is the one prebuilt calibration instance. Unlike an emergent
-// functional it carries per-run data: the measured observations and the schedule
-// at which to sample them. It owns that data itself -- the Solver is a generic
-// trajectory sampler and stores no fit state -- so calibration is just another
-// functional, not a special mode wired into the solver or the AD driver.
+// functional (which reads final/native state) it carries per-run data: the
+// measured observations and which recorded steps they attach to. It owns that
+// data itself -- the Solver is a generic trajectory sampler and stores no fit
+// state -- so calibration is just another functional, not a special mode wired
+// into the solver or the AD driver. It does NOT carry a `times`: the sampling
+// grid is the recording's (`recorded_steps()`), replayed by the driver.
+//
+// Interior sampling is the one open seam (odelia#27, depends on #23). An
+// emergent functional reads only the final/native state, but a likelihood needs
+// the model's state at several *interior* observation points. Until #23 stores
+// history as bare rows, `least_squares` reads those points from the solver's own
+// collected history at `obs_indices` -- the recorded schedule as its grid, never
+// a private `times`. #23 replaces the full-System history snapshots with rows.
 struct least_squares {
-  std::vector<double>              times;         // schedule to advance through
-  std::vector<size_t>              obs_indices;   // which time indices are observed
+  std::vector<size_t>              obs_indices;   // indices into recorded_steps()
   std::vector<std::vector<double>> observations;  // measured data, per obs point
 
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {
-    return sum_of_squares(solver.advance_observations(times, obs_indices),
-                          observations);
+    using value_type = typename Solver::value_type;
+    // The driver has already replayed the schedule; sample the collected
+    // trajectory at the recorded steps the observations attach to.
+    std::vector<std::vector<value_type>> predicted;
+    predicted.reserve(obs_indices.size());
+    for (size_t idx : obs_indices) {
+      auto sys = solver.get_history_step(idx);
+      std::vector<value_type> s(sys.ode_size());
+      sys.ode_state(s.begin());
+      predicted.push_back(std::move(s));
+    }
+    return sum_of_squares(predicted, observations);
   }
 };
 
@@ -82,8 +103,15 @@ struct DifferentiationTargets {
 // Delegates the record-once/row-sweep to xad::computeJacobian (the adjoint
 // driver, optimal here: outputs << inputs, few metrics vs many traits). We
 // supply the seam it doesn't know about: the forward callback that scatters the
-// registered inputs into the System and drives the solver. Returns the m output
-// values and the m x n Jacobian (row i = d(output_i)/d(input)).
+// registered inputs into the System, *owns the L1 replay* (`advance_fixed` on the
+// recorded `schedule`), then hands the positioned solver to the pure-reduction
+// functional (odelia#27). Returns the m output values and the m x n Jacobian
+// (row i = d(output_i)/d(input)).
+//
+// `schedule` is the recorded step grid to replay -- the double solver's
+// `recorded_steps()`, resolved by the caller. Owning the replay here means the
+// functional never carries or drives a schedule, so the grid cannot drift from
+// the recording, and the "forgot to record" guard is this one check.
 //
 // `codomain` is the number of outputs m. Passing it is not cosmetic: XAD runs
 // the forward callback an extra time just to size the output when it is left at
@@ -94,6 +122,7 @@ template<typename Solver, typename Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobian(
     Solver& solver,
     const DifferentiationTargets& independents,
+    const std::vector<double>& schedule,
     Functional&& functional,
     std::size_t codomain
 ) {
@@ -105,6 +134,9 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
     }
     if (independents.slots.size() != independents.values.size()) {
         util::stop("DifferentiationTargets: 'slots' and 'values' must be the same length");
+    }
+    if (schedule.empty()) {
+        util::stop("no recorded schedule to replay; run the adaptive pass first");
     }
 
     // Reuse tape across calls to avoid invalidating slots
@@ -124,7 +156,8 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
         [&](std::vector<ad_type>& x) {
             solver.get_system_ref().scatter(x.begin(), independents.slots);
             solver.reset();
-            auto outputs = functional(solver);
+            solver.advance_fixed(schedule);        // the driver owns the L1 replay
+            auto outputs = functional(solver);     // the functional is a pure reduction
             values.resize(outputs.size());
             for (size_t i = 0; i < outputs.size(); ++i) {
                 values[i] = xad::value(outputs[i]);
@@ -145,13 +178,14 @@ template<typename Solver, typename Functional>
 std::pair<double, std::vector<double>> compute_gradient(
     Solver& solver,
     const DifferentiationTargets& independents,
+    const std::vector<double>& schedule,
     Functional&& functional
 ) {
     using value_type = typename Solver::value_type;
     auto as_vector = [&](Solver& s) {
         return std::vector<value_type>{ functional(s) };
     };
-    auto [values, jacobian] = compute_jacobian(solver, independents, as_vector, 1);
+    auto [values, jacobian] = compute_jacobian(solver, independents, schedule, as_vector, 1);
     return {values[0], jacobian[0]};
 }
 

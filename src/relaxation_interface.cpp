@@ -35,14 +35,14 @@ double Relaxation_adaptive_final(SEXP system_xp, SEXP control_xp, double Tmax) {
   return solver.state()[0];
 }
 
-// The functional: replay the recorded schedule with advance_fixed and return the
-// final state. Observation-free -- it carries no calibration data (design: the
-// recording travels from the double Solver on its own).
+// The functional: a *pure reduction* (odelia#27) -- the driver replays the
+// recorded schedule with advance_fixed and hands over a positioned solver; this
+// just returns the final state. Observation-free and schedule-free: it carries
+// no calibration data and no grid (the recording travels from the double Solver
+// on its own).
 struct relaxation_final {
-  std::vector<double> times;
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {
-    solver.advance_fixed(times);
     return solver.state()[0];
   }
 };
@@ -80,7 +80,7 @@ Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
   ind.values.push_back(gain);
 
   auto [value, gradient] =
-      ode::compute_gradient(active_solver, ind, relaxation_final{times});
+      ode::compute_gradient(active_solver, ind, times, relaxation_final{});
 
   return Rcpp::List::create(
       Rcpp::Named("value") = value,
@@ -134,7 +134,7 @@ Rcpp::List Relaxation_replay_gradient(SEXP solver_xp, bool frozen = false) {
   ind.slots.push_back(0);      // slot 0 = gain
   ind.values.push_back(rec.pars());
 
-  auto [value, gradient] = ode::compute_gradient(active, ind, relaxation_final{times});
+  auto [value, gradient] = ode::compute_gradient(active, ind, times, relaxation_final{});
   return Rcpp::List::create(
       Rcpp::Named("value") = value,
       Rcpp::Named("gradient") = Rcpp::wrap(gradient),
