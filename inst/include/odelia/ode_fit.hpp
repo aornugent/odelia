@@ -11,15 +11,18 @@
 namespace odelia {
 namespace ode {
 
-// Sum-of-squares loss between the trajectory and its targets. The default
-// functional's reduction, kept separate so it can be reused and tested directly.
+// Sum-of-squares between the model's predicted observations and the measured
+// ones. The reduction of the least-squares functional, kept separate so it can
+// be reused and tested directly. Up to the additive/scale constants of a
+// homoscedastic Gaussian model this is the negative log-likelihood, so its
+// minimiser is the maximum-likelihood fit.
 template<typename T>
-T sum_of_squares(const std::vector<std::vector<T>>& obs,
-                 const std::vector<std::vector<double>>& targets) {
+T sum_of_squares(const std::vector<std::vector<T>>& predicted,
+                 const std::vector<std::vector<double>>& observations) {
     T loss(0.0);
-    for (size_t i = 0; i < obs.size(); ++i) {
-        for (size_t j = 0; j < obs[i].size(); ++j) {
-            T diff = obs[i][j] - targets[i][j];
+    for (size_t i = 0; i < predicted.size(); ++i) {
+        for (size_t j = 0; j < predicted[i].size(); ++j) {
+            T diff = predicted[i][j] - observations[i][j];
             loss += diff * diff;
         }
     }
@@ -27,12 +30,24 @@ T sum_of_squares(const std::vector<std::vector<T>>& obs,
 }
 
 // A "functional" is any callable that takes a seeded, freshly-reset Solver,
-// drives it, and returns the scalar to differentiate. This default scores the
-// trajectory against its configured targets.
-struct sum_of_squares_loss {
+// drives it, and returns the scalar(s) to differentiate. odelia never learns
+// what the scalar means -- a calibration loss, an emergent summary of the state
+// (a stand's basal area), whatever the caller drives the solver to compute.
+//
+// `least_squares` is the one prebuilt calibration instance. Unlike an emergent
+// functional it carries per-run data: the measured observations and the schedule
+// at which to sample them. It owns that data itself -- the Solver is a generic
+// trajectory sampler and stores no fit state -- so calibration is just another
+// functional, not a special mode wired into the solver or the AD driver.
+struct least_squares {
+  std::vector<double>              times;         // schedule to advance through
+  std::vector<size_t>              obs_indices;   // which time indices are observed
+  std::vector<std::vector<double>> observations;  // measured data, per obs point
+
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {
-    return sum_of_squares(solver.advance_target(), solver.targets());
+    return sum_of_squares(solver.advance_observations(times, obs_indices),
+                          observations);
   }
 };
 

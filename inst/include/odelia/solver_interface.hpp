@@ -133,28 +133,29 @@ inline Rcpp::List Solver_get_history_impl(SEXP solver_xp, Rcpp::CharacterVector 
   return Rcpp::DataFrame(out);
 }
 
-template<typename SystemType>
-inline void Solver_set_target_impl(SEXP solver_xp,
-                                   Rcpp::NumericVector times,
-                                   Rcpp::NumericMatrix target,
-                                   Rcpp::IntegerVector obs_indices) {
-  std::vector<double> times_vec(times.begin(), times.end());
+// Marshal an R (times, observation matrix, 1-based obs_indices) triple into the
+// least_squares functional that owns them. Calibration state is no longer solver
+// state: it lives in the functional the caller hands to the gradient driver.
+inline ode::least_squares least_squares_from_r(Rcpp::NumericVector times,
+                                               Rcpp::NumericMatrix observations,
+                                               Rcpp::IntegerVector obs_indices) {
+  ode::least_squares f;
+  f.times.assign(times.begin(), times.end());
 
-  int nrows = target.nrow(), ncols = target.ncol();
-  std::vector<std::vector<double>> targets_vec(nrows);
+  int nrows = observations.nrow(), ncols = observations.ncol();
+  f.observations.resize(nrows);
   for (int i = 0; i < nrows; ++i) {
-    targets_vec[i].resize(ncols);
+    f.observations[i].resize(ncols);
     for (int j = 0; j < ncols; ++j) {
-      targets_vec[i][j] = target(i, j);
+      f.observations[i][j] = observations(i, j);
     }
   }
 
-  std::vector<size_t> obs_idx_vec(obs_indices.size());
+  f.obs_indices.resize(obs_indices.size());
   for (size_t i = 0; i < static_cast<size_t>(obs_indices.size()); ++i) {
-    obs_idx_vec[i] = obs_indices[i] - 1;
+    f.obs_indices[i] = obs_indices[i] - 1;  // R 1-based -> C++ 0-based
   }
-
-  get_solver<SystemType>(solver_xp)->set_target(times_vec, targets_vec, obs_idx_vec);
+  return f;
 }
 
 // ---- Gradients on the DOUBLE handle (RIF-1, RIF-3) -------------------------
@@ -204,7 +205,10 @@ jacobian_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& fu
 template <class SystemType, class ActiveSystemType>
 Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
                                           Rcpp::Nullable<Rcpp::NumericVector> ic,
-                                          Rcpp::Nullable<Rcpp::NumericVector> params) {
+                                          Rcpp::Nullable<Rcpp::NumericVector> params,
+                                          Rcpp::NumericVector times,
+                                          Rcpp::NumericMatrix observations,
+                                          Rcpp::IntegerVector obs_indices) {
   // Lay leaves out params-first, then the ODE initial state (param i -> slot i,
   // ic j -> slot n_params + j).
   auto d = get_solver<SystemType>(solver_xp);
@@ -224,14 +228,14 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
       ind.values.push_back(v[j]);
     }
   }
-  // Calibration's per-call semantic state is the fit observations: hand them to
-  // the reused active solver each call, from the immutable double solver (the
-  // sum-of-squares functional scores the trajectory against them). This is the
+  // Calibration's per-call semantic state is the fit observations. They are no
+  // longer solver state: the caller hands them in and we build the least_squares
+  // functional that owns them, then run it on the reused active solver. This is the
   // observations slice of "read the recording per call" -- kept off
-  // gradient_on_double, which serves emergent functionals that carry no observations.
+  // gradient_on_double, which serves emergent functionals that carry no data.
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  active.set_target(d->fit_times(), d->targets(), d->obs_indices());
-  auto [value, gradient] = ode::compute_gradient(active, ind, ode::sum_of_squares_loss{});
+  auto functional = least_squares_from_r(times, observations, obs_indices);
+  auto [value, gradient] = ode::compute_gradient(active, ind, functional);
   return Rcpp::List::create(Rcpp::Named("value") = value,
                             Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }

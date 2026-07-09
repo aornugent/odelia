@@ -185,25 +185,19 @@ Rcpp::List Solver_get_history(SEXP solver_xp) {
   );
 }
 
-// [[Rcpp::export]]
-void Solver_set_target(SEXP solver_xp,
-                      Rcpp::NumericVector times,
-                      Rcpp::NumericMatrix target,
-                      Rcpp::IntegerVector obs_indices) {
-  odelia::solver::Solver_set_target_impl<SystemType>(
-    solver_xp, times, target, obs_indices
-  );
-}
-
-// value + sum-of-squares-loss gradient on the DOUBLE handle (RIF-1): the
-// double-handle successor to Solver_fit; the active replay is built, used, and
-// destroyed inside the call.
+// value + least-squares gradient on the DOUBLE handle (RIF-1): the double-handle
+// successor to Solver_fit; the active replay is built, used, and destroyed inside
+// the call. The observations are passed per call and owned by the functional --
+// the solver holds no calibration state.
 // [[Rcpp::export]]
 Rcpp::List Solver_value_and_gradient(SEXP solver_xp,
+                                     Rcpp::NumericVector times,
+                                     Rcpp::NumericMatrix observations,
+                                     Rcpp::IntegerVector obs_indices,
                                      Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
                                      Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
   return odelia::solver::Solver_value_and_gradient_impl<SystemType, ActiveSystemType>(
-    solver_xp, ic, params
+    solver_xp, ic, params, times, observations, obs_indices
   );
 }
 

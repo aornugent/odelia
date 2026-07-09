@@ -242,23 +242,17 @@ Rcpp::List LeafSolver_get_history(SEXP solver_xp) {
   );
 }
 
-// [[Rcpp::export]]
-void LeafSolver_set_target(SEXP solver_xp,
-                          Rcpp::NumericVector times,
-                          Rcpp::NumericMatrix target,
-                          Rcpp::IntegerVector obs_indices) {
-  odelia::solver::Solver_set_target_impl<SystemType>(
-    solver_xp, times, target, obs_indices
-  );
-}
-
-// value + sum-of-squares-loss gradient on the double handle (RIF-1): the
-// double-handle successor to the retired LeafSolver_fit.
+// value + least-squares gradient on the double handle (RIF-1): the double-handle
+// successor to the retired LeafSolver_fit. The observations are passed per call
+// and owned by the functional -- the solver holds no calibration state.
 // [[Rcpp::export]]
 Rcpp::List LeafSolver_value_and_gradient(SEXP solver_xp,
+                         Rcpp::NumericVector times,
+                         Rcpp::NumericMatrix observations,
+                         Rcpp::IntegerVector obs_indices,
                          Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
                          Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
   return odelia::solver::Solver_value_and_gradient_impl<SystemType, ActiveSystemType>(
-    solver_xp, ic, params
+    solver_xp, ic, params, times, observations, obs_indices
   );
 }

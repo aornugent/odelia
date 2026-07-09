@@ -97,12 +97,8 @@ Solver_get_history <- function(solver_xp) {
     .Call(`_odelia_Solver_get_history`, solver_xp)
 }
 
-Solver_set_target <- function(solver_xp, times, target, obs_indices) {
-    invisible(.Call(`_odelia_Solver_set_target`, solver_xp, times, target, obs_indices))
-}
-
-Solver_value_and_gradient <- function(solver_xp, ic = NULL, params = NULL) {
-    .Call(`_odelia_Solver_value_and_gradient`, solver_xp, ic, params)
+Solver_value_and_gradient <- function(solver_xp, times, observations, obs_indices, ic = NULL, params = NULL) {
+    .Call(`_odelia_Solver_value_and_gradient`, solver_xp, times, observations, obs_indices, ic, params)
 }
 
 Solver_gradient_final_state <- function(solver_xp, times, params) {

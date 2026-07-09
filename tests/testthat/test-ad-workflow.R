@@ -39,9 +39,9 @@ test_that("AD workflow optimizes Lorenz parameters", {
   lz$set_params(initial_guess)
 
   # Create AD solver
-  target_vals <- as.matrix(hist[, c("x", "y", "z")])
+  observation_vals <- as.matrix(hist[, c("x", "y", "z")])
   ad_runner <- Lorenz_Solver$new(lz$ptr, ctrl$ptr)
-  ad_runner$set_target(times, target_vals, obs_index)
+  ad_runner$set_observations(times, observation_vals, obs_index)
 
   expect_false(isTRUE(all.equal(lz$pars(), true_pars)))
 

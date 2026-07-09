@@ -120,7 +120,7 @@ testthat::test_that("lorenz AD IC gradients are NON-ZERO", {
   lz_fit$set_initial_state(c(1, 1, 1), 0)
 
   ad_runner <- Lorenz_Solver$new(lz_fit$ptr, ctrl$ptr)
-  ad_runner$set_target(target_times, target_vals, c(1L, 2L, 3L))
+  ad_runner$set_observations(target_times, target_vals, c(1L, 2L, 3L))
 
   wrong_ic <- c(2, 2, 2)
   result <- ad_runner$value_and_gradient(ic = wrong_ic, params = NULL)
@@ -153,7 +153,7 @@ testthat::test_that("lorenz AD parameter gradients are NON-ZERO", {
   lz_fit$set_params(wrong_pars)
 
   ad_runner <- Lorenz_Solver$new(lz_fit$ptr, ctrl$ptr)
-  ad_runner$set_target(target_times, target_vals, c(1L, 2L, 3L))
+  ad_runner$set_observations(target_times, target_vals, c(1L, 2L, 3L))
 
   result <- ad_runner$value_and_gradient(ic = NULL, params = wrong_pars)
 

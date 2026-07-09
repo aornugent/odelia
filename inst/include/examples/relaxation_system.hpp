@@ -181,7 +181,7 @@ public:
     knot_history.clear(); field_history.clear();
   }
   // Positions and values are plain doubles, so the recording crosses the
-  // double->active type boundary directly (no rebind, no set_target).
+  // double->active type boundary directly (no rebind, no observations).
   const std::vector<std::vector<double>>& recorded_knots()  const { return knot_history; }
   const std::vector<std::vector<double>>& recorded_values() const { return field_history; }
   void set_recording(std::vector<std::vector<double>> knots,

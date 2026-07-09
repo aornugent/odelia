@@ -1,8 +1,8 @@
 # The gradient driver was generalised from a hard-coded sum-of-squares loss to
 # any caller-supplied functional (ODELIA-1). Exercise a *second* functional --
-# the summed final state after a fixed-grid advance, with no notion of targets --
-# against central finite differences of the forward solve. Together with the
-# sum-of-squares path in test-ad-workflow.R this pins the seam as
+# the summed final state after a fixed-grid advance, with no notion of
+# observations -- against central finite differences of the forward solve.
+# Together with the least-squares path in test-ad-workflow.R this pins the seam as
 # functional-agnostic.
 
 # Summed final state of a forward (double) run over `times`; the

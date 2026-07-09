@@ -36,8 +36,8 @@ double Relaxation_adaptive_final(SEXP system_xp, SEXP control_xp, double Tmax) {
 }
 
 // The functional: replay the recorded schedule with advance_fixed and return the
-// final state. Target-free -- it never mentions set_target (design: the recording
-// travels from the double Solver on its own).
+// final state. Observation-free -- it carries no calibration data (design: the
+// recording travels from the double Solver on its own).
 struct relaxation_final {
   std::vector<double> times;
   template<typename Solver>
@@ -70,7 +70,7 @@ Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
   const double gain = rec_sys.pars();
 
   // 2. Replay: lift to active (RIF-2), read the recording per call (not through
-  //    rebind, not through set_target), differentiate.
+  //    rebind, not through observations), differentiate.
   ActiveSystemType act = rec_sys.rebind_from<xad::adj<double>::active_type>();
   act.set_recording(rec_sys.recorded_knots(), rec_sys.recorded_values(), frozen);
   ode::Solver<ActiveSystemType> active_solver(act, *ctrl);
