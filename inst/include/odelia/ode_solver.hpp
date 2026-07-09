@@ -52,8 +52,8 @@ public:
   System get_system() const { return system; }
   System& get_system_ref() { return system; }
 
-  // The control this solver was built with -- lets a driver construct the active
-  // replay (RIF-2 rebind) with the same integration settings (RIF-1).
+  // The control this solver was built with, so a driver builds the active solver
+  // with the same integration settings.
   OdeControl get_control() const { return control_; }
 
   // Synchronize internal ODE buffers from the current system state without
@@ -176,33 +176,28 @@ public:
 
   System get_history_step(std::size_t i) const { return history.at(i); }
 
-  // The honest surface behind the "forgot to record" guard (ad-r-interface.md
-  // §6.7): whether an adaptive pass has resolved a schedule on this (double) solver,
-  // and what that schedule is. The schedule is the L1 recording every solver carries
-  // -- a replay-gradient reads it (as the advance_fixed grid) and can check it first.
+  // The read-only surface behind the "forgot to record" guard: whether an adaptive
+  // pass has resolved a schedule on this solver, and what it is. The schedule is the
+  // grid a replay-gradient advances over (advance_fixed).
   bool has_recording() const { return times().size() > 1; }
   std::vector<double> recorded_steps() const { return times(); }
 
-  // ---- AD scratch, reused across gradient calls (RIF-3) ----------------------
-  // Both are lazily built on the first gradient call and reused thereafter, so an
-  // optimiser loop amortizes them instead of reallocating each iteration; both are
-  // null for a solver that never takes a gradient (nothing forces a System to be
-  // differentiable). They live on the solver OBJECT -- not an R handle -- so a C++
-  // caller that owns the solver as a plain member (plant's SCM) shares the reuse.
-  // Reusing them is pure speed: it never changes a number. The recording, read per
-  // call from the immutable double System, is what carries semantics.
+  // ---- AD scratch, reused across gradient calls ------------------------------
+  // Lazily built on the first gradient and reused, so an optimiser loop amortizes
+  // it; null for a solver that never takes a gradient. Cached on the object, not an
+  // R handle, so a C++ caller holding the solver as a plain member (plant's SCM)
+  // shares the reuse. Reuse is pure speed -- it never changes a number.
   //
-  //   active_solver -- this System lifted to the active scalar (RIF-2 rebind): the
-  //     differentiable solver the gradient actually runs on. Its type is named via
-  //     the System's own `rebind`, so the cache needs no void* / static_cast. Its own
-  //     `tape` is the reused tape -- there is nothing else to cache.
+  //   active_solver -- this System lifted to the active scalar: the differentiable
+  //     solver the gradient runs on. Its type is named via the System's own `rebind`
+  //     (no void* / static_cast); its own `tape` is the reused tape.
   // mutable: incidental scratch, reusable through an otherwise-const solver.
   using active_system_type =
       typename System::template rebind<typename xad::adj<double>::active_type>;
   mutable std::shared_ptr<Solver<active_system_type>> active_solver;
 
   // Reverse-mode tape, created on the first gradient and reused (only ever exercised
-  // on the active solver). unique_ptr so ownership is self-evident -- no destructor.
+  // on the active solver).
   std::unique_ptr<xad::Tape<double>> tape;
 
   // Should we record history at every step?

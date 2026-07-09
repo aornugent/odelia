@@ -9,34 +9,25 @@
 
 using namespace odelia;
 
-// RelaxationSystem -- the odelia-native demonstrator for the record -> replay
-// primitive (ODELIA-6). It is the plant-agnostic shrink of FF16's resident light:
-// a scalar state whose rate reads a *field* built by an adaptive interpolator over
-// a set of node positions, so it exercises the two things Lorenz/leaf_thermal never
-// do -- the opt-in record/replay hooks (the Replayable concept) and a frozen-knot
-// basic_interpolator carrying an active value on the AD path.
+// The record->replay demonstrator: a Replayable System exercising the hooks and a
+// frozen-knot interpolator on the AD path (Lorenz/leaf_thermal do neither).
 //
 //   dy/dt = -k*y + F(y; gain)
 //   F     = interp(eval_point), interp = cubic spline over an ADAPTIVE node set of
 //           phi(x) = gain*exp(-decay*x) + y*exp(-beta*(x-1/2)^2), x in [0,1].
 //
-// phi's curvature depends on the live state y, so the adaptive node placement is
-// state- (hence parameter-) dependent and varies step to step -- exactly the thing
-// that is fragile to differentiate through and cheap to replay once recorded. The
-// ODE is linear in (gain, y), so dy(T)/dgain has a clean finite-difference oracle.
+// phi's curvature moves with the state y, so the adaptive node placement is
+// parameter-dependent and varies per step -- fragile to differentiate through,
+// cheap to replay. The ODE is linear in (gain, y), so dy(T)/dgain has a clean
+// finite-difference oracle.
 //
-// There is no `live | frozen | replaying` mode flag (odelia#28). The System stores
-// one bit -- `recording` -- and answers one data query -- `has_recorded_field()`,
-// literally "is my L3 field cache populated?". The variant entry (`set_recording`
-// with `frozen`) chooses whether to populate that cache; the System just reads what
-// is present:
-//   * record  (adaptive double pass): refine nodes, stash their positions per step
-//     and the field value per RK stage; `recording` true.
-//   * replay, L3 cache empty (resident/live): recompute the field on the frozen node
-//     POSITIONS with the active scalar, so the field self-responds to the trait.
-//   * replay, L3 cache populated (mutant/frozen): read the field VALUES per RK stage
-//     as plain DOUBLE background (off the tape), so the derivative through the field
-//     is zero by construction.
+// One bit of state (`recording`) and one data query, has_recorded_field() = "is the
+// L3 field cache populated?"; set_recording chooses whether to populate it:
+//   * record (double pass): refine nodes, stash positions per step, field per stage.
+//   * replay, L3 empty (resident): recompute the field on the frozen positions with
+//     the active scalar, so it self-responds to the trait.
+//   * replay, L3 populated (mutant): read the field per stage as double background,
+//     so the derivative through it is zero by construction.
 template <typename T = double>
 class RelaxationSystem {
 public:
@@ -50,9 +41,8 @@ public:
     reset();
   }
 
-  // RIF-2 lift: mould the config (values only) into another scalar. The recording
-  // is NOT carried here -- it is read from the immutable double System per call via
-  // set_recording (design ad-record-replay.md), keeping rebind tape-identity-free.
+  // Lift the config (values only) to another scalar; the recording is read per call
+  // via set_recording, not carried here, so rebind stays free of tape identity.
   template <class S2> using rebind = RelaxationSystem<S2>;
 
   template <class S2>
@@ -76,12 +66,9 @@ public:
     return it;
   }
 
-  // Frozen-replay path (mutant): the field for this step's stage `index` was
-  // recorded on the double pass and is read as plain DOUBLE background -- no rebuild
-  // and never on the tape, so the derivative through the field is zero by
-  // construction (ad-record-replay.md sec 4.1: the frozen field is simply double
-  // data, not an active constant with a zeroed derivative). odelia routes here via
-  // derivs when has_recorded_field() is true (the L3 cache is populated).
+  // Frozen-replay path (mutant): read this stage's recorded field as plain double
+  // background -- no rebuild, off the tape, so d(rate)/d(field) is zero. derivs
+  // routes here when has_recorded_field() is true.
   template <typename Iterator>
   Iterator set_ode_state(Iterator it, int index) {
     y = *it++;
@@ -127,14 +114,11 @@ public:
     compute_rates();
   }
 
-  // ---- AD input contract (ODELIA-3a) --------------------------------------
+  // ---- AD input contract ---------------------------------------------------
   size_t n_params() const { return 1; }
 
-  // Slot layout: 0 = gain, the single differentiable input. RelaxationSystem exists
-  // to demonstrate record -> replay, so it deliberately has one trait and no seedable
-  // initial state -- the IC is a construction-time constant (Lorenz already
-  // demonstrates initial-state sensitivity). One input keeps the L1/L2 finite-
-  // difference oracle and the teaching focus sharp.
+  // Slot 0 = gain, the single differentiable input. One trait and a constant IC keep
+  // the record->replay demonstration and its finite-difference oracle sharp.
   template <typename Iterator>
   void scatter(Iterator it, const std::vector<int>& slots) {
     for (int s : slots) {
@@ -146,9 +130,8 @@ public:
   }
 
   // ---- Record / replay hooks (Replayable) ---------------------------------
-  // The recorded thing is a node POSITION set (per accepted step, L2) and a field
-  // VALUE per RK stage (L3); see design ad-record-replay.md sec 3. `record_stage` /
-  // `record_ode_step` act only while recording; `replay_step` only while replaying.
+  // Records a node POSITION set per accepted step (L2) and a field VALUE per RK
+  // stage (L3). record_* act only while recording, replay_step only while replaying.
   void record_stage(int stage) {
     if (!recording) return;
     if (stage == 0) {
@@ -206,20 +189,18 @@ public:
 
   double pars() const { return xad::value(gain); }
 
-  // The one data query derivs reads to route frozen-field (mutant) replay: is the L3
-  // field cache populated? Guarded against the recording pass, which is building that
-  // cache and must stay on the live (recompute) path (odelia#28).
+  // The query derivs reads to route frozen (mutant) replay: is the L3 field cache
+  // populated? Guarded against the recording pass, which is still building the cache
+  // and must stay on the live recompute path.
   bool has_recorded_field() const { return !recording && !field_history.empty(); }
 
 private:
-  // A System is replaying exactly when it is not recording and has a recording to
-  // read -- derived, not a stored mode flag (design ad-record-replay.md sec 5.1).
+  // Replaying = not recording and has a recording to read: derived, not stored.
   bool replaying() const { return !recording && has_recording(); }
 
-  // The field: a cubic spline over a node set, read at eval_point. Recording lets
-  // the interpolator refine the nodes adaptively (odelia#22 -- the interpolator owns
-  // its refinement); live replay reuses the frozen node positions and only the
-  // values go active (the fixed-node interpolator on the AD path).
+  // The field: a cubic spline over a node set, read at eval_point. Recording refines
+  // the nodes adaptively; live replay rebuilds on the frozen positions with active
+  // values (the fixed-node interpolator on the AD path).
   T compute_field() {
     interpolator::basic_interpolator<T> interp;
     if (replaying()) {
@@ -253,7 +234,7 @@ private:
   double bg_field = 0.0;  // frozen (L3) coupling field for the current stage: double, off-tape
   double time;
 
-  // Recording (owned here as System state; odelia grows no Recording noun).
+  // Recording, owned here as plain System state.
   bool recording = false;                            // set only during the double pass
   std::vector<std::vector<double>> positions_history;  // L2: node positions per accepted step
   std::vector<std::vector<double>> field_history;      // L3: field values [step][stage]

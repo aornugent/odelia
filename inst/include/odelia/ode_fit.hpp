@@ -11,11 +11,8 @@
 namespace odelia {
 namespace ode {
 
-// Sum-of-squares between the model's predicted observations and the measured
-// ones. The reduction of the least-squares functional, kept separate so it can
-// be reused and tested directly. Up to the additive/scale constants of a
-// homoscedastic Gaussian model this is the negative log-likelihood, so its
-// minimiser is the maximum-likelihood fit.
+// Sum-of-squares between predicted and measured observations; the reduction of
+// least_squares, split out so it can be reused and tested directly.
 template<typename T>
 T sum_of_squares(const std::vector<std::vector<T>>& predicted,
                  const std::vector<std::vector<double>>& observations) {
@@ -29,28 +26,16 @@ T sum_of_squares(const std::vector<std::vector<T>>& predicted,
     return loss;
 }
 
-// A "functional" is a *pure reduction*: it reads a seeded, already-replayed
-// Solver and returns the scalar(s) to differentiate. It does NOT drive the
-// solver and carries no schedule -- the driver (compute_gradient /
-// compute_jacobian) owns the L1 replay and hands the functional a positioned
-// solver (odelia#27). odelia never learns what the scalar means -- a calibration
-// loss, an emergent summary of the state (a stand's basal area), whatever the
-// caller reduces the replayed trajectory to.
+// A functional is a pure reduction: it reads an already-replayed Solver and
+// returns the scalar(s) to differentiate. It does not drive the solver or carry a
+// schedule -- the driver replays, the functional reduces. The scalar is anything:
+// a calibration loss, an emergent summary of the state (a stand's basal area).
 //
-// `least_squares` is the one prebuilt calibration instance. Unlike an emergent
-// functional (which reads final/native state) it carries per-run data: the
-// measured observations and which recorded steps they attach to. It owns that
-// data itself -- the Solver is a generic trajectory sampler and stores no fit
-// state -- so calibration is just another functional, not a special mode wired
-// into the solver or the AD driver. It does NOT carry a `times`: the sampling
-// grid is the recording's (`recorded_steps()`), replayed by the driver.
-//
-// Interior sampling is the one open seam (odelia#27, depends on #23). An
-// emergent functional reads only the final/native state, but a likelihood needs
-// the model's state at several *interior* observation points. Until #23 stores
-// history as bare rows, `least_squares` reads those points from the solver's own
-// collected history at `obs_indices` -- the recorded schedule as its grid, never
-// a private `times`. #23 replaces the full-System history snapshots with rows.
+// A calibration functional: holds measured data, scores the replayed trajectory
+// against it. The solver stores no fit state. The sampling grid is the recording's
+// (recorded_steps()), so obs_indices index into it -- least_squares carries no
+// schedule of its own. It reads interior points from the solver's collected
+// history (bare history rows are #23).
 struct least_squares {
   std::vector<size_t>              obs_indices;   // indices into recorded_steps()
   std::vector<std::vector<double>> observations;  // measured data, per obs point
@@ -58,8 +43,6 @@ struct least_squares {
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {
     using value_type = typename Solver::value_type;
-    // The driver has already replayed the schedule; sample the collected
-    // trajectory at the recorded steps the observations attach to.
     std::vector<std::vector<value_type>> predicted;
     predicted.reserve(obs_indices.size());
     for (size_t idx : obs_indices) {
@@ -73,10 +56,7 @@ struct least_squares {
 };
 
 namespace detail {
-// Scope guard: deactivate the tape however we leave the driver -- normal return
-// or *any* exception. Replaces the hand-written try/catch, which left `e`
-// unused and, being `catch (const std::exception&)`, leaked an activated tape
-// on a non-std throw.
+// Deactivate the tape on every exit path -- normal return or any exception.
 template<typename Tape>
 struct tape_deactivate_guard {
     Tape* tape;
@@ -84,13 +64,10 @@ struct tape_deactivate_guard {
 };
 } // namespace detail
 
-// The active inputs a gradient is taken with respect to: leaf values, each
-// addressed to a System field by a slot index. The System owns the slot->field
-// routing (its scatter method); odelia only carries opaque (slot, value) pairs,
-// so it never learns whether a leaf is a trait, an initial density, or a
-// boundary flux. Any subset is expressible -- seed only ICs for IC sensitivity,
-// only traits for calibration, or both -- with no per-kind branching. Column j
-// of the Jacobian corresponds to (slots[j], values[j]).
+// The active inputs a gradient is taken w.r.t.: opaque (slot, value) leaves. The
+// System owns the slot->field routing (its scatter method), so odelia never learns
+// whether a leaf is a trait, an initial density, or a flux. Jacobian column j
+// corresponds to (slots[j], values[j]).
 struct DifferentiationTargets {
   std::vector<int>    slots;
   std::vector<double> values;   // parallel to slots
@@ -98,26 +75,16 @@ struct DifferentiationTargets {
   bool empty() const { return values.empty(); }
 };
 
-// Reverse-mode Jacobian of a multi-output functional -- `functional(solver)`
-// returns the m outputs -- w.r.t. the active inputs named by `independents`.
-// Delegates the record-once/row-sweep to xad::computeJacobian (the adjoint
-// driver, optimal here: outputs << inputs, few metrics vs many traits). We
-// supply the seam it doesn't know about: the forward callback that scatters the
-// registered inputs into the System, *owns the L1 replay* (`advance_fixed` on the
-// recorded `schedule`), then hands the positioned solver to the pure-reduction
-// functional (odelia#27). Returns the m output values and the m x n Jacobian
-// (row i = d(output_i)/d(input)).
+// Reverse-mode Jacobian (row i = d(output_i)/d(input)) of a multi-output
+// functional w.r.t. the seeded inputs. The record-once/row-sweep is
+// xad::computeJacobian's; the forward callback here is the seam it doesn't know:
+// scatter the registered inputs onto the System, replay the recorded `schedule`
+// (advance_fixed), and hand the positioned solver to the functional. Owning the
+// replay here keeps the grid from drifting from the recording, and `schedule.empty()`
+// is the whole "forgot to record" guard.
 //
-// `schedule` is the recorded step grid to replay -- the double solver's
-// `recorded_steps()`, resolved by the caller. Owning the replay here means the
-// functional never carries or drives a schedule, so the grid cannot drift from
-// the recording, and the "forgot to record" guard is this one check.
-//
-// `codomain` is the number of outputs m. Passing it is not cosmetic: XAD runs
-// the forward callback an extra time just to size the output when it is left at
-// 0 (the docs are explicit) -- one wasted forward eval, i.e. a full model replay
-// when plant drives this. The caller knows m (the functional's codomain), so it
-// threads it through.
+// `codomain` is the number of outputs m: pass it, or XAD runs the forward callback
+// an extra time just to size the output (a wasted full model replay).
 template<typename Solver, typename Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobian(
     Solver& solver,

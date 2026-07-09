@@ -1,6 +1,5 @@
-/* RelaxationSystem interface -- the odelia-native record -> replay demonstrator
- * (ODELIA-6). Exercises the Replayable hooks and a frozen-knot interpolator on the
- * AD path, which Lorenz/leaf_thermal never touch (they aren't Replayable).
+/* RelaxationSystem interface -- the record -> replay demonstrator, exercising the
+ * Replayable hooks and a frozen-knot interpolator on the AD path.
  *
  * Names are Relaxation_-prefixed: this TU links into the same odelia.so as the
  * Lorenz interface, so the exported symbols must not collide.
@@ -35,11 +34,9 @@ double Relaxation_adaptive_final(SEXP system_xp, SEXP control_xp, double Tmax) {
   return solver.state()[0];
 }
 
-// The functional: a *pure reduction* (odelia#27) -- the driver replays the
-// recorded schedule with advance_fixed and hands over a positioned solver; this
-// just returns the final state. Observation-free and schedule-free: it carries
-// no calibration data and no grid (the recording travels from the double Solver
-// on its own).
+// The functional: a pure reduction. The driver replays the recorded schedule and
+// hands over a positioned solver; this returns the final state. It carries no
+// calibration data and no grid.
 struct relaxation_final {
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {
@@ -49,10 +46,9 @@ struct relaxation_final {
 
 // Record on a double Solver, then replay on an active Solver and differentiate the
 // final state w.r.t. `gain`. `frozen` selects the variant by choosing whether
-// set_recording populates the active system's L3 field cache -- it is not a System
-// mode flag (odelia#28). `frozen = FALSE` is the resident/live path (L3 empty: node
-// POSITIONS frozen, values recomputed active through the interpolator -- L2);
-// `frozen = TRUE` is the mutant path (L3 populated: field VALUES read as constants).
+// set_recording populates the active system's L3 field cache. FALSE = resident/live
+// (L3 empty: frozen node positions, values recomputed active through the
+// interpolator); TRUE = mutant (L3 populated: field values read as constants).
 // Returns value, gradient, and the recorded step count.
 // [[Rcpp::export]]
 Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
@@ -60,8 +56,7 @@ Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
   Rcpp::XPtr<SystemType> sys(system_xp);
   Rcpp::XPtr<ode::OdeControl> ctrl(control_xp);
 
-  // 1. Record: one adaptive double pass. The recording is owned by this immutable
-  //    double Solver's System.
+  // 1. Record: one adaptive double pass, owned by this immutable double Solver.
   SystemType dbl(*sys);
   dbl.start_recording();
   ode::Solver<SystemType> dbl_solver(dbl, *ctrl);
@@ -71,8 +66,7 @@ Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
   auto& rec_sys = dbl_solver.get_system_ref();
   const double gain = rec_sys.pars();
 
-  // 2. Replay: lift to active (RIF-2), read the recording per call (not through
-  //    rebind, not through observations), differentiate.
+  // 2. Replay: lift to active, hand over the recording, differentiate.
   ActiveSystemType act = rec_sys.rebind_from<xad::adj<double>::active_type>();
   act.set_recording(rec_sys.recorded_positions(), rec_sys.recorded_values(), frozen);
   ode::Solver<ActiveSystemType> active_solver(act, *ctrl);
@@ -91,12 +85,10 @@ Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
 }
 
 //-------------------------------------------------------------------------
-// Persistent double Solver (RIF-3). The one-shot above rebuilds the active solver
-// every call; here R holds the double Solver across calls, so the active solver --
-// and its tape -- are cached on it and reused, while the recording is read fresh per call.
-// This is the first Replayable (has_recording) exercise of the reuse path: Lorenz
-// records nothing past L1, so its cache can never go stale against a schedule; this
-// one can, which is the anti-staleness assertion RIF-3 is really about.
+// Persistent double Solver. The one-shot above rebuilds the active solver every
+// call; here R holds the double Solver across calls, so the active solver and its
+// tape are cached on it and reused, while the recording is read fresh per call --
+// so a fresh recording is never replayed against a stale schedule.
 
 // [[Rcpp::export]]
 SEXP Relaxation_Solver_new(SEXP system_xp, SEXP control_xp) {

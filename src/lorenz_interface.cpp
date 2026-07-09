@@ -94,7 +94,7 @@ Rcpp::NumericVector System_rates(SEXP system_xp) {
 // Solver interface (Lorenz-specific creation, generic operations)
 
 // Solver creation - Lorenz-specific (must know LorenzSystem type). R only ever
-// holds the double solver (RIF-1); gradients build the active replay internally.
+// holds the double solver; gradients build the active replay internally.
 // [[Rcpp::export]]
 SEXP Solver_new(SEXP system_xp, SEXP control_xp) {
   Rcpp::XPtr<SystemType> sys(system_xp);
@@ -185,10 +185,9 @@ Rcpp::List Solver_get_history(SEXP solver_xp) {
   );
 }
 
-// value + least-squares gradient on the DOUBLE handle (RIF-1): the double-handle
-// successor to Solver_fit; the active replay is built, used, and destroyed inside
-// the call. The observations are passed per call and owned by the functional --
-// the solver holds no calibration state.
+// value + least-squares gradient on the double handle: the active replay is built,
+// used, and destroyed inside the call. Observations are passed per call and owned
+// by the functional -- the solver holds no calibration state.
 // [[Rcpp::export]]
 Rcpp::List Solver_value_and_gradient(SEXP solver_xp,
                                      Rcpp::NumericVector times,
@@ -202,12 +201,9 @@ Rcpp::List Solver_value_and_gradient(SEXP solver_xp,
 }
 
 //-------------------------------------------------------------------------
-// A second functional, exercising the seam generalised in ode_fit.hpp: the
-// gradient of the summed final state, w.r.t. the parameters. A *pure reduction*
-// (odelia#27) -- the driver owns the fixed-grid replay and hands it a positioned
-// solver; this just reads the final state. Nothing here mentions targets or
-// sum-of-squares -- it is a stand-in for an emergent-metric functional, and
-// proves compute_gradient no longer hard-codes the loss.
+// An emergent-metric stand-in: the summed final state. A pure reduction -- the
+// driver replays, this reads solver.state() -- with no notion of observations,
+// exercising the functional seam with something other than a loss.
 struct sum_final_state {
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {

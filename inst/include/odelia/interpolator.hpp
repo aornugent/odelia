@@ -13,33 +13,27 @@
 namespace odelia {
 namespace interpolator {
 
-// The one interpolator: a *refine* path (double, record) and a *fixed-build* path
-// (any S, replay) on a single type (odelia#22). `construct` adaptively refines a
-// target to tolerance -- the double/record half, previously plant's
-// AdaptiveInterpolator; `init` builds on given knots -- the fixed/replay half. We
-// never refine a recorded interpolator: refine is the double/record path, fixed
-// build the active/replay path.
+// The interpolator: a refine path (double, record) via `construct` and a
+// fixed-build path (any S, replay) via `init`, on one type. Refine is the
+// double/record path, fixed build the active/replay path; a recorded interpolator
+// is never re-refined.
 //
 // Templated on the scalar S of the knot VALUES (knot positions x stay double).
 // S = double is the production type; S = an AD active type makes the interpolated
 // value differentiable w.r.t. the knot values, delegating to basic_spline<S>.
 // (#472 / traitecoevo/plant#537.)
 //
-// NOTE (odelia#22, staged): retiring the `basic_interpolator` name in favour of
-// `Interpolator<S>` and folding plant's AdaptiveInterpolator into a thin wrapper
-// are the cross-package half of this change -- they move plant's RcppR6 binding
-// (bound to the bare `odelia::interpolator::Interpolator` type) and the direct
-// `basic_interpolator<S>` uses in the emergent TUs, so they land with plant in
-// lockstep. This type keeps both spellings working until then.
+// The `basic_interpolator` name and the `Interpolator` alias below both stay so
+// plant compiles unchanged; folding them to one `Interpolator<S>` moves plant's
+// RcppR6 binding and is done with plant.
 template <typename S>
 class basic_interpolator {
 public:
   // Adaptively refine `target` over [a, b] to tolerance, then build on the chosen
-  // nodes -- the double/record path (odelia#22, was plant's AdaptiveInterpolator).
-  // A node is accepted when its midpoint's absolute OR relative error is under
-  // tolerance; refinement halves the spacing until every interval passes or the
-  // depth cap bites. The refinement decisions are taken in `double` (xad::value),
-  // so the placement never depends on an active tape.
+  // nodes. A node is accepted when its midpoint's absolute OR relative error is
+  // under tolerance; refinement halves the spacing until every interval passes or
+  // the depth cap bites. Decisions are taken in `double` (xad::value), so placement
+  // never depends on an active tape.
   template <typename Function>
   void construct(Function target, double a, double b,
                  double atol = 1e-6, double rtol = 1e-6,
@@ -237,9 +231,8 @@ private:
 };
 
 // Default interpolator (knot values in double): the production type bound by
-// plant's RcppR6 (`odelia::interpolator::Interpolator`), used by ResourceSpline,
-// the leaf model, etc. Retiring this alias in favour of `Interpolator<S>` is the
-// staged plant-lockstep half of odelia#22.
+// plant's RcppR6 as `odelia::interpolator::Interpolator`, used by ResourceSpline,
+// the leaf model, etc.
 using Interpolator = basic_interpolator<double>;
 
 }

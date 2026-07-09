@@ -28,22 +28,11 @@ public:
   enum { value = sizeof(test<T>(0)) == sizeof(true_type) };
 };
 
-// A System opts into record -> replay by providing the stepper hooks below: it
-// records where the adaptive (double) pass placed its nodes, and on the active
-// pass replays pinned to them (design doc ad-record-replay.md). Detected at
-// compile time -- an absent hook makes every call site a zero-cost no-op, so an
-// ordinary (non-replayable) System is entirely unaffected; nothing forces a System
-// to be differentiable or replayable.
-//
-// "Replayable" names the recording contract -- distinct from the RIF-3 "cache",
-// which is the amortized tape/scratch (a speed optimisation), not this recording
-// (a semantic one). The three hooks record on the double pass and replay on the
-// active pass; the query is a pure *data* question -- "is the L3 field cache
-// populated?" -- not a mode flag, so derivs routes a frozen replay by asking what
-// data is present rather than reading a `live | frozen` state (odelia#28).
-// Completing the concept with the query is deliberate: derivs reads it, so
-// requiring it here rejects a half-implemented System at the concept boundary
-// rather than failing deep inside derivs.
+// A System that records its adaptive node positions on the double pass and replays
+// them fixed on the active pass. has_recorded_field() routes frozen-field replay.
+// Detected at compile time; an absent hook makes every call site a zero-cost no-op,
+// so a non-replayable System is unaffected. The query is required so a System with
+// the hooks but no query is rejected here, not deep inside derivs.
 template <typename System>
 concept Replayable = requires(System s, int stage) {
   s.record_stage(stage);     // per RK stage  (frozen field VALUES, when kept)

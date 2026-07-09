@@ -25,9 +25,9 @@ inline Rcpp::XPtr<ode::Solver<T>> get_solver(SEXP xp) {
   return Rcpp::XPtr<ode::Solver<T>>(xp);
 }
 
-// The step-wise Solver operations. R holds only the double Solver (RIF-1), so
-// these forward straight to it -- no `active` flag, no ActiveSystemType. The AD
-// replay is built internally by the gradient drivers at the bottom of this file.
+// The step-wise Solver operations. R holds only the double Solver, so these
+// forward straight to it; the AD replay is built internally by the gradient
+// drivers at the bottom of this file.
 
 template<typename SystemType>
 inline void Solver_reset_impl(SEXP solver_xp) {
@@ -133,11 +133,9 @@ inline Rcpp::List Solver_get_history_impl(SEXP solver_xp, Rcpp::CharacterVector 
   return Rcpp::DataFrame(out);
 }
 
-// Marshal an R (observation matrix, 1-based obs_indices) pair into the
-// least_squares functional that owns them. Calibration state is no longer solver
-// state: it lives in the functional the caller hands to the gradient driver. The
-// functional carries no schedule -- the sampling grid is the recording's
-// (`recorded_steps()`), replayed by the driver (odelia#27).
+// Marshal an R (observation matrix, 1-based obs_indices) pair into a least_squares
+// functional. The functional owns the fit data; the sampling grid is the
+// recording's, so no schedule is passed here.
 inline ode::least_squares least_squares_from_r(Rcpp::NumericMatrix observations,
                                                Rcpp::IntegerVector obs_indices) {
   ode::least_squares f;
@@ -158,20 +156,15 @@ inline ode::least_squares least_squares_from_r(Rcpp::NumericMatrix observations,
   return f;
 }
 
-// ---- Gradients on the DOUBLE handle (RIF-1, RIF-3) -------------------------
-// R holds only the double Solver. These helpers differentiate on an active
-// replay -- the double System lifted to active (RIF-2 rebind) -- and return
-// doubles; R never sees an active type or an `active` flag.
+// ---- Gradients on the double handle ----------------------------------------
+// R holds only the double Solver; these helpers differentiate on the active
+// solver (the double System lifted via rebind_from) and return doubles.
 //
-// The active solver is cached on the double solver OBJECT (its `active_solver`
-// member, RIF-3), so an optimiser loop reuses one active solver -- tape included --
-// instead of rebuilding the active system each call. Anchoring it on the object, not
-// the R XPtr's `prot` slot, means a C++ caller that holds the solver as a plain
-// member (plant's SCM, which never wraps it in an XPtr) shares the reuse. Reusing it
-// is pure speed: only its structural config is frozen at first build; the
-// trait/parameter values are re-seeded from the DifferentiationTargets every call, and the
-// per-call semantic state (observations, or the record->replay recording) is handed
-// over by the caller (see below).
+// The active solver is cached on the double Solver object and reused, so an
+// optimiser loop amortizes it (tape included) rather than rebuilding each call.
+// Reuse is pure speed: trait/parameter values are re-seeded every call and the
+// per-call semantic state (observations, or the recording) is handed in by the
+// caller, so a stale cache can never change a number.
 template <class SystemType, class ActiveSystemType>
 ode::Solver<ActiveSystemType>& active_solver(ode::Solver<SystemType>& d) {
   if (!d.active_solver) {
@@ -201,9 +194,8 @@ jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
   return ode::compute_jacobian(active, ind, schedule, std::forward<Functional>(functional), codomain);
 }
 
-// Combined value + gradient of the sum-of-squares loss from ONE recording -- the
-// calibration entry (user story §6.3): an optimiser's fn/gr share the tape rather
-// than each re-running it. The double-handle successor to the retired Solver_fit.
+// Combined value + gradient of the least-squares loss from one recording, so an
+// optimiser's fn/gr share the tape rather than each re-running it.
 template <class SystemType, class ActiveSystemType>
 Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
                                           Rcpp::Nullable<Rcpp::NumericVector> ic,
@@ -230,15 +222,12 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
       ind.values.push_back(v[j]);
     }
   }
-  // Calibration's per-call semantic state is the fit observations. They are no
-  // longer solver state: the caller hands them in and we build the least_squares
-  // functional that owns them, then run it on the reused active solver. This is the
-  // observations slice of "read the recording per call" -- kept off
-  // gradient_on_double, which serves emergent functionals that carry no data.
+  // The fit observations are handed in per call and owned by the functional; the
+  // solver holds no fit state.
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
   auto functional = least_squares_from_r(observations, obs_indices);
-  // `times` from R IS the recorded schedule; the driver owns the replay over it
-  // and least_squares samples the collected trajectory at obs_indices.
+  // `times` from R is the recorded schedule the driver replays; least_squares
+  // samples the collected trajectory at obs_indices.
   std::vector<double> schedule(times.begin(), times.end());
   auto [value, gradient] = ode::compute_gradient(active, ind, schedule, functional);
   return Rcpp::List::create(Rcpp::Named("value") = value,
