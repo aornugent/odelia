@@ -25,13 +25,18 @@ using namespace odelia;
 // that is fragile to differentiate through and cheap to replay once recorded. The
 // ODE is linear in (gain, y), so dy(T)/dgain has a clean finite-difference oracle.
 //
-// Three runtime modes, one System (not three types) -- selected by `recording`
-// and the `has_recorded_field()` query (frozen replay); `replaying` is derived:
-//   * record  (adaptive double pass): refine nodes, stash their positions per step;
-//   * replay-live  (resident): frozen node POSITIONS, values recomputed with the
-//     active scalar so the field self-responds to the trait (self-shading);
-//   * replay-frozen (mutant): the field VALUES read per RK stage as plain DOUBLE
-//     background (off the tape), so the derivative through the field is zero.
+// There is no `live | frozen | replaying` mode flag (odelia#28). The System stores
+// one bit -- `recording` -- and answers one data query -- `has_recorded_field()`,
+// literally "is my L3 field cache populated?". The variant entry (`set_recording`
+// with `frozen`) chooses whether to populate that cache; the System just reads what
+// is present:
+//   * record  (adaptive double pass): refine nodes, stash their positions per step
+//     and the field value per RK stage; `recording` true.
+//   * replay, L3 cache empty (resident/live): recompute the field on the frozen node
+//     POSITIONS with the active scalar, so the field self-responds to the trait.
+//   * replay, L3 cache populated (mutant/frozen): read the field VALUES per RK stage
+//     as plain DOUBLE background (off the tape), so the derivative through the field
+//     is zero by construction.
 template <typename T = double>
 class RelaxationSystem {
 public:
@@ -61,7 +66,7 @@ public:
   double ode_time() const { return time; }
   double ode_t0() const { return t0; }
 
-  // Adaptive / replay-live path: set state at a time and (re)build the field.
+  // Adaptive / live-replay path: set state at a time and (re)build the field.
   template <typename Iterator>
   Iterator set_ode_state(Iterator it, double time_) {
     y = *it++;
@@ -71,16 +76,16 @@ public:
     return it;
   }
 
-  // Replay-frozen path (mutant): the field for this step's stage `index` was
+  // Frozen-replay path (mutant): the field for this step's stage `index` was
   // recorded on the double pass and is read as plain DOUBLE background -- no rebuild
   // and never on the tape, so the derivative through the field is zero by
   // construction (ad-record-replay.md sec 4.1: the frozen field is simply double
   // data, not an active constant with a zeroed derivative). odelia routes here via
-  // derivs when has_recorded_field() is true.
+  // derivs when has_recorded_field() is true (the L3 cache is populated).
   template <typename Iterator>
   Iterator set_ode_state(Iterator it, int index) {
     y = *it++;
-    bg_field = field_history.at(current_step).at(index);
+    bg_field = stage_field.at(index);
     compute_rates();
     return it;
   }
@@ -91,8 +96,8 @@ public:
   // zero without casting a double to an active constant.
   void compute_rates() {
     dydt = -k * y;
-    if (frozen_field_) dydt += bg_field;  // frozen: double background (L3)
-    else                        dydt += field;     // live/record: active field (L2)
+    if (has_recorded_field()) dydt += bg_field;  // frozen: double background (L3)
+    else                      dydt += field;     // live/record: active field (L2)
   }
 
   template <typename Iterator>
@@ -111,14 +116,12 @@ public:
   void reset() {
     y = T(y0_init);
     time = t0;
-    replay_idx = 0;
-    current_step = 0;
-    if (replaying()) {
-      current_knots = knot_history.front();
-    }
-    if (frozen_field_ && !field_history.empty()) {
-      bg_field = field_history.front().front();  // frozen field at t0 (double bg, mutant)
+    step = 0;
+    if (has_recorded_field()) {
+      stage_field = field_history.front();       // frozen: this step's per-stage values
+      bg_field = stage_field.front();            // frozen field at t0 (double bg, mutant)
     } else {
+      if (replaying()) node_positions = positions_history.front();  // live: seed the initial comb
       field = compute_field();
     }
     compute_rates();
@@ -143,33 +146,36 @@ public:
   }
 
   // ---- Record / replay hooks (Replayable) ---------------------------------
-  // Recorded thing is a node POSITION (per ODE step) or a field VALUE (per RK
-  // stage); see design ad-record-replay.md.
+  // The recorded thing is a node POSITION set (per accepted step, L2) and a field
+  // VALUE per RK stage (L3); see design ad-record-replay.md sec 3. `record_stage` /
+  // `record_ode_step` act only while recording; `replay_step` only while replaying.
   void record_stage(int stage) {
     if (!recording) return;
     if (stage == 0) {
-      step_knots = last_knots;        // freeze this step's node positions (L2)
-      step_field.assign(6, 0.0);
+      pending_positions = node_positions;  // freeze this step's node positions (L2, stage 0)
+      stage_field.assign(6, 0.0);
     }
     if (stage >= 0 && stage < 6) {
-      step_field[stage] = xad::value(field);  // per-stage field values (L3)
+      stage_field[stage] = xad::value(field);  // per-stage field values (L3)
     }
   }
 
   void record_ode_step() {
     if (!recording) return;
-    knot_history.push_back(step_knots);
-    field_history.push_back(step_field);
+    positions_history.push_back(pending_positions);
+    field_history.push_back(stage_field);
   }
 
-  // On the active pass, advance to the step being replayed. Live replay pins the
-  // node positions to this step's recorded comb; frozen replay leaves the field to
-  // the indexed set_ode_state above. A no-op on the double (recording) pass.
+  // On the active pass, load this step's recorded slice, then advance the single
+  // cursor. Live replay reads `node_positions` (the frozen comb) when rebuilding the
+  // field; frozen replay reads `stage_field` per RK stage. A no-op on the double
+  // (recording) pass. The schedule matches the recording (the driver replays
+  // recorded_steps()), so the cursor walks [0, size) with no clamp.
   void replay_step() {
     if (!replaying()) return;
-    current_step = std::min(replay_idx, knot_history.size() - 1);
-    current_knots = knot_history.at(current_step);
-    ++replay_idx;
+    node_positions = positions_history.at(step);
+    if (has_recorded_field()) stage_field = field_history.at(step);
+    ++step;
   }
 
   // ---- Record / replay channel (System -> System) -------------------------
@@ -177,38 +183,47 @@ public:
   // active replay reads it per call. Positions and values are plain doubles, so
   // they cross the double->active type boundary directly.
   void start_recording() {
-    recording = true; frozen_field_ = false;
-    knot_history.clear(); field_history.clear();
+    recording = true;
+    positions_history.clear(); field_history.clear();
   }
-  // Positions and values are plain doubles, so the recording crosses the
-  // double->active type boundary directly (no rebind, no observations).
-  const std::vector<std::vector<double>>& recorded_knots()  const { return knot_history; }
-  const std::vector<std::vector<double>>& recorded_values() const { return field_history; }
-  void set_recording(std::vector<std::vector<double>> knots,
+  const std::vector<std::vector<double>>& recorded_positions() const { return positions_history; }
+  const std::vector<std::vector<double>>& recorded_values()    const { return field_history; }
+
+  // Hand a recording to the active system for one replay. `frozen` selects the
+  // variant: a mutant/frozen replay populates the L3 field cache (read back as
+  // double background); a resident/live replay leaves it empty (the field is
+  // recomputed on the frozen positions with the active scalar). This is the only
+  // thing that decides which path derivs takes -- has_recorded_field() then just
+  // reports whether the cache is populated.
+  void set_recording(std::vector<std::vector<double>> positions,
                      std::vector<std::vector<double>> values, bool frozen) {
-    knot_history = std::move(knots);
-    field_history = std::move(values);
+    positions_history = std::move(positions);
+    field_history = frozen ? std::move(values) : std::vector<std::vector<double>>{};
     recording = false;
-    frozen_field_ = frozen;  // has_recorded_field() reports this; derivs picks the path
+    step = 0;
   }
-  bool has_recording() const { return !knot_history.empty(); }
+  bool has_recording() const { return !positions_history.empty(); }
 
   double pars() const { return xad::value(gain); }
 
-  // odelia's derivs branch reads this query to route frozen-field (mutant) replay.
-  bool has_recorded_field() const { return frozen_field_; }
+  // The one data query derivs reads to route frozen-field (mutant) replay: is the L3
+  // field cache populated? Guarded against the recording pass, which is building that
+  // cache and must stay on the live (recompute) path (odelia#28).
+  bool has_recorded_field() const { return !recording && !field_history.empty(); }
 
 private:
-  // Replay is active on the non-recording pass once a recording exists -- derivable,
-  // so there is no separate `replaying` flag to keep in sync with `recording`.
+  // A System is replaying exactly when it is not recording and has a recording to
+  // read -- derived, not a stored mode flag (design ad-record-replay.md sec 5.1).
   bool replaying() const { return !recording && has_recording(); }
 
-  // The field: a cubic spline (basic_interpolator<T>) over an adaptive node set,
-  // read at eval_point. On a replay the node positions are frozen (current_knots)
-  // and only the values go active -- the fixed-node interpolator on the AD path.
+  // The field: a cubic spline (basic_interpolator<T>) over a node set, read at
+  // eval_point. Recording refines the nodes adaptively; live replay reuses the frozen
+  // node positions and only the values go active (the fixed-node interpolator on the
+  // AD path). Once the interpolator owns its own knots (odelia#22) this inline refiner
+  // and `node_positions` go away.
   T compute_field() {
-    std::vector<double> knots = replaying() ? current_knots : refine_knots();
-    if (!replaying()) last_knots = knots;   // stash for the record hook
+    std::vector<double> knots = replaying() ? node_positions : refine_knots();
+    if (recording) node_positions = knots;   // stash for the stage-0 record hook
     std::vector<T> vals;
     vals.reserve(knots.size());
     for (double x : knots) vals.push_back(phi(x));
@@ -259,20 +274,23 @@ private:
   double t0;
 
   T y, dydt, field;
-  double bg_field = 0.0;  // frozen (L3) coupling field: plain double background, off-tape
+  double bg_field = 0.0;  // frozen (L3) coupling field for the current stage: double, off-tape
   double time;
 
   // Recording (owned here as System state; odelia grows no Recording noun).
-  bool recording = false;
-  bool frozen_field_ = false;  // set on frozen (mutant) replay; has_recorded_field() reports it
-  std::vector<double> last_knots;                    // most recent adaptive comb
-  std::vector<double> step_knots;                    // this step's frozen comb
-  std::vector<double> step_field;                    // this step's per-stage values
-  std::vector<std::vector<double>> knot_history;     // [step] node positions
-  std::vector<std::vector<double>> field_history;    // [step][stage] field values
-  std::size_t replay_idx = 0;
-  std::size_t current_step = 0;
-  std::vector<double> current_knots;
+  bool recording = false;                            // set only during the double pass
+  std::vector<std::vector<double>> positions_history;  // L2: node positions per accepted step
+  std::vector<std::vector<double>> field_history;      // L3: field values [step][stage]
+
+  // Single replay cursor + this step's slices. `node_positions` is the comb
+  // compute_field just built (recording) or the frozen comb replay_step loaded (live
+  // replay); `stage_field` is the current step's per-stage values (accumulated while
+  // recording, loaded for a frozen replay); `pending_positions` freezes stage 0 until
+  // the step is accepted and committed.
+  std::size_t step = 0;
+  std::vector<double> node_positions;
+  std::vector<double> stage_field;
+  std::vector<double> pending_positions;
 };
 
 #endif

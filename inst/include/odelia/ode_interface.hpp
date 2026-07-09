@@ -38,8 +38,10 @@ public:
 // "Replayable" names the recording contract -- distinct from the RIF-3 "cache",
 // which is the amortized tape/scratch (a speed optimisation), not this recording
 // (a semantic one). The three hooks record on the double pass and replay on the
-// active pass; the query tells derivs whether this step reads a recorded (frozen)
-// field. Completing the concept with the query is deliberate: derivs reads it, so
+// active pass; the query is a pure *data* question -- "is the L3 field cache
+// populated?" -- not a mode flag, so derivs routes a frozen replay by asking what
+// data is present rather than reading a `live | frozen` state (odelia#28).
+// Completing the concept with the query is deliberate: derivs reads it, so
 // requiring it here rejects a half-implemented System at the concept boundary
 // rather than failing deep inside derivs.
 template <typename System>
@@ -47,7 +49,7 @@ concept Replayable = requires(System s, int stage) {
   s.record_stage(stage);     // per RK stage  (frozen field VALUES, when kept)
   s.record_ode_step();       // per ODE step  (node POSITIONS; flush)
   s.replay_step();           // per step on the active pass (restore / no-op if live)
-  { s.has_recorded_field() } -> std::convertible_to<bool>;  // frozen-replay selector
+  { s.has_recorded_field() } -> std::convertible_to<bool>;  // is the L3 cache populated?
 };
 
 // The recursive interface
@@ -152,10 +154,11 @@ void derivs(T& obj, const StateType& y, StateType& dydt,
   obj.ode_rates(dydt.begin());
 }
 
-// for ODE stepping (and mutant replay). A Replayable System that has a recorded
-// field reads it by step index; otherwise (and for every non-Replayable System) it
-// sets state at the current time. The branch compiles away entirely for a System
-// that isn't Replayable.
+// for ODE stepping (and mutant replay). A Replayable System whose L3 field cache is
+// populated reads the field by RK-stage index (a recorded double background);
+// otherwise (a live replay, and every non-Replayable System) it sets state at the
+// current time and recomputes. The branch compiles away entirely for a System that
+// isn't Replayable.
 template <typename T, typename StateType>
 void derivs(T& obj, const StateType& y, StateType& dydt,
             const double time, const int index) {

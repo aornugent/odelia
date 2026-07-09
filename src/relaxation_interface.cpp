@@ -48,9 +48,11 @@ struct relaxation_final {
 };
 
 // Record on a double Solver, then replay on an active Solver and differentiate the
-// final state w.r.t. `gain`. `frozen = FALSE` is the resident/live path (node
+// final state w.r.t. `gain`. `frozen` selects the variant by choosing whether
+// set_recording populates the active system's L3 field cache -- it is not a System
+// mode flag (odelia#28). `frozen = FALSE` is the resident/live path (L3 empty: node
 // POSITIONS frozen, values recomputed active through the interpolator -- L2);
-// `frozen = TRUE` is the mutant path (field VALUES loaded as constants -- L3).
+// `frozen = TRUE` is the mutant path (L3 populated: field VALUES read as constants).
 // Returns value, gradient, and the recorded step count.
 // [[Rcpp::export]]
 Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
@@ -72,7 +74,7 @@ Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
   // 2. Replay: lift to active (RIF-2), read the recording per call (not through
   //    rebind, not through observations), differentiate.
   ActiveSystemType act = rec_sys.rebind_from<xad::adj<double>::active_type>();
-  act.set_recording(rec_sys.recorded_knots(), rec_sys.recorded_values(), frozen);
+  act.set_recording(rec_sys.recorded_positions(), rec_sys.recorded_values(), frozen);
   ode::Solver<ActiveSystemType> active_solver(act, *ctrl);
 
   ode::DifferentiationTargets ind;
@@ -128,7 +130,7 @@ Rcpp::List Relaxation_replay_gradient(SEXP solver_xp, bool frozen = false) {
   const std::vector<double> times = d->recorded_steps();
 
   auto& active = solver::active_solver<SystemType, ActiveSystemType>(*d);
-  active.get_system_ref().set_recording(rec.recorded_knots(), rec.recorded_values(), frozen);
+  active.get_system_ref().set_recording(rec.recorded_positions(), rec.recorded_values(), frozen);
 
   ode::DifferentiationTargets ind;
   ind.slots.push_back(0);      // slot 0 = gain
