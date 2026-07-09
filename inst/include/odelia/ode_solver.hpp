@@ -2,6 +2,7 @@
 #define ODELIA_ODE_SOLVER_HPP_
 
 #include <odelia/ode_solver_internal.hpp>
+#include <XAD/XAD.hpp>
 #include <XAD/Tape.hpp>
 #include <memory>
 
@@ -242,11 +243,13 @@ std::vector<std::vector<typename System::value_type>> advance_target() {
   // call from the immutable double System, is what carries semantics.
   //
   //   active_solver -- this System lifted to the active scalar (RIF-2 rebind): the
-  //     differentiable solver the gradient actually runs on. Opaque because a double
-  //     Solver cannot name the active type; the driver static_casts it back. Its own
+  //     differentiable solver the gradient actually runs on. Its type is named via
+  //     the System's own `rebind`, so the cache needs no void* / static_cast. Its own
   //     `tape` is the reused tape -- there is nothing else to cache.
   // mutable: incidental scratch, reusable through an otherwise-const solver.
-  mutable std::shared_ptr<void> active_solver;
+  using active_system_type =
+      typename System::template rebind<typename xad::adj<double>::active_type>;
+  mutable std::shared_ptr<Solver<active_system_type>> active_solver;
 
   // Reverse-mode tape, created on the first gradient and reused (only ever exercised
   // on the active solver). unique_ptr so ownership is self-evident -- no destructor.

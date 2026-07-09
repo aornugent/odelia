@@ -173,13 +173,12 @@ inline void Solver_set_target_impl(SEXP solver_xp,
 // over by the caller (see below).
 template <class SystemType, class ActiveSystemType>
 ode::Solver<ActiveSystemType>& active_solver(ode::Solver<SystemType>& d) {
-  using ActiveSolver = ode::Solver<ActiveSystemType>;
   if (!d.active_solver) {
-    d.active_solver = std::make_shared<ActiveSolver>(
+    d.active_solver = std::make_shared<ode::Solver<ActiveSystemType>>(
         d.get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
         d.get_control());
   }
-  return *static_cast<ActiveSolver*>(d.active_solver.get());
+  return *d.active_solver;
 }
 
 template <class SystemType, class ActiveSystemType, class Functional>
