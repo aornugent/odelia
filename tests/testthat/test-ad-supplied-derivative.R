@@ -1,4 +1,4 @@
-# ODELIA-3b: analytic_edge injects an off-tape result's implicit-function-theorem
+# ODELIA-3b: supplied_derivative injects an off-tape result's implicit-function-theorem
 # partials into the reverse tape via XAD's CheckpointCallback. Differentiating
 # g = x(a)^2 through the edge must match the closed form 2*x*dx/da and finite
 # differences of the forward solve -- proving the edge carries the analytic
@@ -16,11 +16,11 @@ g_of_a <- function(a) {
   x * x
 }
 
-test_that("analytic_edge injects the IFT adjoint", {
+test_that("supplied_derivative injects the IFT adjoint", {
   testthat::skip_if(is_pkgload_dll(), "Skipping AD workflow in pkgload load_all sessions due unstable native-pointer lifecycle.")
 
   for (a in c(0.3, 1.0, 2.5)) {
-    res <- analytic_edge_demo(a)
+    res <- supplied_derivative_demo(a)
 
     # Value: g = x^2 reproduces the forward solve.
     expect_equal(res$g, g_of_a(a), tolerance = 1e-10)

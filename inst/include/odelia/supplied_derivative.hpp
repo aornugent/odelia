@@ -1,6 +1,6 @@
 // -*-c++-*-
-#ifndef ODELIA_ANALYTIC_EDGE_HPP_
-#define ODELIA_ANALYTIC_EDGE_HPP_
+#ifndef ODELIA_SUPPLIED_DERIVATIVE_HPP_
+#define ODELIA_SUPPLIED_DERIVATIVE_HPP_
 
 #include <XAD/XAD.hpp>
 #include <XAD/CheckpointCallback.hpp>
@@ -16,10 +16,10 @@ namespace ode {
 // adjoint accumulated on the output slot and distributes it to the input slots
 // weighted by dy/dx_i -- no forward operations of the edge were recorded.
 template <typename Tape>
-class AnalyticEdge : public xad::CheckpointCallback<Tape> {
+class SuppliedDerivative : public xad::CheckpointCallback<Tape> {
   using slot_type = typename Tape::slot_type;
 public:
-  AnalyticEdge(slot_type output, std::vector<slot_type> inputs,
+  SuppliedDerivative(slot_type output, std::vector<slot_type> inputs,
                std::vector<double> partials)
     : output_(output), inputs_(std::move(inputs)), partials_(std::move(partials)) {}
 
@@ -41,14 +41,14 @@ private:
 // root-find, an optimiser result -- and `partials[i]` is the analytic dy/dx_i
 // w.r.t. the active `inputs` (the implicit-function-theorem edge). The internal
 // solve is not recorded; instead `y` becomes a fresh tape leaf and an
-// AnalyticEdge distributes its adjoint to the inputs on the reverse sweep.
+// SuppliedDerivative distributes its adjoint to the inputs on the reverse sweep.
 //
 // This is odelia's generic seam for plant's forward-mode leaf optimiser and the
 // TF24 stomatal IFT -- one mechanism replacing per-model hand-rolled injections
 // (cf. the spike's inject_h0). odelia sees only inputs, an output value, and
 // partials. The tape takes ownership of the edge (freed with the tape).
 template <typename Tape, typename Active>
-Active analytic_edge(Tape& tape, double y_value,
+Active supplied_derivative(Tape& tape, double y_value,
                      const std::vector<Active*>& inputs,
                      const std::vector<double>& partials) {
   util::check_length(partials.size(), inputs.size());
@@ -62,7 +62,7 @@ Active analytic_edge(Tape& tape, double y_value,
     input_slots.push_back(x->getSlot());
   }
 
-  auto* edge = new AnalyticEdge<Tape>(y.getSlot(), std::move(input_slots), partials);
+  auto* edge = new SuppliedDerivative<Tape>(y.getSlot(), std::move(input_slots), partials);
   tape.pushCallback(edge);    // hand ownership to the tape
   tape.insertCallback(edge);  // place the edge at the current tape position
   return y;

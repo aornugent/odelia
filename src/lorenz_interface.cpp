@@ -227,7 +227,7 @@ Rcpp::List Solver_gradient_final_state(SEXP solver_xp,
                                        Rcpp::NumericVector params) {
   std::vector<double> t(times.begin(), times.end());
   // Seed the parameter leaves (slots 0..n_params-1).
-  ode::Independents independents;
+  ode::DifferentiationTargets independents;
   for (int i = 0; i < params.size(); ++i) {
     independents.slots.push_back(i);
     independents.values.push_back(params[i]);
@@ -256,7 +256,7 @@ Rcpp::List Solver_jacobian_final_state(SEXP solver_xp,
                                        Rcpp::NumericVector params) {
   std::vector<double> t(times.begin(), times.end());
   // Seed the parameter leaves (slots 0..n_params-1).
-  ode::Independents independents;
+  ode::DifferentiationTargets independents;
   for (int i = 0; i < params.size(); ++i) {
     independents.slots.push_back(i);
     independents.values.push_back(params[i]);

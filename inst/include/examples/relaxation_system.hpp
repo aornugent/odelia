@@ -13,7 +13,7 @@ using namespace odelia;
 // primitive (ODELIA-6). It is the plant-agnostic shrink of FF16's resident light:
 // a scalar state whose rate reads a *field* built by an adaptive interpolator over
 // a set of node positions, so it exercises the two things Lorenz/leaf_thermal never
-// do -- the opt-in record/replay hooks (has_cache == Replayable) and a frozen-knot
+// do -- the opt-in record/replay hooks (the Replayable concept) and a frozen-knot
 // basic_interpolator carrying an active value on the AD path.
 //
 //   dy/dt = -k*y + F(y; gain)
@@ -25,8 +25,8 @@ using namespace odelia;
 // that is fragile to differentiate through and cheap to replay once recorded. The
 // ODE is linear in (gain, y), so dy(T)/dgain has a clean finite-difference oracle.
 //
-// Three runtime modes, one System (not three types) -- selected by two flags,
-// mirroring plant's save_RK45_cache / use_cached_environment:
+// Three runtime modes, one System (not three types) -- selected by `recording`
+// and the `has_recorded_field()` query (frozen replay); `replaying` is derived:
 //   * record  (adaptive double pass): refine nodes, stash their positions per step;
 //   * replay-live  (resident): frozen node POSITIONS, values recomputed with the
 //     active scalar so the field self-responds to the trait (self-shading);
@@ -76,7 +76,7 @@ public:
   // and never on the tape, so the derivative through the field is zero by
   // construction (ad-record-replay.md sec 4.1: the frozen field is simply double
   // data, not an active constant with a zeroed derivative). odelia routes here via
-  // derivs when use_cached_environment is set.
+  // derivs when has_recorded_field() is true.
   template <typename Iterator>
   Iterator set_ode_state(Iterator it, int index) {
     y = *it++;
@@ -91,7 +91,7 @@ public:
   // zero without casting a double to an active constant.
   void compute_rates() {
     dydt = -k * y;
-    if (use_cached_environment) dydt += bg_field;  // frozen: double background (L3)
+    if (frozen_field_) dydt += bg_field;  // frozen: double background (L3)
     else                        dydt += field;     // live/record: active field (L2)
   }
 
@@ -113,10 +113,10 @@ public:
     time = t0;
     replay_idx = 0;
     current_step = 0;
-    if (replaying && !knot_history.empty()) {
+    if (replaying()) {
       current_knots = knot_history.front();
     }
-    if (use_cached_environment && !field_history.empty()) {
+    if (frozen_field_ && !field_history.empty()) {
       bg_field = field_history.front().front();  // frozen field at t0 (double bg, mutant)
     } else {
       field = compute_field();
@@ -145,7 +145,7 @@ public:
   // ---- Record / replay hooks (Replayable) ---------------------------------
   // Recorded thing is a node POSITION (per ODE step) or a field VALUE (per RK
   // stage); see design ad-record-replay.md.
-  void cache_RK45_step(int stage) {
+  void record_stage(int stage) {
     if (!recording) return;
     if (stage == 0) {
       step_knots = last_knots;        // freeze this step's node positions (L2)
@@ -156,7 +156,7 @@ public:
     }
   }
 
-  void cache_ode_step() {
+  void record_ode_step() {
     if (!recording) return;
     knot_history.push_back(step_knots);
     field_history.push_back(step_field);
@@ -165,8 +165,8 @@ public:
   // On the active pass, advance to the step being replayed. Live replay pins the
   // node positions to this step's recorded comb; frozen replay leaves the field to
   // the indexed set_ode_state above. A no-op on the double (recording) pass.
-  void load_ode_step() {
-    if (!replaying) return;
+  void replay_step() {
+    if (!replaying()) return;
     current_step = std::min(replay_idx, knot_history.size() - 1);
     current_knots = knot_history.at(current_step);
     ++replay_idx;
@@ -177,7 +177,7 @@ public:
   // active replay reads it per call. Positions and values are plain doubles, so
   // they cross the double->active type boundary directly.
   void start_recording() {
-    recording = true; replaying = false;
+    recording = true; frozen_field_ = false;
     knot_history.clear(); field_history.clear();
   }
   // Positions and values are plain doubles, so the recording crosses the
@@ -188,23 +188,27 @@ public:
                      std::vector<std::vector<double>> values, bool frozen) {
     knot_history = std::move(knots);
     field_history = std::move(values);
-    replaying = true; recording = false;
-    use_cached_environment = frozen;  // odelia's derivs reads this to pick the path
+    recording = false;
+    frozen_field_ = frozen;  // has_recorded_field() reports this; derivs picks the path
   }
   bool has_recording() const { return !knot_history.empty(); }
 
   double pars() const { return xad::value(gain); }
 
-  // odelia's derivs branch (frozen field replay) reads this member.
-  bool use_cached_environment = false;
+  // odelia's derivs branch reads this query to route frozen-field (mutant) replay.
+  bool has_recorded_field() const { return frozen_field_; }
 
 private:
+  // Replay is active on the non-recording pass once a recording exists -- derivable,
+  // so there is no separate `replaying` flag to keep in sync with `recording`.
+  bool replaying() const { return !recording && has_recording(); }
+
   // The field: a cubic spline (basic_interpolator<T>) over an adaptive node set,
   // read at eval_point. On a replay the node positions are frozen (current_knots)
   // and only the values go active -- the fixed-node interpolator on the AD path.
   T compute_field() {
-    std::vector<double> knots = replaying ? current_knots : refine_knots();
-    if (!replaying) last_knots = knots;   // stash for the record hook
+    std::vector<double> knots = replaying() ? current_knots : refine_knots();
+    if (!replaying()) last_knots = knots;   // stash for the record hook
     std::vector<T> vals;
     vals.reserve(knots.size());
     for (double x : knots) vals.push_back(phi(x));
@@ -260,7 +264,7 @@ private:
 
   // Recording (owned here as System state; odelia grows no Recording noun).
   bool recording = false;
-  bool replaying = false;
+  bool frozen_field_ = false;  // set on frozen (mutant) replay; has_recorded_field() reports it
   std::vector<double> last_knots;                    // most recent adaptive comb
   std::vector<double> step_knots;                    // this step's frozen comb
   std::vector<double> step_field;                    // this step's per-stage values

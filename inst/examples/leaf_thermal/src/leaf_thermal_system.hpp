@@ -111,7 +111,7 @@ public:
         case 2: m_tr      = *it++; break;
         case 3: T_tr_mid  = *it++; break;
         case 4: T_LC_init = *it++; break;
-        default: util::stop("LeafThermalSystem::scatter: unknown Independents slot");
+        default: util::stop("LeafThermalSystem::scatter: unknown DifferentiationTargets slot");
       }
     }
   }

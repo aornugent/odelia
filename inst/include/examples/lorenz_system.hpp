@@ -96,7 +96,7 @@ public:
         case 3: y0_init = *it++; break;
         case 4: y1_init = *it++; break;
         case 5: y2_init = *it++; break;
-        default: util::stop("LorenzSystem::scatter: unknown Independents slot");
+        default: util::stop("LorenzSystem::scatter: unknown DifferentiationTargets slot");
       }
     }
   }

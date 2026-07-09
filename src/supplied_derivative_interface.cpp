@@ -1,6 +1,6 @@
-/* Analytic-edge demonstration/test interface.
+/* SuppliedDerivative demonstration/test interface.
  *
- * Exercises odelia::ode::analytic_edge: a value computed OFF the tape (a Newton
+ * Exercises odelia::ode::supplied_derivative: a value computed OFF the tape (a Newton
  * root-find) is made active by injecting its implicit-function-theorem partials,
  * then a downstream expression is differentiated through it. The reverse sweep
  * never sees the solve -- only the edge. Compared in the tests against the
@@ -9,7 +9,7 @@
 
 #include <Rcpp.h>
 #include <XAD/XAD.hpp>
-#include <odelia/analytic_edge.hpp>
+#include <odelia/supplied_derivative.hpp>
 
 #include <cmath>
 
@@ -18,7 +18,7 @@ using namespace odelia;
 
 // Off-tape Newton solve of x = cos(x) + a; returns the root x*(a). Deliberately
 // a transcendental with no closed form for x, so differentiating it *through* the
-// iterations is exactly what the analytic edge lets us avoid.
+// iterations is exactly what the supplied derivative lets us avoid.
 static double solve_root(double a) {
   double x = a;
   for (int i = 0; i < 100; ++i) {
@@ -31,7 +31,7 @@ static double solve_root(double a) {
 }
 
 // [[Rcpp::export]]
-Rcpp::List analytic_edge_demo(double a) {
+Rcpp::List supplied_derivative_demo(double a) {
   using ad = xad::adj<double>;
   using ad_type = ad::active_type;
 
@@ -46,7 +46,7 @@ Rcpp::List analytic_edge_demo(double a) {
   const double dxda = 1.0 / (1.0 + std::sin(xv));
 
   // Inject x as an active leaf carrying dx/dA, then differentiate g = x^2.
-  ad_type x = ode::analytic_edge(tape, xv, std::vector<ad_type*>{&A},
+  ad_type x = ode::supplied_derivative(tape, xv, std::vector<ad_type*>{&A},
                                  std::vector<double>{dxda});
   ad_type g = x * x;
 

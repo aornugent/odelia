@@ -169,7 +169,7 @@ inline ode::least_squares least_squares_from_r(Rcpp::NumericVector times,
 // the R XPtr's `prot` slot, means a C++ caller that holds the solver as a plain
 // member (plant's SCM, which never wraps it in an XPtr) shares the reuse. Reusing it
 // is pure speed: only its structural config is frozen at first build; the
-// trait/parameter values are re-seeded from the Independents every call, and the
+// trait/parameter values are re-seeded from the DifferentiationTargets every call, and the
 // per-call semantic state (observations, or the record->replay recording) is handed
 // over by the caller (see below).
 template <class SystemType, class ActiveSystemType>
@@ -184,7 +184,7 @@ ode::Solver<ActiveSystemType>& active_solver(ode::Solver<SystemType>& d) {
 
 template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<double, std::vector<double>>
-gradient_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& functional) {
+gradient_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
   return ode::compute_gradient(active, ind, std::forward<Functional>(functional));
@@ -192,7 +192,7 @@ gradient_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& fu
 
 template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>>
-jacobian_on_double(SEXP solver_xp, const ode::Independents& ind, Functional&& functional,
+jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind, Functional&& functional,
                    std::size_t codomain) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
@@ -212,7 +212,7 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
   // Lay leaves out params-first, then the ODE initial state (param i -> slot i,
   // ic j -> slot n_params + j).
   auto d = get_solver<SystemType>(solver_xp);
-  ode::Independents ind;
+  ode::DifferentiationTargets ind;
   const int n_params = static_cast<int>(d->get_system_ref().n_params());
   if (!params.isNull()) {
     Rcpp::NumericVector v(params);

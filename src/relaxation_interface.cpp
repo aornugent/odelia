@@ -1,6 +1,6 @@
 /* RelaxationSystem interface -- the odelia-native record -> replay demonstrator
  * (ODELIA-6). Exercises the Replayable hooks and a frozen-knot interpolator on the
- * AD path, which Lorenz/leaf_thermal never touch (has_cache was false everywhere).
+ * AD path, which Lorenz/leaf_thermal never touch (they aren't Replayable).
  *
  * Names are Relaxation_-prefixed: this TU links into the same odelia.so as the
  * Lorenz interface, so the exported symbols must not collide.
@@ -75,7 +75,7 @@ Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
   act.set_recording(rec_sys.recorded_knots(), rec_sys.recorded_values(), frozen);
   ode::Solver<ActiveSystemType> active_solver(act, *ctrl);
 
-  ode::Independents ind;
+  ode::DifferentiationTargets ind;
   ind.slots.push_back(0);      // slot 0 = gain
   ind.values.push_back(gain);
 
@@ -130,7 +130,7 @@ Rcpp::List Relaxation_replay_gradient(SEXP solver_xp, bool frozen = false) {
   auto& active = solver::active_solver<SystemType, ActiveSystemType>(*d);
   active.get_system_ref().set_recording(rec.recorded_knots(), rec.recorded_values(), frozen);
 
-  ode::Independents ind;
+  ode::DifferentiationTargets ind;
   ind.slots.push_back(0);      // slot 0 = gain
   ind.values.push_back(rec.pars());
 

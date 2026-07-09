@@ -81,9 +81,9 @@ void SolverInternal<System>::reset(const System& system) {
 // Flush the per-ODE-step recording (node positions) on a Replayable System during
 // the adaptive (double) pass; a no-op for any System that doesn't record.
 template <typename System>
-void cache(System& system) {
+void record_ode_step(System& system) {
   if constexpr (Replayable<System>) {
-    system.cache_ode_step();
+    system.record_ode_step();
   }
 }
 
@@ -92,9 +92,9 @@ void cache(System& system) {
 // from step_to. Whether this loads a frozen field (mutant) or does nothing so the
 // field is recomputed live (resident) is the System's own runtime choice.
 template <typename System>
-void load(System& system) {
+void replay_step(System& system) {
   if constexpr (Replayable<System>) {
-    system.load_ode_step();
+    system.replay_step();
   }
 }
 
@@ -265,7 +265,7 @@ void SolverInternal<System>::step(System& system) {
       }
       prev_times.push_back(time);
       save_dydt_out_as_in();
-      cache(system);
+      record_ode_step(system);
       return; // This exits the infinite loop.
     }
   }
@@ -276,11 +276,11 @@ void SolverInternal<System>::step(System& system) {
 template <class System>
 void SolverInternal<System>::step_to(System& system, double time_max_) {
   set_time_max(time_max_);
-  load(system); // option to load pre-calculated states in mutant runs
+  replay_step(system); // option to load pre-calculated states in mutant runs
   setup_dydt_in(system);
   stepper.step(system, time, time_max - time, y, yerr, dydt_in, dydt_out);
   save_dydt_out_as_in();
-  cache(system);
+  record_ode_step(system);
 
   time = time_max;
   prev_times.push_back(time);

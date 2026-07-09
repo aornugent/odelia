@@ -70,7 +70,7 @@ struct tape_deactivate_guard {
 // boundary flux. Any subset is expressible -- seed only ICs for IC sensitivity,
 // only traits for calibration, or both -- with no per-kind branching. Column j
 // of the Jacobian corresponds to (slots[j], values[j]).
-struct Independents {
+struct DifferentiationTargets {
   std::vector<int>    slots;
   std::vector<double> values;   // parallel to slots
 
@@ -93,7 +93,7 @@ struct Independents {
 template<typename Solver, typename Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobian(
     Solver& solver,
-    const Independents& independents,
+    const DifferentiationTargets& independents,
     Functional&& functional,
     std::size_t codomain
 ) {
@@ -101,10 +101,10 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
     using ad_type = ad::active_type;
 
     if (independents.empty()) {
-        util::stop("Independents must seed at least one leaf");
+        util::stop("DifferentiationTargets must seed at least one leaf");
     }
     if (independents.slots.size() != independents.values.size()) {
-        util::stop("Independents: 'slots' and 'values' must be the same length");
+        util::stop("DifferentiationTargets: 'slots' and 'values' must be the same length");
     }
 
     // Reuse tape across calls to avoid invalidating slots
@@ -144,7 +144,7 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
 template<typename Solver, typename Functional>
 std::pair<double, std::vector<double>> compute_gradient(
     Solver& solver,
-    const Independents& independents,
+    const DifferentiationTargets& independents,
     Functional&& functional
 ) {
     using value_type = typename Solver::value_type;

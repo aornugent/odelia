@@ -1,8 +1,8 @@
 # ODELIA-6: record on a double Solver, replay fixed on an active Solver. The
 # RelaxationSystem is the first example System that opts into the Replayable hooks
-# (has_cache was false for Lorenz/leaf_thermal), so these are the first tests that
-# drive a frozen-knot interpolator on the AD path and exercise cache_ode_step /
-# load_ode_step. See docs/ad-record-replay.md.
+# (Lorenz/leaf_thermal aren't Replayable), so these are the first tests that drive a
+# frozen-knot interpolator on the AD path and exercise record_ode_step / replay_step.
+# See docs/ad-record-replay.md.
 
 test_that("record->replay reproduces the adaptive value and matches FD (L1 + L2)", {
   testthat::skip_if(is_pkgload_dll(), "AD workflow needs the installed DLL, not load_all.")

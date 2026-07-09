@@ -75,9 +75,9 @@ size_t Step<System>::order() const {
 
 // Record the per-RK-stage field values on a Replayable System; a no-op otherwise.
 template <typename System>
-void cache(System& system, int rk_step) {
+void record_stage(System& system, int rk_step) {
   if constexpr (Replayable<System>) {
-    system.cache_RK45_step(rk_step);
+    system.record_stage(rk_step);
   }
 }
 
@@ -101,7 +101,7 @@ void Step<System>::step(System& system,
 
   // k2 step:
   derivs(system, ytmp, k2, time + ah[0] * h, 0);
-  cache(system, 0);
+  record_stage(system, 0);
   
   for (size_t i = 0; i < size; ++i) {
     ytmp[i] = y[i] + h * (b3[0] * k1[i] + b3[1] * k2[i]);
@@ -109,7 +109,7 @@ void Step<System>::step(System& system,
 
   // k3 step:
   derivs(system, ytmp, k3, time + ah[1] * h, 1);
-  cache(system, 1);
+  record_stage(system, 1);
 
   for (size_t i = 0; i < size; ++i) {
     ytmp[i] = y[i] + h * (b4[0] * k1[i] + b4[1] * k2[i] + b4[2] * k3[i]);
@@ -117,7 +117,7 @@ void Step<System>::step(System& system,
 
   // k4 step:
   derivs(system, ytmp, k4, time + ah[2] * h, 2);
-  cache(system, 2);
+  record_stage(system, 2);
 
   for (size_t i = 0; i < size; ++i) {
     ytmp[i] = y[i] + h * (b5[0] * k1[i] + b5[1] * k2[i] + b5[2] * k3[i] +
@@ -126,7 +126,7 @@ void Step<System>::step(System& system,
 
   // k5 step
   derivs(system, ytmp, k5, time + ah[3] * h, 3);
-  cache(system, 3);
+  record_stage(system, 3);
 
   for (size_t i = 0; i < size; ++i) {
     ytmp[i] = y[i] + h * (b6[0] * k1[i] + b6[1] * k2[i] + b6[2] * k3[i] +
@@ -135,7 +135,7 @@ void Step<System>::step(System& system,
 
   // k6 step and final sum
   derivs(system, ytmp, k6, time + ah[4] * h, 4);
-  cache(system, 4);
+  record_stage(system, 4);
 
   for (size_t i = 0; i < size; ++i) {
     // GSL does this in two steps, but not sure why.
@@ -145,7 +145,7 @@ void Step<System>::step(System& system,
 
   // Evaluate dydt_out.
   derivs(system, y, dydt_out, time + h, 5);
-  cache(system, 5);
+  record_stage(system, 5);
 
   // Difference between 4th and 5th order, for error calculations
   for (size_t i = 0; i < size; ++i) {
