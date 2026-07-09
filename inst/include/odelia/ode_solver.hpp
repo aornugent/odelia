@@ -241,15 +241,15 @@ std::vector<std::vector<typename System::value_type>> advance_target() {
   // Reusing them is pure speed: it never changes a number. The recording, read per
   // call from the immutable double System, is what carries semantics.
   //
-  //   active_replay -- this System lifted to the active scalar (RIF-2 rebind): the
-  //     differentiable twin the gradient actually runs on. Opaque because a double
-  //     Solver cannot name the active type; the driver static_casts it back. The
-  //     twin's own `tape` is the reused tape -- there is nothing else to cache.
+  //   active_solver -- this System lifted to the active scalar (RIF-2 rebind): the
+  //     differentiable solver the gradient actually runs on. Opaque because a double
+  //     Solver cannot name the active type; the driver static_casts it back. Its own
+  //     `tape` is the reused tape -- there is nothing else to cache.
   // mutable: incidental scratch, reusable through an otherwise-const solver.
-  mutable std::shared_ptr<void> active_replay;
+  mutable std::shared_ptr<void> active_solver;
 
   // Reverse-mode tape, created on the first gradient and reused (only ever exercised
-  // on the active twin). unique_ptr so ownership is self-evident -- no destructor.
+  // on the active solver). unique_ptr so ownership is self-evident -- no destructor.
   std::unique_ptr<xad::Tape<double>> tape;
 
   // Should we record history at every step?
