@@ -201,10 +201,11 @@ Rcpp::List Solver_value_and_gradient(SEXP solver_xp,
 }
 
 //-------------------------------------------------------------------------
-// An emergent-metric stand-in: the summed final state. A pure reduction -- the
-// driver replays, this reads solver.state() -- with no notion of observations,
-// exercising the functional seam with something other than a loss.
+// An emergent-metric stand-in: the summed final state (one scalar). A pure
+// reduction -- the driver replays, this reads solver.state() -- exercising the
+// functional seam with something other than a loss.
 struct sum_final_state {
+  std::size_t codomain() const { return 1; }
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {
     typename Solver::value_type total(0.0);
@@ -221,22 +222,24 @@ Rcpp::List Solver_gradient_final_state(SEXP solver_xp,
                                        Rcpp::NumericVector times,
                                        Rcpp::NumericVector params) {
   std::vector<double> t(times.begin(), times.end());
-  // Seed the parameter leaves (slots 0..n_params-1).
-  ode::DifferentiationTargets independents;
+  // Seed the parameters.
+  ode::DifferentiationTargets targets;
   for (int i = 0; i < params.size(); ++i) {
-    independents.slots.push_back(i);
-    independents.values.push_back(params[i]);
+    targets.params.push_back(i);
+    targets.values.push_back(params[i]);
   }
   // `times` is the replay schedule the driver advances through.
   auto [value, gradient] = odelia::solver::gradient_on_double<SystemType, ActiveSystemType>(
-    solver_xp, independents, t, sum_final_state{});
+    solver_xp, targets, t, sum_final_state{});
   return Rcpp::List::create(Rcpp::Named("value") = value,
                             Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }
 
-// A multi-output functional: the whole final state. Drives compute_jacobian's
-// row-sweep with m = ode_size outputs; a pure reduction like sum_final_state.
+// A multi-output functional: the whole final state. Its codomain is the ODE size,
+// carried so the driver reads one consistent output count.
 struct final_state {
+  std::size_t m;
+  std::size_t codomain() const { return m; }
   template<typename Solver>
   std::vector<typename Solver::value_type> operator()(Solver& solver) const {
     return solver.state();
@@ -249,23 +252,23 @@ Rcpp::List Solver_jacobian_final_state(SEXP solver_xp,
                                        Rcpp::NumericVector times,
                                        Rcpp::NumericVector params) {
   std::vector<double> t(times.begin(), times.end());
-  // Seed the parameter leaves (slots 0..n_params-1).
-  ode::DifferentiationTargets independents;
+  // Seed the parameters.
+  ode::DifferentiationTargets targets;
   for (int i = 0; i < params.size(); ++i) {
-    independents.slots.push_back(i);
-    independents.values.push_back(params[i]);
+    targets.params.push_back(i);
+    targets.values.push_back(params[i]);
   }
-  // codomain = m = the full ODE state the functional returns.
-  const std::size_t codomain =
+  // final_state returns the whole ODE state, so its codomain is the ODE size.
+  const std::size_t m =
     odelia::solver::get_solver<SystemType>(solver_xp)->get_system_ref().ode_size();
   // `times` is the replay schedule the driver advances through.
   auto [values, jacobian] = odelia::solver::jacobian_on_double<SystemType, ActiveSystemType>(
-    solver_xp, independents, t, final_state{}, codomain);
+    solver_xp, targets, t, final_state{m});
 
-  const size_t m = jacobian.size(), n = m ? jacobian[0].size() : 0;
-  Rcpp::NumericMatrix J(m, n);
-  for (size_t i = 0; i < m; ++i) {
-    for (size_t j = 0; j < n; ++j) {
+  const size_t nrow = jacobian.size(), ncol = nrow ? jacobian[0].size() : 0;
+  Rcpp::NumericMatrix J(nrow, ncol);
+  for (size_t i = 0; i < nrow; ++i) {
+    for (size_t j = 0; j < ncol; ++j) {
       J(i, j) = jacobian[i][j];
     }
   }

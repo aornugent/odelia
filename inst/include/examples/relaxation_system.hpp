@@ -115,18 +115,15 @@ public:
   }
 
   // ---- AD input contract ---------------------------------------------------
-  size_t n_params() const { return 1; }
-
-  // Slot 0 = gain, the single differentiable input. One trait and a constant IC keep
-  // the record->replay demonstration and its finite-difference oracle sharp.
-  template <typename Iterator>
-  void scatter(Iterator it, const std::vector<int>& slots) {
-    for (int s : slots) {
-      switch (s) {
-        case 0: gain = *it++; break;
-        default: util::stop("RelaxationSystem::scatter: only slot 0 (gain) is seedable");
-      }
-    }
+  // Param 0 = gain, the single differentiable input. One trait and a constant IC
+  // keep the record->replay demonstration and its finite-difference oracle sharp,
+  // so there is no seedable initial state.
+  void set_param(int i, T v) {
+    if (i == 0) gain = v;
+    else util::stop("RelaxationSystem::set_param: only param 0 (gain) is seedable");
+  }
+  void set_ic(int, T) {
+    util::stop("RelaxationSystem::set_ic: no seedable initial state");
   }
 
   // ---- Record / replay hooks (Replayable) ---------------------------------

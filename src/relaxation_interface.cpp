@@ -38,6 +38,7 @@ double Relaxation_adaptive_final(SEXP system_xp, SEXP control_xp, double Tmax) {
 // hands over a positioned solver; this returns the final state. It carries no
 // calibration data and no grid.
 struct relaxation_final {
+  std::size_t codomain() const { return 1; }
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {
     return solver.state()[0];
@@ -72,7 +73,7 @@ Rcpp::List Relaxation_record_replay_gradient(SEXP system_xp, SEXP control_xp,
   ode::Solver<ActiveSystemType> active_solver(act, *ctrl);
 
   ode::DifferentiationTargets ind;
-  ind.slots.push_back(0);      // slot 0 = gain
+  ind.params.push_back(0);     // param 0 = gain
   ind.values.push_back(gain);
 
   auto [value, gradient] =
@@ -125,7 +126,7 @@ Rcpp::List Relaxation_replay_gradient(SEXP solver_xp, bool frozen = false) {
   active.get_system_ref().set_recording(rec.recorded_positions(), rec.recorded_values(), frozen);
 
   ode::DifferentiationTargets ind;
-  ind.slots.push_back(0);      // slot 0 = gain
+  ind.params.push_back(0);     // param 0 = gain
   ind.values.push_back(rec.pars());
 
   auto [value, gradient] = ode::compute_gradient(active, ind, times, relaxation_final{});

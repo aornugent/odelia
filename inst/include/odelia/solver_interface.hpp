@@ -187,11 +187,10 @@ gradient_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
 template <class SystemType, class ActiveSystemType, class Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>>
 jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
-                   const std::vector<double>& schedule, Functional&& functional,
-                   std::size_t codomain) {
+                   const std::vector<double>& schedule, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  return ode::compute_jacobian(active, ind, schedule, std::forward<Functional>(functional), codomain);
+  return ode::compute_jacobian(active, ind, schedule, std::forward<Functional>(functional));
 }
 
 // Combined value + gradient of the least-squares loss from one recording, so an
@@ -203,22 +202,20 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
                                           Rcpp::NumericVector times,
                                           Rcpp::NumericMatrix observations,
                                           Rcpp::IntegerVector obs_indices) {
-  // Lay leaves out params-first, then the ODE initial state (param i -> slot i,
-  // ic j -> slot n_params + j).
+  // Seed every param then every IC; `values` follows the same params-then-ics order.
   auto d = get_solver<SystemType>(solver_xp);
   ode::DifferentiationTargets ind;
-  const int n_params = static_cast<int>(d->get_system_ref().n_params());
   if (!params.isNull()) {
     Rcpp::NumericVector v(params);
     for (int i = 0; i < v.size(); ++i) {
-      ind.slots.push_back(i);
+      ind.params.push_back(i);
       ind.values.push_back(v[i]);
     }
   }
   if (!ic.isNull()) {
     Rcpp::NumericVector v(ic);
     for (int j = 0; j < v.size(); ++j) {
-      ind.slots.push_back(n_params + j);
+      ind.ics.push_back(j);
       ind.values.push_back(v[j]);
     }
   }

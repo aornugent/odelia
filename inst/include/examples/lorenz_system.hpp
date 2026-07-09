@@ -21,10 +21,9 @@ public:
   }
 
   // Lift this system's configuration into a copy templated on a different scalar
-  // (double -> active): the AD driver builds the active system from the plain one
-  // generically, with no per-system hand-construction. Only values cross, so the
-  // new system carries no tape identity; the driver seeds its inputs afterwards
-  // via set_params / set_initial_state. (RIF-2.)
+  // (double -> active): the driver builds the active system from the plain one
+  // generically. Only values cross, so the new system carries no tape identity;
+  // the driver seeds its active inputs afterwards via set_param / set_ic.
   template <class S2> using rebind = LorenzSystem<S2>;
 
   template <class S2>
@@ -77,27 +76,22 @@ public:
     return it;
   }
 
-  // Number of parameter leaves, so a caller can lay out the AD leaf slots
-  // (params first, then the ODE initial state).
-  size_t n_params() const { return 3; }
-
-  // AD input contract: route each seeded leaf value onto the field its slot
-  // names. Slot layout: 0=sigma, 1=R, 2=b, 3=y0_init, 4=y1_init, 5=y2_init
-  // (params first, then initial state). odelia hands us active values and the
-  // slots they address; we never see whether a caller asked for trait or IC
-  // sensitivity -- we just write each value home.
-  template <typename Iterator>
-  void scatter(Iterator it, const std::vector<int>& slots) {
-    for (int s : slots) {
-      switch (s) {
-        case 0: sigma   = *it++; break;
-        case 1: R       = *it++; break;
-        case 2: b       = *it++; break;
-        case 3: y0_init = *it++; break;
-        case 4: y1_init = *it++; break;
-        case 5: y2_init = *it++; break;
-        default: util::stop("LorenzSystem::scatter: unknown DifferentiationTargets slot");
-      }
+  // AD input contract: seed one active parameter or initial-state value by index.
+  // Params: 0=sigma, 1=R, 2=b. ICs: 0=y0, 1=y1, 2=y2.
+  void set_param(int i, T v) {
+    switch (i) {
+      case 0: sigma = v; break;
+      case 1: R     = v; break;
+      case 2: b     = v; break;
+      default: util::stop("LorenzSystem::set_param: index out of range");
+    }
+  }
+  void set_ic(int j, T v) {
+    switch (j) {
+      case 0: y0_init = v; break;
+      case 1: y1_init = v; break;
+      case 2: y2_init = v; break;
+      default: util::stop("LorenzSystem::set_ic: index out of range");
     }
   }
 
