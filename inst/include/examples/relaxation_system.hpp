@@ -216,19 +216,24 @@ private:
   // read -- derived, not a stored mode flag (design ad-record-replay.md sec 5.1).
   bool replaying() const { return !recording && has_recording(); }
 
-  // The field: a cubic spline (basic_interpolator<T>) over a node set, read at
-  // eval_point. Recording refines the nodes adaptively; live replay reuses the frozen
-  // node positions and only the values go active (the fixed-node interpolator on the
-  // AD path). Once the interpolator owns its own knots (odelia#22) this inline refiner
-  // and `node_positions` go away.
+  // The field: a cubic spline over a node set, read at eval_point. Recording lets
+  // the interpolator refine the nodes adaptively (odelia#22 -- the interpolator owns
+  // its refinement); live replay reuses the frozen node positions and only the
+  // values go active (the fixed-node interpolator on the AD path).
   T compute_field() {
-    std::vector<double> knots = replaying() ? node_positions : refine_knots();
-    if (recording) node_positions = knots;   // stash for the stage-0 record hook
-    std::vector<T> vals;
-    vals.reserve(knots.size());
-    for (double x : knots) vals.push_back(phi(x));
     interpolator::basic_interpolator<T> interp;
-    interp.init(knots, vals);
+    if (replaying()) {
+      std::vector<T> vals;
+      vals.reserve(node_positions.size());
+      for (double x : node_positions) vals.push_back(phi(x));
+      interp.init(node_positions, vals);
+    } else {
+      // refine (double, record) runs only on the double pass; phi's curvature moves
+      // with the state y, so the placement is state-dependent per step.
+      interp.construct([this](double x) { return phi(x); }, 0.0, 1.0,
+                       tol, 0.0, 5, static_cast<std::size_t>(max_depth));
+      if (recording) node_positions = interp.get_x();  // stash for the stage-0 record hook
+    }
     return interp.eval(eval_point);
   }
 
@@ -236,35 +241,6 @@ private:
     using std::exp;
     const double g = x - 0.5;
     return gain * exp(-decay * x) + y * exp(-beta * g * g);
-  }
-
-  // phi in doubles, for the adaptive placement decision (never differentiated --
-  // adaptivity runs on the double pass only).
-  double phi_double(double x) const {
-    return xad::value(gain) * std::exp(-decay * x)
-         + xad::value(y) * std::exp(-beta * (x - 0.5) * (x - 0.5));
-  }
-
-  void refine(double a, double b, int depth, std::vector<double>& mids) const {
-    const double m = 0.5 * (a + b);
-    const double approx = 0.5 * (phi_double(a) + phi_double(b));
-    if (depth < max_depth && std::fabs(phi_double(m) - approx) > tol) {
-      refine(a, m, depth + 1, mids);
-      mids.push_back(m);                 // in-order push keeps `mids` sorted
-      refine(m, b, depth + 1, mids);
-    }
-  }
-
-  std::vector<double> refine_knots() const {
-    std::vector<double> mids;
-    refine(0.0, 1.0, 0, mids);
-    std::vector<double> knots;
-    knots.reserve(mids.size() + 2);
-    knots.push_back(0.0);
-    knots.insert(knots.end(), mids.begin(), mids.end());
-    knots.push_back(1.0);
-    if (knots.size() < 3) knots = {0.0, 0.5, 1.0};  // basic_interpolator needs >= 3
-    return knots;
   }
 
   T gain;

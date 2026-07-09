@@ -3,21 +3,104 @@
 #define ODELIA_INTERPOLATOR_HPP
 
 #include <vector>
+#include <list>
+#include <cmath>
 #include <limits>
+#include <XAD/XAD.hpp>
 #include <odelia/spline.hpp>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
 namespace interpolator {
 
+// The one interpolator: a *refine* path (double, record) and a *fixed-build* path
+// (any S, replay) on a single type (odelia#22). `construct` adaptively refines a
+// target to tolerance -- the double/record half, previously plant's
+// AdaptiveInterpolator; `init` builds on given knots -- the fixed/replay half. We
+// never refine a recorded interpolator: refine is the double/record path, fixed
+// build the active/replay path.
+//
 // Templated on the scalar S of the knot VALUES (knot positions x stay double).
-// `Interpolator` (alias below) pins S = double, leaving every existing caller
-// unchanged; S = an AD active type makes the interpolated value differentiable
-// w.r.t. the knot values, delegating to basic_spline<S>. (#472 scope B /
-// traitecoevo/plant#537.)
+// S = double is the production type; S = an AD active type makes the interpolated
+// value differentiable w.r.t. the knot values, delegating to basic_spline<S>.
+// (#472 / traitecoevo/plant#537.)
+//
+// NOTE (odelia#22, staged): retiring the `basic_interpolator` name in favour of
+// `Interpolator<S>` and folding plant's AdaptiveInterpolator into a thin wrapper
+// are the cross-package half of this change -- they move plant's RcppR6 binding
+// (bound to the bare `odelia::interpolator::Interpolator` type) and the direct
+// `basic_interpolator<S>` uses in the emergent TUs, so they land with plant in
+// lockstep. This type keeps both spellings working until then.
 template <typename S>
 class basic_interpolator {
 public:
+  // Adaptively refine `target` over [a, b] to tolerance, then build on the chosen
+  // nodes -- the double/record path (odelia#22, was plant's AdaptiveInterpolator).
+  // A node is accepted when its midpoint's absolute OR relative error is under
+  // tolerance; refinement halves the spacing until every interval passes or the
+  // depth cap bites. The refinement decisions are taken in `double` (xad::value),
+  // so the placement never depends on an active tape.
+  template <typename Function>
+  void construct(Function target, double a, double b,
+                 double atol = 1e-6, double rtol = 1e-6,
+                 std::size_t nbase = 17, std::size_t max_depth = 16) {
+    if (a >= b) {
+      util::stop("Interpolator::construct: impossible bounds (a >= b)");
+    }
+    if (!util::is_finite(a) || !util::is_finite(b)) {
+      util::stop("Interpolator::construct: infinite bounds");
+    }
+    if (nbase < 2) {
+      util::stop("Interpolator::construct: need at least 2 base points");
+    }
+
+    // Lists so points can be inserted in the middle of a span during refinement.
+    std::list<double> xs;
+    std::list<S>      ys;
+    std::list<bool>   refine_here;   // is the interval ending at this node still open?
+
+    double dx = (b - a) / static_cast<double>(nbase - 1);
+    const double dxmin = dx / std::pow(2.0, static_cast<double>(max_depth));
+    for (std::size_t i = 0; i < nbase; ++i) {
+      const double xi = a + dx * static_cast<double>(i);
+      xs.push_back(xi);
+      ys.push_back(target(xi));
+      refine_here.push_back(i > 0);
+    }
+    rebuild(xs, ys);
+
+    auto within_tol = [&](S y_true, S y_pred) {
+      const double t = xad::value(y_true), p = xad::value(y_pred);
+      return std::fabs(t - p) < atol || std::fabs(1.0 - p / t) < rtol;
+    };
+
+    bool open = true;
+    while (open) {
+      dx /= 2.0;
+      if (dx < dxmin) {
+        util::stop("Interpolator::construct: refined as far as max_depth allows");
+      }
+      open = false;
+      auto xi = xs.begin();
+      auto yi = ys.begin();
+      auto zi = refine_here.begin();
+      for (; xi != xs.end(); ++xi, ++yi, ++zi) {
+        if (*zi) {
+          const double x_mid = *xi - dx;
+          const S      y_mid = target(x_mid);
+          const S      p_mid = eval(x_mid);
+          xs.insert(xi, x_mid);
+          ys.insert(yi, y_mid);
+          const bool still_open = !within_tol(y_mid, p_mid);
+          *zi = still_open;                 // the interval [x_mid, *xi]
+          refine_here.insert(zi, still_open); // the interval ending at x_mid
+          open = open || still_open;
+        }
+      }
+      rebuild(xs, ys);
+    }
+  }
+
   // Build an interpolator out of the vectors 'x' and 'y'.
   void init(const std::vector<double> &x_,
             const std::vector<S> &y_) {
@@ -140,6 +223,12 @@ private:
     }
   }
 
+  // Rebuild the spline from the working lists during construct().
+  void rebuild(const std::list<double>& xs, const std::list<S>& ys) {
+    init(std::vector<double>(xs.begin(), xs.end()),
+         std::vector<S>(ys.begin(), ys.end()));
+  }
+
   std::vector<double> x;
   std::vector<S> y;
   spline::basic_spline<S> spline;
@@ -147,8 +236,10 @@ private:
   bool extrapolate = true;
 };
 
-// Default interpolator (knot values in double): the unchanged production type
-// used by AdaptiveInterpolator, plant's ResourceSpline, the leaf model, etc.
+// Default interpolator (knot values in double): the production type bound by
+// plant's RcppR6 (`odelia::interpolator::Interpolator`), used by ResourceSpline,
+// the leaf model, etc. Retiring this alias in favour of `Interpolator<S>` is the
+// staged plant-lockstep half of odelia#22.
 using Interpolator = basic_interpolator<double>;
 
 }
