@@ -132,35 +132,6 @@ testthat::test_that("lorenz AD IC gradients are NON-ZERO", {
   expect_true(any(result$gradient != 0),
     info = "IC gradients are all zero - AD tape not capturing IC dependencies!")
 })
-testthat::test_that("lorenz AD parameter gradients are NON-ZERO", {
-
-  true_pars <- c(sigma = 10.0, R = 28.0, b = 8.0/3.0)
-  
-  lz_true <- LorenzSystem$new(true_pars[1], true_pars[2], true_pars[3])
-  lz_true$set_initial_state(c(1, 1, 1), 0)
-
-  ctrl <- OdeControl$new()
-  runner_true <- Lorenz_Solver$new(lz_true$ptr, ctrl$ptr)
-  runner_true$advance_adaptive(seq(0, 10, by=0.5))
-  hist_true <- runner_true$history()
-
-  target_times <- hist_true$time
-  target_vals <- as.matrix(hist_true[, c("x", "y", "z")])
-
-  wrong_pars <- c(sigma = 5.0, R = 20.0, b = 2.0)
-  lz_fit <- LorenzSystem$new(wrong_pars[1], wrong_pars[2], wrong_pars[3])
-  lz_fit$set_initial_state(c(1, 1, 1), 0)
-  lz_fit$set_params(wrong_pars)
-
-  ad_runner <- Lorenz_Solver$new(lz_fit$ptr, ctrl$ptr)
-  ad_runner$set_observations(target_times, target_vals, c(1L, 2L, 3L))
-
-  result <- ad_runner$value_and_gradient(ic = NULL, params = wrong_pars)
-
-  expect_true(is.finite(result$value))
-  expect_true(all(is.finite(result$gradient)))
-  expect_equal(length(result$gradient), 3)
-  
-  expect_true(any(result$gradient != 0),
-    info = "Lorenz parameter gradients should be non-zero (this is the only working AD gradient!)")
-})
+# The parameter-gradient path is covered more strongly by the optim recovery in
+# test-ad-workflow.R (which only converges if the parameter gradients are right),
+# so the weaker NON-ZERO re-derivation folds into that (odelia#26).
