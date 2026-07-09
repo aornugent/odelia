@@ -1,15 +1,12 @@
-# odelia's AD surface: the gradient API and the System contract
+# odelia's AD surface: exact gradients of an ODE run
 
-**Scope:** `traitecoevo/odelia` — what odelia gives a downstream package for exact
-reverse-mode gradients, and the contract a System implements to get them. The *why*
-behind the shape lives in the design hub; this is the map.
+**Scope:** `traitecoevo/odelia` — the reverse-mode automatic-differentiation surface:
+what a gradient is made of, who owns what, the contract a System implements to be
+differentiable, and how to build one. Self-contained.
 
-**Companions:** [`ARCHITECTURE.md`](../ARCHITECTURE.md) (how the XAD `Tape` runtime is
-compiled once and linked across the DLL boundary — read it before touching the build);
-[`plant-dev/docs/`](https://github.com/aornugent/plant-dev/tree/main/docs) — the design:
-`ad-infrastructure-design.md` (the plant emergent-gradient design this serves),
-`ad-record-replay.md` (the adaptive-numerics primitive), `ad-r-interface.md` (the R/C++
-boundary).
+**Companion:** [`ARCHITECTURE.md`](../ARCHITECTURE.md) — how the XAD `Tape` runtime is
+compiled once and linked across the DLL boundary. Read it before touching the build;
+this document is about the API, not the link.
 
 ---
 
@@ -18,101 +15,203 @@ boundary).
 odelia differentiates **any reduction of an ODE run** — on one scalar-templated
 `Solver`, with reverse-mode XAD compiled once — and only `double` ever crosses back to R.
 
-Everything below is a consequence: the System is templated on its scalar so the same
-code simulates (`double`) and differentiates (`active`); the thing being differentiated
-is a caller's functional, not a built-in loss; adaptive numerics are recorded once and
-replayed fixed so the tape stays clean; and the active machinery is born, used, and
-destroyed inside one C++ call.
+Everything below follows: the System is templated on its scalar so the same code
+simulates (`double`) and differentiates (`active`); the thing differentiated is a
+caller's functional, not a built-in loss; adaptive numerics are recorded once and
+replayed on fixed nodes so the tape carries no adaptive branching; and the active
+machinery is born, used, and destroyed inside one C++ call.
 
 ---
 
-## 1. The System contract
+## Ownership
 
-A System is an ODE right-hand side plus the state it integrates. To simulate, it
-provides the ODE interface (`ode_size`, `set_ode_state`, `ode_rates`, `ode_state`).
-To be **differentiable**, it adds four things:
+R holds one object — the ordinary (double) `Solver`. Everything active hangs off it and
+never surfaces:
+
+```
+R  ── holds ──▶  d : Solver<System<double>>          the double solver
+                 │
+                 ├─ System<double>                    immutable after the adaptive pass
+                 ├─ recording                          produced once, read per call:
+                 │    ├─ L1  recorded_steps()          the discovered schedule   (Solver state)
+                 │    ├─ L2  positions_history[step]   adaptive node positions   (System state)
+                 │    └─ L3  field_history[step][stage] frozen field values      (System state)
+                 └─ active_solver : Solver<System<active>>
+                      built once, reused; owns its tape; re-seeded and re-fed the
+                      recording every call; holds no semantics between calls
+```
+
+Two ownership rules carry the whole design:
+
+- **The double solver owns the recording.** The adaptive pass discovers where to place
+  nodes; that placement is recorded and immutable thereafter. The active solver never
+  records — it is handed the recording per call.
+- **The Solver owns the AD scratch.** The active solver and its tape live on the double
+  `Solver` object (not an R handle), so a C++ caller holding the solver as a plain member
+  gets the reuse for free. Reuse is pure speed — it never changes a number.
+
+## Control flow of a gradient
+
+The primary workflow (a resident/emergent gradient) is two calls:
+
+```
+1. d.advance_adaptive({0, T})          discover the schedule, record L1/L2/L3.
+                                        d is immutable hereafter.
+2. compute_gradient(d, targets, schedule, functional):
+     active = d.active_solver()         lift-or-reuse
+     feed active the recording          (positions for a live replay; values for frozen)
+     tape on; per output row:
+         seed targets → active.system   (set_param / set_ic)
+         active.reset()
+         active.advance_fixed(schedule)  ◀── the DRIVER owns the replay
+         functional(active)              ◀── a PURE REDUCTION: reads state, returns scalar(s)
+     sweep adjoints → gradient
+     tape off → return doubles
+```
+
+The functional never drives the solver and never carries the schedule. `recorded_steps()`
+is the single source of the replay grid, so it can't go inconsistent, and the "forgot to
+record" guard is one check at the single place the replay happens (`schedule.empty()`).
+
+---
+
+## The System contract
+
+A System is an ODE right-hand side plus the state it integrates. To simulate, it provides
+the ODE interface (`ode_size`, `set_ode_state`, `ode_rates`, `ode_state`). To be
+**differentiable**, it adds:
 
 ```cpp
 using value_type = S;                                  // the scalar it carries
 template <class S2> using rebind = System<…, S2>;      // the double -> active mould
 template <class S2> rebind<S2> rebind_from() const;    // copy config (values only) into S2
-void scatter(Iterator values, const std::vector<int>& slots);  // route active inputs to fields
-size_t n_params() const;                               // how many leaves are parameters
+void set_param(int i, S v);                            // seed one active parameter
+void set_ic(int j, S v);                               // seed one active initial-state value
 ```
 
-That is the whole contract — implement it and `compute_gradient` / `compute_jacobian`
-work, doubles in and out. Nothing forces a System to be differentiable: a System without
-these still simulates, and the gradient path is simply unavailable to it.
+That is the whole contract for a bare ODE. `rebind_from` copies configuration values only,
+so the active system starts free of tape identity; the driver seeds the active inputs
+afterwards via `set_param` / `set_ic`. Nothing forces a System to be differentiable — one
+without these still simulates.
 
-## 2. A functional is a pure reduction
-
-The thing differentiated is a **functional**: a callable that reads an already-replayed
-`Solver` and returns the scalar(s) to differentiate. It does not drive the solver and
-carries no schedule — the driver replays, the functional reduces.
+## Differentiation targets and the drivers
 
 ```cpp
-struct final_state { auto operator()(auto& s) const { return s.state(); } };
+compute_jacobian(solver, targets, schedule, functional);  // m x n, row i = d(out_i)/d(in)
+compute_gradient(solver, targets, schedule, functional);  // the one-row case
 ```
 
-odelia never learns what the scalar means — an emergent summary of the state, or a
-calibration loss. `least_squares` is one prebuilt instance: it holds measured data and
-scores the replayed trajectory against it; the solver stores no fit state.
-
-## 3. The reverse-mode drivers
+**`targets`** names the inputs directly — no opaque flat-slot space:
 
 ```cpp
-compute_jacobian(solver, targets, schedule, functional, codomain);  // m x n, row i = d(out_i)/d(in)
-compute_gradient(solver, targets, schedule, functional);            // the one-row case
+struct DifferentiationTargets {
+  std::vector<int>    params;   // param indices to seed active
+  std::vector<int>    ics;      // initial-state indices to seed active
+  std::vector<double> values;   // seed values, params-then-ics
+};
 ```
 
-- **`targets`** (`DifferentiationTargets`) are opaque `(slot, value)` leaves; the System
-  routes each to a field via `scatter`, so odelia never learns whether a leaf is a trait,
-  an initial density, or a flux. Column *j* of the Jacobian is `(slots[j], values[j])`.
-- **`schedule`** is the recorded step grid the driver replays (`advance_fixed`); owning
-  the replay here keeps the grid from drifting from the recording.
-- **`codomain`** is the number of outputs *m* — pass it, or XAD runs the forward callback
-  an extra time just to size the output.
+Seed only `params` for trait sensitivity, only `ics` for initial-condition sensitivity, or
+both. The driver seeds each via `set_param` / `set_ic`; column *j* of the Jacobian follows
+`values` in params-then-ics order.
 
-The record-once / row-sweep is the vendored `xad::computeJacobian`'s; odelia supplies
-only the forward callback (scatter → reset → replay → reduce). Reverse mode is optimal
-here: many inputs, few outputs.
+**The functional is a pure reduction** — a callable that reads an already-replayed `Solver`
+and returns the scalar(s) to differentiate. It reports its own output count:
 
-## 4. Record → replay (adaptive numerics)
+```cpp
+struct final_state {
+  std::size_t codomain() const { return m; }             // how many outputs it returns
+  auto operator()(auto& s) const { return s.state(); }   // reads state, returns them
+};
+```
 
-A bare ODE needs nothing more. A System whose rates read an **adaptively-built** field
-(an interpolator, a quadrature) must freeze that construction so the tape carries no
-adaptive branching. It opts in with the `Replayable` hooks:
+Reading the count off the functional means it and the outputs it returns cannot silently
+disagree, and it saves XAD an extra forward callback just to size the output (a wasted full
+model replay). The record-once / row-sweep is the vendored `xad::computeJacobian`'s; odelia
+supplies only the forward callback. Reverse mode is optimal here: many inputs, few outputs.
+
+`least_squares` is one prebuilt functional (a scalar loss): it holds measured data and
+scores the replayed trajectory against it. The solver stores no fit state — a custom
+likelihood is just another struct with `(obs_indices, data, residual → scalar)`.
+
+---
+
+## Record → replay (adaptive numerics)
+
+A bare ODE needs nothing more. A System whose rates read an **adaptively-built** field — an
+interpolator, a quadrature — must freeze that construction, or the parameter-dependent
+refinement branching corrupts the tape. It opts in with the `Replayable` hooks:
 
 | Hook | Fires | Job |
 |---|---|---|
-| `record_stage(k)` | per RK stage, record pass | stash node positions / field value |
+| `record_stage(k)` | per RK stage, record pass | stash node positions / this stage's field value |
 | `record_ode_step()` | per accepted step, record pass | commit the step's recording |
 | `replay_step()` | per step, active pass | load this step's recorded slice |
 | `has_recorded_field()` | query | is the L3 field cache populated? |
 
-The double pass records **where** the adaptive scheme placed its nodes; the active pass
-replays **pinned** to them, values active. `has_recorded_field()` is a data query, not a
-mode: an empty L3 cache means recompute the field live (self-feedback flows); a populated
-one means read it as `double` background (its derivative is zero). Full treatment:
-`ad-record-replay.md`.
+Two cadences, and they are the whole model:
 
-## 5. The interpolator
+- **Positions freeze per step** (L2). The only job is to keep the adaptive branching off the
+  tape; one representative position set per accepted step does it, and it is representative
+  by construction — the step controller only accepts a step whose state varies within
+  tolerance.
+- **Values freeze per stage** (L3). A frozen background must read back the *exact* value each
+  RK stage consumed — a per-step value would be wrong, not merely coarse.
 
-One type carries both halves: `construct` adaptively refines a target to tolerance (the
-double/record path) and `init` builds on given knots (the fixed-build/replay path, any
-scalar `S`). Positions stay `double`; only the values go active.
+**Resident vs mutant is data presence, not a mode.** `has_recorded_field()` asks one thing:
+is the L3 field cache populated?
 
-## 6. Off-tape edges
+- **empty** → the System recomputes the field on the frozen positions with the active
+  scalar, so self-feedback flows (the resident/total gradient).
+- **populated** → the System reads the recorded values as `double` background, off the tape,
+  so the field's derivative is zero (the mutant/invasion gradient).
 
-`SuppliedDerivative` (built on `xad::CheckpointCallback`) injects the adjoint of a value
-the forward pass computed **off** the tape — a root-find, an optimiser result — carrying
-its known partials into the reverse sweep, so the internal solve is never recorded.
+The variant entry chooses whether to populate the L3 cache; the System just reads what is
+present. There is no `live | frozen | replaying` flag.
 
-## 7. The R boundary
+## The interpolator
 
-Only `double` crosses to R. R holds the ordinary (double) `Solver`; a gradient call builds
-the active solver internally, differentiates, and returns doubles — R never holds an active
-type, so the boundary can only fail loudly, never reinterpret a handle. The active solver
-(and its tape) is cached on the double `Solver` object and reused across calls, so an
-optimiser loop amortizes it; reuse is pure speed and never changes a number. Details:
-`ad-r-interface.md`.
+One type carries both halves of the seam: `construct` adaptively refines a target to
+tolerance (the double, record path) and `init` builds on given knots (the fixed-build,
+replay path, any scalar `S`). Positions stay `double`; only the values go active. A recorded
+interpolator is never re-refined.
+
+## Off-tape edges
+
+`SuppliedDerivative` (built on `xad::CheckpointCallback`) injects the adjoint of a value the
+forward pass computed **off** the tape — a root-find, an optimiser result — carrying its
+known partials into the reverse sweep, so the internal solve is never recorded.
+
+## The R boundary
+
+Only `double` crosses to R. R holds the double `Solver`; a gradient call builds the active
+solver internally, differentiates, and returns doubles — R never holds an active type, so
+the boundary can only fail loudly, never reinterpret a handle. The active solver and its
+tape are cached on the double `Solver` and reused across calls, so an optimiser loop
+amortizes them.
+
+---
+
+## Building an AD-compatible System
+
+**A bare ODE (no adaptive sub-numerics).** Implement the ODE interface plus the four contract
+members — `value_type`, `rebind` / `rebind_from`, `set_param`, `set_ic`. That's it:
+`compute_gradient` / `compute_jacobian` work, doubles in and out, and a downstream package
+gets `Solver_gradient` / `Solver_jacobian` for free. odelia never learns what your state
+means. (`LorenzSystem` is the worked example.)
+
+**Rates that read an adaptively-refined field.** Add the `Replayable` hooks. Record the node
+**positions** your refiner chose (per accepted step) and the field **value** per RK stage;
+on replay, rebuild the field on the frozen positions with the active scalar. This is
+switched on by *doing reverse-mode AD*, not by any user flag — miss it and gradients are
+silently wrong wherever the adaptive component bites. (`RelaxationSystem` is the worked
+example.)
+
+**A variant that holds a quantity fixed.** If you also want a cheap run that reads some
+recomputable quantity as a constant (its derivative zero) — a rare mutant reading a fixed
+resident field, or frozen state variables — record it per stage and have the variant entry
+populate the L3 cache; `has_recorded_field()` reports it. The quantity need not be an
+"environment" or an interpolator: L3 is "read a recorded `double` from a container."
+
+odelia stays agnostic to all of it — it records "some positions" and "some values" and never
+learns a node is a height or a value a field.
