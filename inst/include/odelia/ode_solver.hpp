@@ -5,9 +5,24 @@
 #include <XAD/XAD.hpp>
 #include <XAD/Tape.hpp>
 #include <memory>
+#include <type_traits>
 
 namespace odelia {
 namespace ode {
+
+// AD is opt-in: a System is differentiable only if it provides `rebind` (the double
+// -> active mould). For a plain double System that never takes a gradient, resolve
+// the active twin's type to the System itself -- a harmless placeholder that is
+// declared but never constructed -- so `Solver<System>` compiles without forcing
+// every System to carry AD scaffolding.
+namespace detail {
+template <class S, class Scalar, class = void>
+struct rebind_or_self { using type = S; };
+template <class S, class Scalar>
+struct rebind_or_self<S, Scalar, std::void_t<typename S::template rebind<Scalar>>> {
+  using type = typename S::template rebind<Scalar>;
+};
+}
 
 // This is a wrapper class that is meant to simplify the
 // difficuly of ownership semantics around the solver and system.
@@ -31,6 +46,25 @@ public:
   {
     collect = true;
   }
+
+  // Copyable: the tape and cached active twin are rebuildable amortization scratch
+  // (RIF-3), not part of the Solver's value, so a copy starts with them empty and
+  // rebuilds them lazily on its first gradient. plant copies Solvers on the non-AD
+  // path (SCM snapshots, RcppR6 bindings), where that scratch is irrelevant; the
+  // implicit copy ctor is deleted only because of the unique_ptr<Tape> member.
+  Solver(const Solver& o)
+    : collect(o.collect), system(o.system), control_(o.control_),
+      solver(o.solver), replay_schedule_(o.replay_schedule_) {
+    history = o.history;
+  }
+  Solver& operator=(const Solver& o) {
+    collect = o.collect; system = o.system; control_ = o.control_;
+    solver = o.solver; replay_schedule_ = o.replay_schedule_; history = o.history;
+    tape.reset(); active_solver.reset();
+    return *this;
+  }
+  Solver(Solver&&) = default;
+  Solver& operator=(Solver&&) = default;
 
   // TODO: solver.reset() will set time within the solver to zero.
   // However, there is no other current way of setting the time within
@@ -204,7 +238,7 @@ public:
   // solver as a plain member shares the reuse. mutable: scratch, reusable through a
   // const solver.
   using active_scalar      = typename xad::adj<double>::active_type;
-  using active_system_type = typename System::template rebind<active_scalar>;
+  using active_system_type = typename detail::rebind_or_self<System, active_scalar>::type;
   mutable std::shared_ptr<Solver<active_system_type>> active_solver;
 
   // Reverse-mode tape, created on the first gradient and reused (only ever exercised
