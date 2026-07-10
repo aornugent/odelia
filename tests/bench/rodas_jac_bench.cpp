@@ -46,8 +46,8 @@ template <typename T = double>
 class StiffSys {
 public:
   using value_type = T;
-  StiffSys(int n_, std::vector<double> k_)
-    : n(n_), k(std::move(k_)), y(n_, T(0)), t0(0.0), time(0.0) {}
+  StiffSys(int n_, std::vector<double> k_, int work_ = 0)
+    : n(n_), k(std::move(k_)), work(work_), y(n_, T(0)), t0(0.0), time(0.0) {}
 
   size_t ode_size() const { return static_cast<size_t>(n); }
   double ode_t0() const { return t0; }
@@ -70,9 +70,14 @@ public:
 
   template <typename It>
   It ode_rates(It it) const {
+    using std::sin;
     for (int i = 0; i < n; ++i) {
       const int j = (i + 1) % n;
-      *it++ = T(-k[i]) * y[i] + T(0.1) * y[j] + y[i] * y[j];
+      T r = T(-k[i]) * y[i] + T(0.1) * y[j] + y[i] * y[j];
+      // `work` inflates RHS value cost (tiny, smooth perturbation) to emulate an
+      // expensive mechanistic RHS like FF16 without changing its shape.
+      for (int w = 0; w < work; ++w) r = r + T(1e-9) * sin(r);
+      *it++ = r;
     }
     return it;
   }
@@ -92,11 +97,12 @@ public:
 
   template <class U> using rebind = StiffSys<U>;
   template <class U>
-  rebind<U> rebind_from() const { return StiffSys<U>(n, k); }
+  rebind<U> rebind_from() const { return StiffSys<U>(n, k, work); }
 
 private:
   int n;
   std::vector<double> k;
+  int work;
   std::vector<T> y;
   double t0, time;
 };
@@ -138,6 +144,30 @@ static void jac_hand_cached(Twin& twin, std::vector<typename Twin::value_type>& 
     ode::derivs(twin, v, d, t);
     for (size_t row = 0; row < n; ++row) J[row * n + col] = xad::derivative(d[row]);
     xad::derivative(v[col]) = 0.0;
+  }
+}
+
+// Blocked vector-forward sweep: FReal<double,BLK> carries BLK tangents, so one
+// RHS pass yields BLK Jacobian columns. The RHS *value* is computed once per
+// block of BLK columns instead of once per column -- the only structural saving
+// XAD's vector mode (fixed compile-time width) offers over the scalar sweep.
+template <std::size_t BLK, typename SystemD>
+static void jac_block(const SystemD& sys, const std::vector<double>& y, double t,
+                      std::vector<double>& J) {
+  using fv = xad::FReal<double, BLK>;
+  auto twin = sys.template rebind_from<fv>();
+  const size_t n = y.size();
+  std::vector<fv> v(n), d(n);
+  for (size_t i = 0; i < n; ++i) v[i] = fv(y[i]);
+  J.assign(n * n, 0.0);
+  for (size_t c0 = 0; c0 < n; c0 += BLK) {
+    const size_t w = std::min<size_t>(BLK, n - c0);
+    for (size_t kk = 0; kk < w; ++kk) xad::derivative(v[c0 + kk])[kk] = 1.0;
+    ode::derivs(twin, v, d, t);
+    for (size_t row = 0; row < n; ++row)
+      for (size_t kk = 0; kk < w; ++kk)
+        J[row * n + (c0 + kk)] = xad::derivative(d[row])[kk];
+    for (size_t kk = 0; kk < w; ++kk) xad::derivative(v[c0 + kk])[kk] = 0.0;
   }
 }
 
@@ -235,6 +265,53 @@ Rcpp::DataFrame rodas_jac_bench(std::vector<int> sizes, double budget = 0.15) {
       Rcpp::Named("analytic_us") = out_analytic,
       Rcpp::Named("rest_us") = out_rest,
       Rcpp::Named("jac_maxdiff") = out_maxdiff);
+}
+
+// Scalar forward sweep (current hand-rolled algorithm) vs blocked vector-forward
+// (FReal<double,8>), across RHS cost. Shows how much the scalar sweep's repeated
+// value computation actually costs, and whether vector mode is worth its width
+// machinery. Cross-checks the two agree.
+// [[Rcpp::export]]
+Rcpp::DataFrame rodas_jac_vec(std::vector<int> sizes, std::vector<int> works,
+                              double budget = 0.2) {
+  constexpr std::size_t BLK = 8;
+  std::vector<int> out_n, out_work;
+  std::vector<double> out_scalar, out_block, out_speedup, out_maxdiff;
+
+  for (int n : sizes) {
+    for (int work : works) {
+      std::vector<double> k(n);
+      for (int i = 0; i < n; ++i)
+        k[i] = std::pow(10.0, -1.0 + 5.0 * (n > 1 ? double(i) / (n - 1) : 0.0));
+      StiffSys<double> sys(n, k, work);
+      std::vector<double> y(n);
+      for (int i = 0; i < n; ++i) y[i] = 0.5 + 0.3 * std::sin(0.7 * i);
+      const double t = 0.3;
+
+      ode::Jacobian<StiffSys<double>> jac;
+      jac.resize(n);
+      std::vector<double> Js(n * n), Jb(n * n);
+      jac.compute(sys, y, t, Js);
+      jac_block<BLK>(sys, y, t, Jb);
+      double md = 0.0;
+      for (int i = 0; i < n * n; ++i) md = std::max(md, std::abs(Js[i] - Jb[i]));
+
+      const double s_us = time_us(budget, [&] { jac.compute(sys, y, t, Js); });
+      const double b_us = time_us(budget, [&] { jac_block<BLK>(sys, y, t, Jb); });
+
+      out_n.push_back(n);
+      out_work.push_back(work);
+      out_scalar.push_back(s_us);
+      out_block.push_back(b_us);
+      out_speedup.push_back(s_us / b_us);
+      out_maxdiff.push_back(md);
+    }
+  }
+  return Rcpp::DataFrame::create(
+      Rcpp::Named("n") = out_n, Rcpp::Named("rhs_work") = out_work,
+      Rcpp::Named("scalar_us") = out_scalar, Rcpp::Named("block8_us") = out_block,
+      Rcpp::Named("scalar_over_block") = out_speedup,
+      Rcpp::Named("maxdiff") = out_maxdiff);
 }
 
 // Heap allocations per single Jacobian call (measured after warm-up).
