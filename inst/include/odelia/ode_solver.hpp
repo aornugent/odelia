@@ -182,8 +182,17 @@ public:
   bool has_recording() const { return times().size() > 1; }
   std::vector<double> recorded_steps() const { return times(); }
 
-  // Reverse-mode tape, created on the first gradient and reused across the rows of
-  // one Jacobian (only ever exercised on the active solver the driver builds).
+  // The active (AD) version of this System, lifted via rebind. Built on the first
+  // gradient and reused, so an optimiser loop amortizes it (its own `tape` included).
+  // Cached on the object rather than an R handle, so a C++ caller that holds the
+  // solver as a plain member shares the reuse. mutable: scratch, reusable through a
+  // const solver.
+  using active_scalar      = typename xad::adj<double>::active_type;
+  using active_system_type = typename System::template rebind<active_scalar>;
+  mutable std::shared_ptr<Solver<active_system_type>> active_solver;
+
+  // Reverse-mode tape, created on the first gradient and reused (only ever exercised
+  // on the active solver).
   std::unique_ptr<xad::Tape<double>> tape;
 
   // Should we record history at every step?

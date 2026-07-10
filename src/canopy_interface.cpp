@@ -82,3 +82,53 @@ Rcpp::List Canopy_record_replay_gradient(SEXP system_xp, SEXP control_xp,
       Rcpp::Named("gradient") = Rcpp::wrap(gradient),
       Rcpp::Named("n_steps") = static_cast<int>(times.size() - 1));
 }
+
+//-------------------------------------------------------------------------
+// A persistent double Solver held across calls. The one-shot above rebuilds the
+// active solver every call; here the active solver and its tape are cached on the
+// double Solver and reused, while the recording is read fresh on each gradient call.
+
+// [[Rcpp::export]]
+SEXP Canopy_Solver_new(SEXP system_xp, SEXP control_xp) {
+  Rcpp::XPtr<SystemType> sys(system_xp);
+  Rcpp::XPtr<ode::OdeControl> ctrl(control_xp);
+  return Rcpp::XPtr<ode::Solver<SystemType>>(
+      new ode::Solver<SystemType>(*sys, *ctrl), true);
+}
+
+// One adaptive double pass, recording node positions and light into the solver's
+// System. Returns the resolved step count.
+// [[Rcpp::export]]
+int Canopy_record(SEXP solver_xp, double Tmax) {
+  Rcpp::XPtr<ode::Solver<SystemType>> d(solver_xp);
+  d->reset();
+  d->get_system_ref().start_recording();
+  d->advance_adaptive({0.0, Tmax});
+  return static_cast<int>(d->recorded_steps().size() - 1);
+}
+
+// Differentiate the replayed final state w.r.t. `gain`, reusing the cached active
+// solver. The recording is read from the double System on this call, so a fresh
+// Canopy_record() is always picked up rather than replayed against a stale schedule.
+// [[Rcpp::export]]
+Rcpp::List Canopy_replay_gradient(SEXP solver_xp, bool reuse_light = false) {
+  Rcpp::XPtr<ode::Solver<SystemType>> d(solver_xp);
+  if (!d->has_recording()) {
+    util::stop("Canopy_replay_gradient: call Canopy_record() first");
+  }
+  auto& rec = d->get_system_ref();
+  const std::vector<double> times = d->recorded_steps();
+
+  auto& active = solver::active_solver<SystemType, ActiveSystemType>(*d);
+  active.get_system_ref().set_recording(rec.recorded_positions(), rec.recorded_values(), reuse_light);
+
+  ode::DifferentiationTargets ind;
+  ind.params.push_back(0);     // gain
+  ind.values.push_back(rec.pars());
+
+  auto [value, gradient] = ode::compute_gradient(active, ind, times, canopy_final{});
+  return Rcpp::List::create(
+      Rcpp::Named("value") = value,
+      Rcpp::Named("gradient") = Rcpp::wrap(gradient),
+      Rcpp::Named("n_steps") = static_cast<int>(times.size() - 1));
+}

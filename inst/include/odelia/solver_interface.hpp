@@ -158,14 +158,15 @@ inline ode::least_squares least_squares_from_r(Rcpp::NumericMatrix observations,
 
 // ---- Gradients on the double handle ----------------------------------------
 // R holds only the double Solver; these helpers differentiate on the active solver
-// (the double System lifted via rebind_from) and return doubles. The active solver is
-// built internally per call and thrown away, so R never constructs or holds an active
-// handle -- there is no active flag on these entries and no active XPtr.
+// (the double System lifted via rebind_from) and return doubles.
 template <class SystemType, class ActiveSystemType>
-ode::Solver<ActiveSystemType> build_active(ode::Solver<SystemType>& d) {
-  return ode::Solver<ActiveSystemType>(
-      d.get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
-      d.get_control());
+ode::Solver<ActiveSystemType>& active_solver(ode::Solver<SystemType>& d) {
+  if (!d.active_solver) {
+    d.active_solver = std::make_shared<ode::Solver<ActiveSystemType>>(
+        d.get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
+        d.get_control());
+  }
+  return *d.active_solver;
 }
 
 template <class SystemType, class ActiveSystemType, class Functional>
@@ -173,7 +174,7 @@ std::pair<double, std::vector<double>>
 gradient_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
                    const std::vector<double>& schedule, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
-  auto active = build_active<SystemType, ActiveSystemType>(*d);
+  auto& active = active_solver<SystemType, ActiveSystemType>(*d);
   return ode::compute_gradient(active, ind, schedule, std::forward<Functional>(functional));
 }
 
@@ -182,7 +183,7 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>>
 jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
                    const std::vector<double>& schedule, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
-  auto active = build_active<SystemType, ActiveSystemType>(*d);
+  auto& active = active_solver<SystemType, ActiveSystemType>(*d);
   return ode::compute_jacobian(active, ind, schedule, std::forward<Functional>(functional));
 }
 
@@ -215,7 +216,7 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
   }
   // The fit observations are handed in per call and owned by the functional; the
   // solver holds no fit state.
-  auto active = build_active<SystemType, ActiveSystemType>(*d);
+  auto& active = active_solver<SystemType, ActiveSystemType>(*d);
   auto functional = least_squares_from_r(observations, obs_indices);
   // `times` from R is the recorded schedule the driver replays; least_squares
   // samples the collected trajectory at obs_indices.

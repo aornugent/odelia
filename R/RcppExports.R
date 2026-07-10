@@ -13,6 +13,18 @@ Canopy_record_replay_gradient <- function(system_xp, control_xp, Tmax, reuse_lig
     .Call(`_odelia_Canopy_record_replay_gradient`, system_xp, control_xp, Tmax, reuse_light)
 }
 
+Canopy_Solver_new <- function(system_xp, control_xp) {
+    .Call(`_odelia_Canopy_Solver_new`, system_xp, control_xp)
+}
+
+Canopy_record <- function(solver_xp, Tmax) {
+    .Call(`_odelia_Canopy_record`, solver_xp, Tmax)
+}
+
+Canopy_replay_gradient <- function(solver_xp, reuse_light = FALSE) {
+    .Call(`_odelia_Canopy_replay_gradient`, solver_xp, reuse_light)
+}
+
 System_new <- function(sigma, R, b) {
     .Call(`_odelia_System_new`, sigma, R, b)
 }

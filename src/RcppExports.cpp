@@ -49,6 +49,42 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// Canopy_Solver_new
+SEXP Canopy_Solver_new(SEXP system_xp, SEXP control_xp);
+RcppExport SEXP _odelia_Canopy_Solver_new(SEXP system_xpSEXP, SEXP control_xpSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
+    rcpp_result_gen = Rcpp::wrap(Canopy_Solver_new(system_xp, control_xp));
+    return rcpp_result_gen;
+END_RCPP
+}
+// Canopy_record
+int Canopy_record(SEXP solver_xp, double Tmax);
+RcppExport SEXP _odelia_Canopy_record(SEXP solver_xpSEXP, SEXP TmaxSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
+    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
+    rcpp_result_gen = Rcpp::wrap(Canopy_record(solver_xp, Tmax));
+    return rcpp_result_gen;
+END_RCPP
+}
+// Canopy_replay_gradient
+Rcpp::List Canopy_replay_gradient(SEXP solver_xp, bool reuse_light);
+RcppExport SEXP _odelia_Canopy_replay_gradient(SEXP solver_xpSEXP, SEXP reuse_lightSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
+    Rcpp::traits::input_parameter< bool >::type reuse_light(reuse_lightSEXP);
+    rcpp_result_gen = Rcpp::wrap(Canopy_replay_gradient(solver_xp, reuse_light));
+    return rcpp_result_gen;
+END_RCPP
+}
 // System_new
 SEXP System_new(double sigma, double R, double b);
 RcppExport SEXP _odelia_System_new(SEXP sigmaSEXP, SEXP RSEXP, SEXP bSEXP) {
@@ -597,6 +633,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Canopy_new", (DL_FUNC) &_odelia_Canopy_new, 2},
     {"_odelia_Canopy_adaptive_final", (DL_FUNC) &_odelia_Canopy_adaptive_final, 3},
     {"_odelia_Canopy_record_replay_gradient", (DL_FUNC) &_odelia_Canopy_record_replay_gradient, 4},
+    {"_odelia_Canopy_Solver_new", (DL_FUNC) &_odelia_Canopy_Solver_new, 2},
+    {"_odelia_Canopy_record", (DL_FUNC) &_odelia_Canopy_record, 2},
+    {"_odelia_Canopy_replay_gradient", (DL_FUNC) &_odelia_Canopy_replay_gradient, 2},
     {"_odelia_System_new", (DL_FUNC) &_odelia_System_new, 3},
     {"_odelia_System_pars", (DL_FUNC) &_odelia_System_pars, 1},
     {"_odelia_System_set_params", (DL_FUNC) &_odelia_System_set_params, 2},
