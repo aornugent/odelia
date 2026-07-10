@@ -3,6 +3,7 @@
 
 #include <odelia/ode_solver.hpp>
 #include <XAD/XAD.hpp>
+#include <vector>
 
 using namespace odelia;
 
@@ -69,21 +70,6 @@ public:
     return it;
   }
 
-  // Registers initial state on tape for AD gradient computation
-  template <typename Tape, typename Iterator>
-  std::vector<T*> set_initial_state(Tape& tape, Iterator it, double t0_) {
-    t0 = t0_;
-    y0_init = *it++;
-    y1_init = *it++;
-    y2_init = *it++;
-    
-    tape.registerInput(y0_init);
-    tape.registerInput(y1_init);
-    tape.registerInput(y2_init);
-    
-    return {&y0_init, &y1_init, &y2_init};
-  }
-
   template <typename Iterator>
   Iterator set_params(Iterator it) {
     sigma = *it++;
@@ -92,17 +78,11 @@ public:
     return it;
   }
 
-  // Registers inputs, returns pointers for AD gradient computation
-  template <typename Tape, typename Iterator>
-  std::vector<T*> set_params(Tape& tape, Iterator it) {
-    sigma = *it++;
-    R = *it++;
-    b = *it++;
-    tape.registerInput(sigma);
-    tape.registerInput(R);
-    tape.registerInput(b);
-    return {&sigma, &R, &b};
-  }
+  // The differentiable inputs, in the order DifferentiationTargets indexes them:
+  // parameters (sigma, R, b) then initial state (y0, y1, y2). The driver seeds a
+  // chosen subset active before each solve.
+  std::vector<T*> ad_parameters()    { return {&sigma, &R, &b}; }
+  std::vector<T*> ad_initial_state() { return {&y0_init, &y1_init, &y2_init}; }
 
   template <typename Iterator>
   Iterator ode_state(Iterator it) const {

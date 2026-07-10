@@ -2,7 +2,9 @@
 #define ODELIA_ODE_SOLVER_HPP_
 
 #include <odelia/ode_solver_internal.hpp>
+#include <XAD/XAD.hpp>
 #include <XAD/Tape.hpp>
+#include <memory>
 
 namespace odelia {
 namespace ode {
@@ -22,16 +24,12 @@ template <typename System>
 class Solver
 {
 public:
-  Solver(System sys_, OdeControl control) : system(sys_), solver(system, control)
+  using value_type = typename System::value_type;
+
+  Solver(System sys_, OdeControl control)
+    : system(sys_), control_(control), solver(system, control)
   {
     collect = true;
-  }
-
-  // destructor to delete XAD tape
-  ~Solver() {
-    if (tape) {
-      delete tape;
-    }
   }
 
   // TODO: solver.reset() will set time within the solver to zero.
@@ -53,6 +51,10 @@ public:
 
   System get_system() const { return system; }
   System& get_system_ref() { return system; }
+
+  // The control this solver was built with, so a driver builds the active solver
+  // with the same integration settings.
+  OdeControl get_control() const { return control_; }
 
   // Synchronize internal ODE buffers from the current system state without
   // resetting solver history/step-size state.
@@ -174,72 +176,25 @@ public:
 
   System get_history_step(std::size_t i) const { return history.at(i); }
 
-  // Fit configuration methods
-  void set_target(const std::vector<double>& times, 
-                  const std::vector<std::vector<double>>& targets,
-                  const std::vector<size_t>& obs_indices) {
-      fit_times_ = times;
-      targets_ = targets;
-      obs_indices_ = obs_indices;
-    }
-  // Advance solver and return states only at observation times
-std::vector<std::vector<typename System::value_type>> advance_target() {
-    // Check that target has been set
-    if (fit_times_.empty()) {
-      util::stop("Must call set_target() before advance_target()");
-    }
-    
-    // Check starting time matches
-    if (!util::identical(fit_times_[0], time())) {
-      util::stop("First element in fit_times must be same as current time");
-    }
-    
-    // Vector to store states at observation times
-    std::vector<std::vector<typename System::value_type>> observations;
-    observations.reserve(obs_indices_.size());
-    
-    // Track which observation we're looking for
-    size_t obs_idx = 0;
-    
-    // Check if initial time is an observation
-    if (obs_idx < obs_indices_.size() && obs_indices_[obs_idx] == 0) {
-      observations.push_back(state());
-      obs_idx++;
-    }
-    
-      // Step through times
-      for (size_t i = 1; i < fit_times_.size(); ++i) {
-        solver.step_to(system, fit_times_[i]);
-      
-      // Check if this time index is an observation point
-      while (obs_idx < obs_indices_.size() && obs_indices_[obs_idx] == i) {
-        observations.push_back(state());
-        obs_idx++;
-      }
-    }
-    
-    return observations;
-  }
-  const std::vector<double>& fit_times() const { return fit_times_; }
-  const std::vector<std::vector<double>>& targets() const { return targets_; }
-  const std::vector<size_t>& obs_indices() const { return obs_indices_; }
+  // The read-only surface behind the "forgot to record" guard: whether an adaptive
+  // pass has resolved a schedule on this solver, and what it is. The schedule is the
+  // grid a replay-gradient advances over (advance_fixed).
+  bool has_recording() const { return times().size() > 1; }
+  std::vector<double> recorded_steps() const { return times(); }
 
-  // Persistent tape for AD gradient computation
-  xad::Tape<double>* tape = nullptr;
+  // Reverse-mode tape, created on the first gradient and reused across the rows of
+  // one Jacobian (only ever exercised on the active solver the driver builds).
+  std::unique_ptr<xad::Tape<double>> tape;
 
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?
 std::vector<System> history;
 
-private:  
+private:
   bool collect;
   System system;
+  OdeControl control_;
   SolverInternal<System> solver;
-  
-  // Fit configuration for AD gradient computation
-  std::vector<double> fit_times_;
-  std::vector<size_t> obs_indices_;
-  std::vector<std::vector<double>> targets_;
 
 };
 }
