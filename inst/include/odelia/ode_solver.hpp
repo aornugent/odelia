@@ -182,6 +182,22 @@ public:
   bool has_recording() const { return times().size() > 1; }
   std::vector<double> recorded_steps() const { return times(); }
 
+  // Hand the recorded replay schedule (L1) to this solver. The active twin holds no
+  // recording of its own (rebind copies values, not the schedule), so the schedule is
+  // handed over per gradient call -- the L1 analogue of the System's set_recording for
+  // L2/L3, and the reason L1 is Solver-owned state rather than a gradient-driver
+  // argument.
+  void set_schedule(std::vector<double> steps) { replay_schedule_ = std::move(steps); }
+
+  // Replay the recorded schedule with the currently-seeded system: the forward pass
+  // the gradient driver differentiates, called once per Jacobian row.
+  void run() {
+    if (replay_schedule_.empty()) {
+      util::stop("no recorded schedule to replay; run the adaptive pass first");
+    }
+    advance_fixed(replay_schedule_);
+  }
+
   // The active (AD) version of this System, lifted via rebind. Built on the first
   // gradient and reused, so an optimiser loop amortizes it (its own `tape` included).
   // Cached on the object rather than an R handle, so a C++ caller that holds the
@@ -204,6 +220,7 @@ private:
   System system;
   OdeControl control_;
   SolverInternal<System> solver;
+  std::vector<double> replay_schedule_;  // L1 recording handed over per gradient call
 
 };
 }

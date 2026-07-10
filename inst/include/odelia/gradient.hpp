@@ -33,8 +33,12 @@ struct tape_guard {
 // Reverse-mode Jacobian of a functional of an ODE solve: row i is d(output_i)/d(input)
 // over the seeded inputs. XAD's computeJacobian does the record-once, adjoint-row
 // sweep; the forward callback here is the part XAD can't supply -- seed the registered
-// inputs onto the System (ad_parameters / ad_initial_state), replay the recorded
-// schedule, and reduce the positioned solver through the functional.
+// inputs onto the System (ad_parameters / ad_initial_state), replay via solver.run(),
+// and reduce the positioned solver through the functional.
+//
+// The replay is the solver's own run() -- advance_fixed over the schedule handed in via
+// set_schedule() -- so the driver owns record/seed/sweep/reduce but never the schedule;
+// the solver owns its replay.
 //
 // `codomain` is how many outputs the functional returns; XAD needs it to size the
 // sweep, and reading it off the functional avoids a spare model run just to count.
@@ -42,7 +46,6 @@ template<typename Solver, typename Functional>
 std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobian(
     Solver& solver,
     const DifferentiationTargets& targets,
-    const std::vector<double>& schedule,
     Functional&& functional
 ) {
     using ad = xad::adj<double>;
@@ -54,9 +57,6 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
     }
     if (targets.size() != targets.values.size()) {
         util::stop("DifferentiationTargets: 'values' must match 'params' + 'ics'");
-    }
-    if (schedule.empty()) {
-        util::stop("no recorded schedule to replay; run the adaptive pass first");
     }
     // Every target must address an input the System actually declares.
     const std::size_t n_params = solver.get_system_ref().ad_parameters().size();
@@ -91,7 +91,7 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
             for (int i : targets.params) *params[i] = x[k++];
             for (int j : targets.ics)    *ics[j]    = x[k++];
             solver.reset();
-            solver.advance_fixed(schedule);
+            solver.run();
             auto outputs = functional(solver);
             values.resize(outputs.size());
             for (size_t i = 0; i < outputs.size(); ++i) values[i] = xad::value(outputs[i]);
@@ -116,11 +116,10 @@ template<typename Solver, typename Functional>
 std::pair<double, std::vector<double>> compute_gradient(
     Solver& solver,
     const DifferentiationTargets& targets,
-    const std::vector<double>& schedule,
     Functional&& functional
 ) {
     scalar_functional<std::decay_t<Functional>> one{std::forward<Functional>(functional)};
-    auto [values, jacobian] = compute_jacobian(solver, targets, schedule, one);
+    auto [values, jacobian] = compute_jacobian(solver, targets, one);
     return {values[0], jacobian[0]};
 }
 

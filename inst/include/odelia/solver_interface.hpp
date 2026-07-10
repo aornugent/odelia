@@ -176,7 +176,8 @@ gradient_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
                    const std::vector<double>& schedule, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  return ode::compute_gradient(active, ind, schedule, std::forward<Functional>(functional));
+  active.set_schedule(schedule);  // hand the recorded L1 schedule to the active twin
+  return ode::compute_gradient(active, ind, std::forward<Functional>(functional));
 }
 
 template <class SystemType, class ActiveSystemType, class Functional>
@@ -185,7 +186,8 @@ jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
                    const std::vector<double>& schedule, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  return ode::compute_jacobian(active, ind, schedule, std::forward<Functional>(functional));
+  active.set_schedule(schedule);  // hand the recorded L1 schedule to the active twin
+  return ode::compute_jacobian(active, ind, std::forward<Functional>(functional));
 }
 
 // Value + least-squares gradient from one recording, so an optimiser's fn/gr share
@@ -219,10 +221,10 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
   // solver holds no fit state.
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
   auto functional = least_squares_from_r(observations, obs_indices);
-  // `times` from R is the recorded schedule the driver replays; least_squares
+  // `times` from R is the recorded schedule the active twin replays; least_squares
   // samples the collected trajectory at obs_indices.
-  std::vector<double> schedule(times.begin(), times.end());
-  auto [value, gradient] = ode::compute_gradient(active, ind, schedule, functional);
+  active.set_schedule(std::vector<double>(times.begin(), times.end()));
+  auto [value, gradient] = ode::compute_gradient(active, ind, functional);
   return Rcpp::List::create(Rcpp::Named("value") = value,
                             Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }

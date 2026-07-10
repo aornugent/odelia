@@ -69,13 +69,14 @@ Rcpp::List Canopy_record_replay_gradient(SEXP system_xp, SEXP control_xp,
   ActiveSystemType act = rec_sys.rebind_from<xad::adj<double>::active_type>();
   act.set_recording(rec_sys.recorded_positions(), rec_sys.recorded_values(), reuse_light);
   ode::Solver<ActiveSystemType> active_solver(act, *ctrl);
+  active_solver.set_schedule(times);   // the recorded L1 schedule to replay
 
   ode::DifferentiationTargets ind;
   ind.params.push_back(0);     // gain
   ind.values.push_back(gain);
 
   auto [value, gradient] =
-      ode::compute_gradient(active_solver, ind, times, canopy_final{});
+      ode::compute_gradient(active_solver, ind, canopy_final{});
 
   return Rcpp::List::create(
       Rcpp::Named("value") = value,
@@ -120,13 +121,14 @@ Rcpp::List Canopy_replay_gradient(SEXP solver_xp, bool reuse_light = false) {
   const std::vector<double> times = d->recorded_steps();
 
   auto& active = solver::active_solver<SystemType, ActiveSystemType>(*d);
+  active.set_schedule(times);   // the recorded L1 schedule to replay
   active.get_system_ref().set_recording(rec.recorded_positions(), rec.recorded_values(), reuse_light);
 
   ode::DifferentiationTargets ind;
   ind.params.push_back(0);     // gain
   ind.values.push_back(rec.pars());
 
-  auto [value, gradient] = ode::compute_gradient(active, ind, times, canopy_final{});
+  auto [value, gradient] = ode::compute_gradient(active, ind, canopy_final{});
   return Rcpp::List::create(
       Rcpp::Named("value") = value,
       Rcpp::Named("gradient") = Rcpp::wrap(gradient),
