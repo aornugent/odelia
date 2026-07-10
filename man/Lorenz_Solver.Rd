@@ -44,7 +44,7 @@ R6 wrapper for the Lorenz ODE solver. Gradients are computed on
   Initialize a solver for a Lorenz system.
   \subsection{Usage}{
     \if{html}{\out{<div class="r">}}
-    \preformatted{Lorenz_Solver$new(System_xp, control_xp)}
+    \preformatted{Lorenz_Solver$new(System_xp, control_xp, method = "rkck")}
     \if{html}{\out{</div>}}
   }
   \subsection{Arguments}{
@@ -52,6 +52,8 @@ R6 wrapper for the Lorenz ODE solver. Gradients are computed on
     \describe{
       \item{\code{System_xp}}{External pointer to the Lorenz system object.}
       \item{\code{control_xp}}{External pointer to the ODE control object.}
+      \item{\code{method}}{Integration method: \code{"rkck"} (default, explicit Cash-Karp
+        RK 4(5)) or \code{"rodas"} (implicit RODAS4(3) Rosenbrock, for stiff systems).}
     }
     \if{html}{\out{</div>}}
   }

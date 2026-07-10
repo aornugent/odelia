@@ -57,8 +57,8 @@ System_rates <- function(system_xp) {
     .Call(`_odelia_System_rates`, system_xp)
 }
 
-Solver_new <- function(system_xp, control_xp) {
-    .Call(`_odelia_Solver_new`, system_xp, control_xp)
+Solver_new <- function(system_xp, control_xp, method = "rkck") {
+    .Call(`_odelia_Solver_new`, system_xp, control_xp, method)
 }
 
 Solver_reset <- function(solver_xp) {

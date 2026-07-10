@@ -15,6 +15,8 @@
 #' @param obs_indices Integer vector of observed-state indices.
 #' @param ic Optional initial condition value(s) to differentiate w.r.t.
 #' @param params Optional parameter vector to differentiate w.r.t.
+#' @param method Integration method: `"rkck"` (default, explicit Cash-Karp
+#'   RK 4(5)) or `"rodas"` (implicit RODAS4(3) Rosenbrock, for stiff systems).
 #' @export
 Lorenz_Solver <- R6::R6Class(
   "Lorenz_Solver",
@@ -22,8 +24,8 @@ Lorenz_Solver <- R6::R6Class(
     ptr = NULL,
 
     #' @description Initialize a solver for a Lorenz system.
-    initialize = function(System_xp, control_xp) {
-      self$ptr <- Solver_new(System_xp, control_xp)
+    initialize = function(System_xp, control_xp, method = "rkck") {
+      self$ptr <- Solver_new(System_xp, control_xp, method)
     },
 
     #' @description Get current solver time.
