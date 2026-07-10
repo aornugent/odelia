@@ -10,6 +10,45 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// Canopy_new
+SEXP Canopy_new(double gain, double y0);
+RcppExport SEXP _odelia_Canopy_new(SEXP gainSEXP, SEXP y0SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type gain(gainSEXP);
+    Rcpp::traits::input_parameter< double >::type y0(y0SEXP);
+    rcpp_result_gen = Rcpp::wrap(Canopy_new(gain, y0));
+    return rcpp_result_gen;
+END_RCPP
+}
+// Canopy_adaptive_final
+double Canopy_adaptive_final(SEXP system_xp, SEXP control_xp, double Tmax);
+RcppExport SEXP _odelia_Canopy_adaptive_final(SEXP system_xpSEXP, SEXP control_xpSEXP, SEXP TmaxSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
+    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
+    rcpp_result_gen = Rcpp::wrap(Canopy_adaptive_final(system_xp, control_xp, Tmax));
+    return rcpp_result_gen;
+END_RCPP
+}
+// Canopy_record_replay_gradient
+Rcpp::List Canopy_record_replay_gradient(SEXP system_xp, SEXP control_xp, double Tmax, bool reuse_light);
+RcppExport SEXP _odelia_Canopy_record_replay_gradient(SEXP system_xpSEXP, SEXP control_xpSEXP, SEXP TmaxSEXP, SEXP reuse_lightSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
+    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
+    Rcpp::traits::input_parameter< bool >::type reuse_light(reuse_lightSEXP);
+    rcpp_result_gen = Rcpp::wrap(Canopy_record_replay_gradient(system_xp, control_xp, Tmax, reuse_light));
+    return rcpp_result_gen;
+END_RCPP
+}
 // System_new
 SEXP System_new(double sigma, double R, double b);
 RcppExport SEXP _odelia_System_new(SEXP sigmaSEXP, SEXP RSEXP, SEXP bSEXP) {
@@ -544,6 +583,9 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_odelia_Canopy_new", (DL_FUNC) &_odelia_Canopy_new, 2},
+    {"_odelia_Canopy_adaptive_final", (DL_FUNC) &_odelia_Canopy_adaptive_final, 3},
+    {"_odelia_Canopy_record_replay_gradient", (DL_FUNC) &_odelia_Canopy_record_replay_gradient, 4},
     {"_odelia_System_new", (DL_FUNC) &_odelia_System_new, 3},
     {"_odelia_System_pars", (DL_FUNC) &_odelia_System_pars, 1},
     {"_odelia_System_set_params", (DL_FUNC) &_odelia_System_set_params, 2},
