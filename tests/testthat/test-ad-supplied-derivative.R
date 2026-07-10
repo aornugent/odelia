@@ -17,6 +17,7 @@ g_of_a <- function(a) {
 
 test_that("supplied_derivative injects the IFT adjoint", {
   testthat::skip_if(is_pkgload_dll(), "Skipping AD workflow in pkgload load_all sessions due unstable native-pointer lifecycle.")
+  ensure_supplied_derivative_interface()
 
   for (a in c(0.3, 1.0, 2.5)) {
     res <- supplied_derivative_demo(a)

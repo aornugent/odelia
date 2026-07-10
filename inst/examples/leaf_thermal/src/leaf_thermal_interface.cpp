@@ -147,20 +147,13 @@ Rcpp::NumericVector LeafThermalSystem_get_current_drivers(SEXP LeafThermalSystem
 
 // Solver interface (Leaf-specific creation, generic operations)
 
-// Build a double Solver for a LeafThermalSystem. The system already carries its own
-// forcing, so drivers_xp is unused and kept only for signature compatibility.
+// Build a double Solver for a LeafThermalSystem.
 // [[Rcpp::export]]
 SEXP LeafSolver_new(SEXP system_xp, SEXP control_xp, SEXP drivers_xp) {
   Rcpp::XPtr<SystemType> sys(system_xp);
   Rcpp::XPtr<ode::OdeControl> ctrl(control_xp);
   return Rcpp::XPtr<ode::Solver<SystemType>>(
       new ode::Solver<SystemType>(*sys, *ctrl), true);
-}
-
-// Helper to get column names (Leaf-specific)
-inline Rcpp::CharacterVector get_leaf_column_names(SEXP solver_xp) {
-  auto solver = odelia::solver::get_solver<SystemType>(solver_xp);
-  return Rcpp::wrap(solver->get_system().record_colnames());
 }
 
 // All other Solver functions call the generic (double-only) templates.
@@ -227,16 +220,12 @@ std::size_t LeafSolver_get_history_size(SEXP solver_xp) {
 
 // [[Rcpp::export]]
 Rcpp::DataFrame LeafSolver_get_history_step(SEXP solver_xp, std::size_t i) {
-  return odelia::solver::Solver_get_history_step_impl<SystemType>(
-    solver_xp, i, get_leaf_column_names(solver_xp)
-  );
+  return odelia::solver::Solver_get_history_step_impl<SystemType>(solver_xp, i);
 }
 
 // [[Rcpp::export]]
 Rcpp::List LeafSolver_get_history(SEXP solver_xp) {
-  return odelia::solver::Solver_get_history_impl<SystemType>(
-    solver_xp, get_leaf_column_names(solver_xp)
-  );
+  return odelia::solver::Solver_get_history_impl<SystemType>(solver_xp);
 }
 
 // Value + least-squares gradient on the double handle. Observations are passed per

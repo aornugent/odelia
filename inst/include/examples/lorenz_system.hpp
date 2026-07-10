@@ -4,6 +4,7 @@
 #include <odelia/ode_solver.hpp>
 #include <XAD/XAD.hpp>
 #include <vector>
+#include <string>
 
 using namespace odelia;
 
@@ -30,6 +31,8 @@ public:
 
   template <class S2>
   rebind<S2> rebind_from() const {
+    // read the parameters and initial state back to plain double (xad::value), build
+    // the S2 copy from them, and set its initial state.
     rebind<S2> out(xad::value(sigma), xad::value(R), xad::value(b));
     const double ic[] = {xad::value(y0_init), xad::value(y1_init), xad::value(y2_init)};
     out.set_initial_state(ic, t0);
@@ -106,6 +109,10 @@ public:
     *it++ = dy1dt;
     *it++ = dy2dt;
     return it;
+  }
+
+  std::vector<std::string> record_colnames() const {
+    return {"time", "x", "y", "z", "dxdt", "dydt", "dzdt"};
   }
 
   std::vector<double> record_step() const {

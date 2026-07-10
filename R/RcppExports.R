@@ -209,7 +209,3 @@ Drivers_clear <- function(drivers_xp) {
     invisible(.Call(`_odelia_Drivers_clear`, drivers_xp))
 }
 
-supplied_derivative_demo <- function(a) {
-    .Call(`_odelia_supplied_derivative_demo`, a)
-}
-

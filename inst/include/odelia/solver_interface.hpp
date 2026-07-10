@@ -94,12 +94,12 @@ inline std::size_t Solver_get_history_size_impl(SEXP solver_xp) {
 }
 
 template<typename SystemType>
-inline Rcpp::DataFrame Solver_get_history_step_impl(SEXP solver_xp, std::size_t i,
-                                                    Rcpp::CharacterVector names) {
+inline Rcpp::DataFrame Solver_get_history_step_impl(SEXP solver_xp, std::size_t i) {
   auto solver = get_solver<SystemType>(solver_xp);
   if (i >= solver->get_history_size()) {
     Rcpp::stop("Index out of bounds");
   }
+  Rcpp::CharacterVector names = Rcpp::wrap(solver->get_system().record_colnames());
   std::vector<double> out = solver->get_history_step(i).record_step();
 
   Rcpp::List df_list(names.size());
@@ -111,8 +111,9 @@ inline Rcpp::DataFrame Solver_get_history_step_impl(SEXP solver_xp, std::size_t 
 }
 
 template<typename SystemType>
-inline Rcpp::List Solver_get_history_impl(SEXP solver_xp, Rcpp::CharacterVector names) {
+inline Rcpp::List Solver_get_history_impl(SEXP solver_xp) {
   auto solver = get_solver<SystemType>(solver_xp);
+  Rcpp::CharacterVector names = Rcpp::wrap(solver->get_system().record_colnames());
   const int ncols = names.size();
   const size_t nrows = solver->get_history_size();
   std::vector<std::vector<double>> cols(ncols);

@@ -111,8 +111,9 @@ public:
     time = t0;
     step = 0;
     if (has_recorded_field()) {
+      // light_history[step][stage]: take this first step's row of per-RK-stage values,
       stage_light = light_history.front();
-      bg_light = stage_light.front();
+      bg_light = stage_light.front();     // and the value the first stage will read.
     } else {
       if (replaying()) node_positions = positions_history.front();
       light = compute_light();
@@ -220,16 +221,16 @@ private:
   double t0;
 
   T y, dydt, light;
-  double bg_light = 0.0;   // recorded light for the current stage on a reuse replay
+  double bg_light = 0.0;   // on a reuse replay, the recorded light for the current RK stage
   double time;
 
   bool recording = false;
-  std::vector<std::vector<double>> positions_history;  // node positions per step
-  std::vector<std::vector<double>> light_history;      // light values [step][stage]
+  std::vector<std::vector<double>> positions_history;  // node positions per ODE step
+  std::vector<std::vector<double>> light_history;      // light per [ODE step][RK stage]
 
   std::size_t step = 0;
   std::vector<double> node_positions;   // positions built (recording) or loaded (replay)
-  std::vector<double> stage_light;      // this step's per-stage light values
+  std::vector<double> stage_light;      // this step's light at each of the six RK stages
   std::vector<double> pending_positions;
 };
 

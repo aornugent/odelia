@@ -290,15 +290,49 @@ optimiser loop (asking for value and gradient each iteration) amortizes them.
 
 **A bare ODE (no adaptive sub-numerics).** Implement the ODE interface plus the four
 contract members — `value_type`, `rebind` / `rebind_from`, `ad_parameters`,
-`ad_initial_state`. That's
-it: `compute_gradient` / `compute_jacobian` work, doubles in and out, and a downstream
-package gets `Solver_gradient` / `Solver_jacobian` for free. (`LorenzSystem`.)
+`ad_initial_state`. That's it: `compute_gradient` / `compute_jacobian` work, doubles in
+and out, and a downstream package gets `Solver_gradient` / `Solver_jacobian` for free.
+
+The complete member set:
+
+```cpp
+template <class S = double>
+class MySystem {
+public:
+  using value_type = S;
+
+  // Simulate: the ODE interface.
+  std::size_t ode_size() const;                          // number of state variables
+  double      ode_time() const;                          // current time
+  template <class It> It set_ode_state(It y, double t);  // load state at time t; recompute rates
+  template <class It> It ode_state(It out) const;        // write the current state
+  template <class It> It ode_rates(It out) const;        // write the current dy/dt
+  void reset();                                          // return to the initial state
+
+  // Differentiate: copy onto another scalar, and expose the inputs to seed active.
+  template <class S2> using rebind = MySystem<S2>;
+  template <class S2> rebind<S2> rebind_from() const;    // xad::value the config into an S2 copy
+  std::vector<S*> ad_parameters();                       // addresses of the active parameters
+  std::vector<S*> ad_initial_state();                    // addresses of the active initial state
+};
+```
+
+`LorenzSystem` is the worked example to copy from.
 
 **Rates that read an adaptively-refined background.** Add the `Replayable` hooks. Record the
 node **positions** your refiner chose (per accepted step) and the background **value** per
 RK stage; on replay, rebuild on the recorded positions with the active scalar. This is
 switched on by *doing reverse-mode AD*, not by any user flag — miss it and gradients are
-silently wrong wherever the adaptive component bites. (`CanopySystem`.)
+silently wrong wherever the adaptive component bites.
+
+```cpp
+void record_stage(int stage);     // per RK stage, record pass: stash a value
+void record_ode_step();           // per accepted step, record pass: commit the step
+void replay_step();               // per step, replay pass: load the recorded slice
+bool has_recorded_field() const;  // are recorded values present to reuse?
+```
+
+`CanopySystem` is the worked example.
 
 **A variant that holds a background fixed.** If you also want a cheap run that reads some
 recomputable quantity as a constant (its derivative zero) — a coupling field, held-fixed

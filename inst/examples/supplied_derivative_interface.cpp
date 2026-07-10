@@ -1,11 +1,14 @@
-/* Compiled backing for the supplied-derivative test (odelia is header-only, so the
- * demo has to be compiled somewhere).
+/* An example of odelia::ode::supplied_derivative, compiled on demand by
+ * test-ad-supplied-derivative.R (sourceCpp).
  *
- * Exercises odelia::ode::supplied_derivative: a value computed OFF the tape (a Newton
- * root-find) is made active by supplying its implicit-function-theorem partials, then
- * a downstream expression is differentiated through it without the solve being
- * recorded. The test compares against the closed-form derivative and finite differences.
+ * A value computed OFF the tape (a Newton root-find) is made active by supplying its
+ * implicit-function-theorem partials, then a downstream expression is differentiated
+ * through it without the solve being recorded. The test compares against the
+ * closed-form derivative and finite differences.
  */
+
+// [[Rcpp::depends(Rcpp, odelia)]]
+// [[Rcpp::plugins(cpp20)]]
 
 #include <Rcpp.h>
 #include <XAD/XAD.hpp>

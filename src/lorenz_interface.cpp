@@ -166,22 +166,15 @@ std::size_t Solver_get_history_size(SEXP solver_xp) {
   return odelia::solver::Solver_get_history_size_impl<SystemType>(solver_xp);
 }
 
-// Helper to get column names (Lorenz-specific)
-CharacterVector get_column_names() {
-  return CharacterVector::create("time", "x", "y", "z", "dxdt", "dydt", "dzdt");
-}
-
 // [[Rcpp::export]]
 Rcpp::DataFrame Solver_get_history_step(SEXP solver_xp, std::size_t i) {
-  return odelia::solver::Solver_get_history_step_impl<SystemType>(
-    solver_xp, i, get_column_names()
-  );
+  return odelia::solver::Solver_get_history_step_impl<SystemType>(solver_xp, i);
 }
 
 // [[Rcpp::export]]
 Rcpp::List Solver_get_history(SEXP solver_xp) {
   return odelia::solver::Solver_get_history_impl<SystemType>(
-    solver_xp, get_column_names()
+    solver_xp
   );
 }
 
