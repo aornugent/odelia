@@ -20,6 +20,21 @@ public:
     reset();  // initialises state & time
   }
 
+  // rebind names this System on a different scalar, and rebind_from copies its
+  // configuration (values only) into that copy. The gradient driver uses them to
+  // build the active (double -> AD) version of any System the same way, so a new
+  // System gets gradients just by providing these two members. Only values cross,
+  // so the copy starts with no tape state; the driver seeds the active inputs after.
+  template <class S2> using rebind = LorenzSystem<S2>;
+
+  template <class S2>
+  rebind<S2> rebind_from() const {
+    rebind<S2> out(xad::value(sigma), xad::value(R), xad::value(b));
+    const double ic[] = {xad::value(y0_init), xad::value(y1_init), xad::value(y2_init)};
+    out.set_initial_state(ic, t0);
+    return out;
+  }
+
   // ODE interface
   size_t ode_size() const { return ode_dimension; }
 
