@@ -581,6 +581,17 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// supplied_derivative_demo
+Rcpp::List supplied_derivative_demo(double a);
+RcppExport SEXP _odelia_supplied_derivative_demo(SEXP aSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type a(aSEXP);
+    rcpp_result_gen = Rcpp::wrap(supplied_derivative_demo(a));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Canopy_new", (DL_FUNC) &_odelia_Canopy_new, 2},
@@ -632,6 +643,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Drivers_evaluate_range", (DL_FUNC) &_odelia_Drivers_evaluate_range, 3},
     {"_odelia_Drivers_get_names", (DL_FUNC) &_odelia_Drivers_get_names, 1},
     {"_odelia_Drivers_clear", (DL_FUNC) &_odelia_Drivers_clear, 1},
+    {"_odelia_supplied_derivative_demo", (DL_FUNC) &_odelia_supplied_derivative_demo, 1},
     {NULL, NULL, 0}
 };
 
