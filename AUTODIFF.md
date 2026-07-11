@@ -6,7 +6,7 @@ of, who owns what, the two axes every workflow is a point on, the contract a Sys
 implements to be differentiable, and the one way to get an adaptive-component gradient
 wrong. Self-contained.
 
-**Companion:** [`ARCHITECTURE.md`](../ARCHITECTURE.md) — how the XAD `Tape` runtime is
+**Companion:** [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the XAD `Tape` runtime is
 compiled once and linked across the DLL boundary. Read it before touching the build;
 this document is about the API, not the link.
 

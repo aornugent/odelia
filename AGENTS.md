@@ -62,7 +62,7 @@ non-obvious choice — and nothing else. The bar the AD surface is held to:
   the file — the physics is the point. Give an example a real applied domain, not an
   abstract stand-in.
 
-`docs/autodiff.md` is the reference for the AD surface a System implements; `ARCHITECTURE.md`
+`AUTODIFF.md` is the reference for the AD surface a System implements; `ARCHITECTURE.md`
 for the XAD `Tape` link. Don't hand-edit generated files (`R/RcppExports.R`,
 `src/RcppExports.cpp`, `NAMESPACE`, `man/`).
 

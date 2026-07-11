@@ -7,7 +7,7 @@
 > own checks.
 
 > For **automatic differentiation** — the gradient API and the contract a System
-> implements to be differentiable — see [`docs/autodiff.md`](docs/autodiff.md).
+> implements to be differentiable — see [`AUTODIFF.md`](AUTODIFF.md).
 > This document is only about how the `Tape` runtime compiles and links.
 
 ## Why there is compiled code at all
