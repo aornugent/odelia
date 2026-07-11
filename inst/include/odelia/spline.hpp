@@ -34,6 +34,8 @@
 #include <cstdio>
 #include <vector>
 #include <algorithm>
+#include <type_traits>
+#include <XAD/XAD.hpp>  // xad::value, for the active-query evaluation below
 
 namespace odelia {
 namespace spline {
@@ -412,6 +414,43 @@ namespace spline {
             interpol = ((m_a[idx] * h + m_b[idx]) * h + m_c[idx]) * h + m_y[idx];
          }
          return interpol;
+      }
+
+      // Active-query evaluation: the same per-segment polynomial as
+      // operator()(double), but the query x carries a scalar Q (e.g. an active
+      // plant height) while the knot positions m_x stay double. The segment is
+      // chosen from x's passive value -- the derivative does not change which
+      // segment applies -- and the polynomial is then evaluated in Q, so the
+      // slope dy/dx flows through h = x - m_x[idx]. With double coefficients
+      // (a frozen profile) this is exactly the sensitivity a plant reading a
+      // frozen light profile at its own active height needs. Restricted to
+      // non-double Q so the double operator() above stays the chosen overload
+      // for the (bit-identical) resident path.
+      template <typename Q, typename = std::enable_if_t<!std::is_same_v<Q, double>>>
+      Q operator()(Q x) const
+      {
+         const size_t n = m_x.size();
+         const double xv = xad::value(x);
+         const int last = static_cast<int>(n) - 1;
+         int idx = m_uniform
+                     ? static_cast<int>((xv - m_x0) * m_inv_dx)
+                     : static_cast<int>((xv - m_x[0]) * (last / (m_x[last] - m_x[0])));
+         if (idx < 0)
+            idx = 0;
+         else if (idx > last)
+            idx = last;
+         while (idx > 0 && m_x[idx] >= xv)
+            --idx;
+         while (idx < last && m_x[idx + 1] < xv)
+            ++idx;
+
+         const Q h = x - m_x[idx];
+         if (xv < m_x[0])
+            return Q((m_b[0] * h + m_c[0]) * h + m_y[0]);
+         else if (xv > m_x[n - 1])
+            return Q((m_b[n - 1] * h + m_c[n - 1]) * h + m_y[n - 1]);
+         else
+            return Q(((m_a[idx] * h + m_b[idx]) * h + m_c[idx]) * h + m_y[idx]);
       }
 
       // Analytic first derivative dy/dx at x, consistent with operator() (the

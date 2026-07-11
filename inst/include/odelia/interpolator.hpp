@@ -158,6 +158,16 @@ public:
     return spline(u);
   }
 
+  // Active-query evaluation: the interpolated value at an active point u (e.g.
+  // a plant's own height), with the knot values held fixed. Delegates to the
+  // spline's active-query overload; the derivative flows through the query, so
+  // reading a frozen profile at an active height carries dy/du. Restricted to
+  // non-double Q so the double operator() above stays the resident path.
+  template <typename Q, typename = std::enable_if_t<!std::is_same_v<Q, double>>>
+  Q operator()(Q u) const {
+    return spline(u);
+  }
+
   // Analytic first derivative dy/du at u (exact derivative of the interpolating
   // polynomial; see Spline::deriv). Useful for exact/smooth gradients.
   S deriv(double u) const {
