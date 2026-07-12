@@ -68,9 +68,13 @@ size_t aux_size(ForwardIterator first, ForwardIterator last) {
   return ret;
 }
 
-template <typename ForwardIterator>
-const_iterator set_ode_state(ForwardIterator first, ForwardIterator last,
-                             const_iterator it) {
+// The state iterator is a template parameter so a container of sub-systems
+// serializes at whatever scalar the Solver drives -- vector<double>::iterator on
+// the double pass, vector<active>::iterator on a gradient pass. The double R
+// funnel (r_ode_state and friends below) reaches these by passing a double
+// iterator in; nothing here is nailed to double.
+template <typename ForwardIterator, typename It>
+It set_ode_state(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->set_ode_state(it);
     ++first;
@@ -78,9 +82,8 @@ const_iterator set_ode_state(ForwardIterator first, ForwardIterator last,
   return it;
 }
 
-template <typename ForwardIterator>
-iterator ode_state(ForwardIterator first, ForwardIterator last,
-                   iterator it) {
+template <typename ForwardIterator, typename It>
+It ode_state(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_state(it);
     ++first;
@@ -88,9 +91,8 @@ iterator ode_state(ForwardIterator first, ForwardIterator last,
   return it;
 }
 
-template <typename ForwardIterator>
-iterator ode_rates(ForwardIterator first, ForwardIterator last,
-                   iterator it) {
+template <typename ForwardIterator, typename It>
+It ode_rates(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_rates(it);
     ++first;
@@ -98,9 +100,8 @@ iterator ode_rates(ForwardIterator first, ForwardIterator last,
   return it;
 }
 
-template <typename ForwardIterator>
-iterator ode_aux(ForwardIterator first, ForwardIterator last,
-                   iterator it) {
+template <typename ForwardIterator, typename It>
+It ode_aux(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_aux(it);
     ++first;
