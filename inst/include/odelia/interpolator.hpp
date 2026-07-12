@@ -6,6 +6,7 @@
 #include <list>
 #include <cmath>
 #include <limits>
+#include <concepts>
 #include <XAD/XAD.hpp>
 #include <odelia/spline.hpp>
 #include <odelia/ode_util.hpp>
@@ -54,8 +55,12 @@ public:
 
     double dx = (b - a) / static_cast<double>(nbase - 1);
     const double dxmin = dx / std::pow(2.0, static_cast<double>(max_depth));
-    for (std::size_t i = 0; i < nbase; ++i) {
-      const double xi = a + dx * static_cast<double>(i);
+    // Seed the base grid by accumulation (x += dx) with an exact top endpoint,
+    // matching plant's util::seq_len, so a ResourceSpline routed through
+    // construct() is bit-identical to the AdaptiveInterpolator it replaces.
+    double x = a;
+    for (std::size_t i = 0; i < nbase; ++i, x += dx) {
+      const double xi = (i + 1 == nbase) ? b : x;
       xs.push_back(xi);
       ys.push_back(target(xi));
       refine_here.push_back(i > 0);
@@ -163,6 +168,31 @@ public:
   S deriv(double u) const {
     check_active();
     return spline.deriv(u);
+  }
+
+  // Evaluation at an active query point (e.g. a plant height on the tape). The
+  // knot positions are frozen double, so the segment is a value-chosen selector
+  // whose derivative is structurally zero; the value comes from the double eval
+  // and the query derivative from the analytic deriv() -- the value + derivative
+  // wrapper deriv() exists for. Exact for first-order AD, and correct whether the
+  // knot values are frozen double (derivative flows only through the query) or
+  // active (through both), since both terms carry whatever scalars are live.
+  template <typename Q>
+    requires (!std::same_as<Q, double>)
+  Q eval(Q u) const {
+    check_active();
+    const double uv = xad::value(u);
+    if (not extrapolate and (uv < min() or uv > max())) {
+      util::stop("Extrapolation disabled and evaluation point outside of interpolated domain.");
+    }
+    return spline(uv) + spline.deriv(uv) * (u - uv);
+  }
+
+  template <typename Q>
+    requires (!std::same_as<Q, double>)
+  Q operator()(Q u) const {
+    const double uv = xad::value(u);
+    return spline(uv) + spline.deriv(uv) * (u - uv);
   }
 
   // Return the number of (x,y) pairs contained in the Interpolator.
