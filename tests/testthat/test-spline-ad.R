@@ -90,6 +90,35 @@ compile_spline_ad_interface <- function() {
         odelia::interpolator::Interpolator I;   // = basic_interpolator<double>
         I.init(x, y);
         return I.eval(q);
+      }
+
+      // Active QUERY on a frozen (double) interpolator -- the crown/light read at
+      // an active plant height. Returns (value, d(value)/d(query)); the value must
+      // equal the double eval and the derivative the analytic deriv().
+      // [[Rcpp::export]]
+      Rcpp::NumericVector interp_query_value_grad(std::vector<double> x,
+                                                  std::vector<double> y, double q) {
+        using ad = xad::adj<double>;
+        using ad_t = ad::active_type;
+        ad::tape_type tape;
+        ad_t qa = q;
+        tape.registerInput(qa);
+        tape.newRecording();
+        odelia::interpolator::basic_interpolator<double> I;   // frozen double values
+        I.init(x, y);
+        ad_t val = I(qa);                                     // active-query overload
+        tape.registerOutput(val);
+        xad::derivative(val) = 1.0;
+        tape.computeAdjoints();
+        return Rcpp::NumericVector::create(xad::value(val), xad::derivative(qa));
+      }
+
+      // [[Rcpp::export]]
+      double interp_deriv_double(std::vector<double> x, std::vector<double> y,
+                                 double q) {
+        odelia::interpolator::Interpolator I;
+        I.init(x, y);
+        return I.deriv(q);
       }', verbose = FALSE)
     NULL
   }, error = function(e) e)
@@ -158,4 +187,28 @@ testthat::test_that("basic_interpolator<ad> matches FD (the wrapper plant uses)"
 
   expect_equal(g_ad, g_fd, tolerance = 1e-6)
   expect_equal(sum(g_ad), 1, tolerance = 1e-9)
+})
+
+testthat::test_that("basic_interpolator active-query value + derivative (frozen knots)", {
+  testthat::skip_if(is_pkgload_dll(),
+    "Skipping AD interpolator active-query in pkgload load_all sessions.")
+  compile_spline_ad_interface()
+
+  x <- c(0.0, 1.0, 2.5, 4.0, 6.0, 9.0)
+  y <- sin(0.4 * x) + 0.1 * x
+
+  for (q in c(0.7, 3.3, 5.1, 7.8)) {
+    vg <- interp_query_value_grad(x, y, q)
+
+    # Value on the tape equals the plain double eval.
+    expect_equal(vg[1], interp_value_double(x, y, q), tolerance = 1e-12)
+
+    # d(value)/d(query) equals the analytic derivative...
+    expect_equal(vg[2], interp_deriv_double(x, y, q), tolerance = 1e-10)
+
+    # ...and central finite differences of the value.
+    h <- 1e-6
+    fd <- (interp_value_double(x, y, q + h) - interp_value_double(x, y, q - h)) / (2 * h)
+    expect_equal(vg[2], fd, tolerance = 1e-6)
+  }
 })
