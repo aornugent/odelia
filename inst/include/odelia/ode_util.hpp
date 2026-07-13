@@ -31,6 +31,17 @@ inline bool is_finite(double x) {
   return std::isfinite(x);
 }
 
+// Strip every AD layer off a value, all the way down to the passive double.
+// xad::value() peels one layer, which is enough for a single active type
+// (AReal<double> or FReal<double>) but NOT for a nested type such as
+// FReal<AReal<double>> (there xad::value gives AReal<double>, not double).
+// Refinement / guard decisions that must be plain `double` need the full strip
+// regardless of how many AD layers are stacked (nested tangent-over-adjoint,
+// odelia#35). Recurses until it bottoms out at double.
+inline double to_passive(double x) { return x; }
+template <typename T>
+inline double to_passive(const T& x) { return to_passive(xad::value(x)); }
+
 inline void check_length(size_t received, size_t expected)
 {
   if (expected != received)

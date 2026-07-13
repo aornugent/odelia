@@ -68,7 +68,10 @@ public:
     rebuild(xs, ys);
 
     auto within_tol = [&](S y_true, S y_pred) {
-      const double t = xad::value(y_true), p = xad::value(y_pred);
+      // Refinement is a value-only decision; strip ALL AD layers (util::to_passive,
+      // not xad::value) so it is plain double even for a nested type such as
+      // FReal<AReal<double>> (odelia#35).
+      const double t = util::to_passive(y_true), p = util::to_passive(y_pred);
       return std::fabs(t - p) < atol || std::fabs(1.0 - p / t) < rtol;
     };
 
@@ -199,7 +202,7 @@ public:
     requires (!std::same_as<Q, double>)
   Q eval(Q u) const {
     check_active();
-    const double uv = xad::value(u);
+    const double uv = util::to_passive(u);
     if (not extrapolate and (uv < min() or uv > max())) {
       util::stop("Extrapolation disabled and evaluation point outside of interpolated domain.");
     }
@@ -209,19 +212,20 @@ public:
   template <typename Q>
     requires (!std::same_as<Q, double>)
   Q operator()(Q u) const {
-    const double uv = xad::value(u);
+    const double uv = util::to_passive(u);
     return spline(uv) + spline.deriv(uv) * (u - uv);
   }
 
   // Value at an active query point with the query-point derivative FROZEN: the
   // knot-value derivatives are carried, but d(value)/d(query) is dropped (the
-  // read is taken at xad::value(u)). See the contract above. Bit-identical to
-  // eval() on the double path.
+  // read is taken at the fully-stripped query value). See the contract above.
+  // Bit-identical to eval() on the double path, and nested-type safe (the query
+  // index is util::to_passive(u), all AD layers stripped -- odelia#35).
   template <typename Q>
     requires (!std::same_as<Q, double>)
   Q eval_frozen_query(Q u) const {
     check_active();
-    const double uv = xad::value(u);
+    const double uv = util::to_passive(u);
     if (not extrapolate and (uv < min() or uv > max())) {
       util::stop("Extrapolation disabled and evaluation point outside of interpolated domain.");
     }
