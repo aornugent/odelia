@@ -2,6 +2,7 @@
 .odelia_test_cache$ode_loaded <- FALSE
 .odelia_test_cache$leaf_loaded <- FALSE
 .odelia_test_cache$supplied_derivative_loaded <- FALSE
+.odelia_test_cache$growing_resize_loaded <- FALSE
 .odelia_test_cache$odelia_so <- NA_character_
 
 resolve_test_path <- function(installed_rel, source_rel) {
@@ -183,5 +184,57 @@ ensure_supplied_derivative_interface <- function(rebuild = FALSE) {
   }
 
   .odelia_test_cache$supplied_derivative_loaded <- TRUE
+  invisible(TRUE)
+}
+
+# Compile and source the growing-dimension example interface on demand. Same
+# sourceCpp mechanics as the supplied_derivative demo (link against the odelia
+# library for the XAD Tape symbols; skip gracefully in a load_all session).
+ensure_growing_resize_interface <- function(rebuild = FALSE) {
+  if (!rebuild && isTRUE(.odelia_test_cache$growing_resize_loaded)) {
+    return(invisible(TRUE))
+  }
+
+  ensure_ode_interface_loaded(rebuild = rebuild)
+
+  include_dir <- dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  gr_cpp <- resolve_test_path(
+    "examples/growing_resize_interface.cpp",
+    "inst/examples/growing_resize_interface.cpp"
+  )
+
+  odelia_so <- .odelia_test_cache$odelia_so
+  pkg_libs <- if (is.character(odelia_so) &&
+                  length(odelia_so) == 1 &&
+                  !is.na(odelia_so) &&
+                  nzchar(odelia_so) &&
+                  file.exists(odelia_so)) {
+    shQuote(normalizePath(odelia_so, winslash = "/", mustWork = FALSE))
+  } else {
+    Sys.getenv("PKG_LIBS", unset = "")
+  }
+  withr::local_envvar(
+    PKG_CPPFLAGS = paste0("-I", include_dir),
+    PKG_LIBS = pkg_libs
+  )
+
+  source_cpp_result <- tryCatch(
+    {
+      Rcpp::sourceCpp(gr_cpp, rebuild = rebuild, verbose = FALSE)
+      NULL
+    },
+    error = function(e) e
+  )
+
+  if (inherits(source_cpp_result, "error")) {
+    msg <- conditionMessage(source_cpp_result)
+    if (grepl("active_tape_", msg, fixed = TRUE)) {
+      testthat::skip("growing_resize sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
+    }
+    stop(source_cpp_result)
+  }
+
+  .odelia_test_cache$growing_resize_loaded <- TRUE
   invisible(TRUE)
 }

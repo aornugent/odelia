@@ -97,6 +97,12 @@ public:
     solver.set_state_from_system(system);
   }
 
+  // Reserve the state-vector capacity a growing System will reach. Call once
+  // before replaying a run whose System introduces state mid-run, so the
+  // per-introduction resize never reallocates and active tape slots stay put
+  // (the growing-runnable contract for a reverse-mode gradient).
+  void reserve_state(std::size_t n) { solver.reserve(n); }
+
   void set_state(std::vector<double> y, double time)
   {
     util::check_length(y.size(), system.ode_size());
