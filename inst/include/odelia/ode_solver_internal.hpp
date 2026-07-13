@@ -30,6 +30,20 @@ public:
   void reset(const System& system);
   void set_state_from_system(const System& system);
 
+  // Reserve capacity for the persistent state/rate vectors. For a growing System
+  // (ode_size() increases mid-run as it introduces state), reserving the final
+  // size once means the resize() at each growth step stays within capacity and
+  // never reallocates -- so existing elements keep their address, and under an
+  // active scalar their tape slots are never moved out from under the adjoint
+  // sweep. The stepper's per-step scratch is recomputed each derivs, so it is
+  // deliberately not reserved here.
+  void reserve(size_t n) {
+    y.reserve(n);
+    yerr.reserve(n);
+    dydt_in.reserve(n);
+    dydt_out.reserve(n);
+  }
+
   state_type get_state() const {return y;}
   double get_time() const {return time;}
   std::vector<double> get_times() const {return prev_times;}
