@@ -170,13 +170,31 @@ public:
     return spline.deriv(u);
   }
 
-  // Evaluation at an active query point (e.g. a plant height on the tape). The
-  // knot positions are frozen double, so the segment is a value-chosen selector
-  // whose derivative is structurally zero; the value comes from the double eval
-  // and the query derivative from the analytic deriv() -- the value + derivative
-  // wrapper deriv() exists for. Exact for first-order AD, and correct whether the
-  // knot values are frozen double (derivative flows only through the query) or
-  // active (through both), since both terms carry whatever scalars are live.
+  // Evaluation at an active query point (e.g. a plant height on the tape).
+  //
+  // There are two derivatives an active query can carry, and the caller must
+  // choose deliberately (odelia#38) -- getting this wrong caused a compounding
+  // gradient bug in plant (see plant#39 / the "query-height derivative" note in
+  // plant's ad-implementation.md):
+  //
+  //   * the derivative w.r.t. the KNOT VALUES -- how the interpolated value moves
+  //     when the fitted data moves. Always carried (the spline coefficients are
+  //     active in the knot values). This is the resident-feedback channel.
+  //   * the derivative w.r.t. the QUERY POINT `u` -- d(value)/du. This is the
+  //     interpolant's analytic tangent spline.deriv(uv). It is EXACT for the
+  //     interpolating polynomial, but for an under-resolved spline that polynomial
+  //     tangent is a poor estimate of the true field's slope, and recording it for
+  //     a query point that is an evolving ODE state makes a spurious slope compound
+  //     across a time integration.
+  //
+  // eval(Q) / operator()(Q) CARRY the query-point derivative (the analytic
+  // tangent). Use these when the query point is a genuine differentiation input
+  // and the spline is well resolved (e.g. a fixed quadrature abscissa in a crown
+  // integral). eval_frozen_query(Q) FREEZES the query-point derivative (reads at
+  // xad::value(u)) while still carrying the knot-value derivatives. Use it on a
+  // rate path where the query point is an evolving ODE state. Both are exact for
+  // first-order AD in the knot values; they differ only in the query channel, and
+  // both reduce to spline(u) on the double path.
   template <typename Q>
     requires (!std::same_as<Q, double>)
   Q eval(Q u) const {
@@ -193,6 +211,21 @@ public:
   Q operator()(Q u) const {
     const double uv = xad::value(u);
     return spline(uv) + spline.deriv(uv) * (u - uv);
+  }
+
+  // Value at an active query point with the query-point derivative FROZEN: the
+  // knot-value derivatives are carried, but d(value)/d(query) is dropped (the
+  // read is taken at xad::value(u)). See the contract above. Bit-identical to
+  // eval() on the double path.
+  template <typename Q>
+    requires (!std::same_as<Q, double>)
+  Q eval_frozen_query(Q u) const {
+    check_active();
+    const double uv = xad::value(u);
+    if (not extrapolate and (uv < min() or uv > max())) {
+      util::stop("Extrapolation disabled and evaluation point outside of interpolated domain.");
+    }
+    return spline(uv);
   }
 
   // Return the number of (x,y) pairs contained in the Interpolator.

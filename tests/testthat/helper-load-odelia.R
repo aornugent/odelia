@@ -238,3 +238,55 @@ ensure_growing_resize_interface <- function(rebuild = FALSE) {
   .odelia_test_cache$growing_resize_loaded <- TRUE
   invisible(TRUE)
 }
+
+# Compile and source the directional-derivative example interface on demand. Same
+# sourceCpp mechanics as the supplied_derivative demo (link against the odelia
+# library for the XAD Tape symbols; skip gracefully in a load_all session).
+ensure_directional_derivative_interface <- function(rebuild = FALSE) {
+  if (!rebuild && isTRUE(.odelia_test_cache$directional_derivative_loaded)) {
+    return(invisible(TRUE))
+  }
+
+  ensure_ode_interface_loaded(rebuild = rebuild)
+
+  include_dir <- dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  dd_cpp <- resolve_test_path(
+    "examples/directional_derivative_interface.cpp",
+    "inst/examples/directional_derivative_interface.cpp"
+  )
+
+  odelia_so <- .odelia_test_cache$odelia_so
+  pkg_libs <- if (is.character(odelia_so) &&
+                  length(odelia_so) == 1 &&
+                  !is.na(odelia_so) &&
+                  nzchar(odelia_so) &&
+                  file.exists(odelia_so)) {
+    shQuote(normalizePath(odelia_so, winslash = "/", mustWork = FALSE))
+  } else {
+    Sys.getenv("PKG_LIBS", unset = "")
+  }
+  withr::local_envvar(
+    PKG_CPPFLAGS = paste0("-I", include_dir),
+    PKG_LIBS = pkg_libs
+  )
+
+  source_cpp_result <- tryCatch(
+    {
+      Rcpp::sourceCpp(dd_cpp, rebuild = rebuild, verbose = FALSE)
+      NULL
+    },
+    error = function(e) e
+  )
+
+  if (inherits(source_cpp_result, "error")) {
+    msg <- conditionMessage(source_cpp_result)
+    if (grepl("active_tape_", msg, fixed = TRUE)) {
+      testthat::skip("directional_derivative sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
+    }
+    stop(source_cpp_result)
+  }
+
+  .odelia_test_cache$directional_derivative_loaded <- TRUE
+  invisible(TRUE)
+}
