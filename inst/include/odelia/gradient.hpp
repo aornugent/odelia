@@ -123,6 +123,89 @@ std::pair<double, std::vector<double>> compute_gradient(
     return {values[0], jacobian[0]};
 }
 
+// Forward-mode Jacobian-vector product: the directional derivative of a functional
+// of an ODE solve along `direction` in the seeded-input space (`J v`). Forward mode
+// needs NO tape -- one augmented run, the tangent travels alongside the value, so a
+// growing-dimension resize is transparent (nothing to register, reserve, or keep
+// alive across the resize -- all of which the reverse path must handle). `direction`
+// is ordered params-then-ics, matching `values`. Returns {values, jvp} with
+// jvp[i] = d(output_i)/d(direction).
+//
+// Its dual, `compute_gradient`/`compute_jacobian` (reverse), and this forward pass
+// satisfy the adjoint dot-product identity <J v, u> = <v, Jᵀ u>: for random v, u the
+// two must agree to machine precision, giving an FD-free correctness oracle (one
+// forward + one reverse pass, no perturbation and no inner-solve re-run). It also
+// wins outright when the codomain is small and the seeded-input set is large only in
+// the *other* direction -- here it is the JVP primitive and the oracle's forward leg.
+template<typename Solver, typename Functional>
+std::pair<std::vector<double>, std::vector<double>> compute_jvp(
+    Solver& solver,
+    const DifferentiationTargets& targets,
+    const std::vector<double>& direction,
+    Functional&& functional
+) {
+    using fwd_type = typename xad::fwd<double>::active_type;  // FReal<double>: one tangent layer
+
+    if (targets.empty()) {
+        util::stop("DifferentiationTargets must seed at least one input");
+    }
+    if (targets.size() != targets.values.size()) {
+        util::stop("DifferentiationTargets: 'values' must match 'params' + 'ics'");
+    }
+    util::check_length(direction.size(), targets.size());
+    const std::size_t n_params = solver.get_system_ref().ad_parameters().size();
+    const std::size_t n_ics    = solver.get_system_ref().ad_initial_state().size();
+    for (int i : targets.params) {
+        if (i < 0 || static_cast<std::size_t>(i) >= n_params)
+            util::stop("DifferentiationTargets: parameter index out of range");
+    }
+    for (int j : targets.ics) {
+        if (j < 0 || static_cast<std::size_t>(j) >= n_ics)
+            util::stop("DifferentiationTargets: initial-state index out of range");
+    }
+
+    // Seed the chosen inputs with their value and their tangent (the direction
+    // component). No tape is created or activated -- forward mode is self-contained.
+    auto& sys = solver.get_system_ref();
+    auto params = sys.ad_parameters();
+    auto ics    = sys.ad_initial_state();
+    std::size_t k = 0;
+    for (int i : targets.params) {
+        *params[i] = fwd_type(targets.values[k]);
+        xad::derivative(*params[i]) = direction[k];
+        ++k;
+    }
+    for (int j : targets.ics) {
+        *ics[j] = fwd_type(targets.values[k]);
+        xad::derivative(*ics[j]) = direction[k];
+        ++k;
+    }
+    solver.reset();
+    solver.run();
+
+    auto outputs = functional(solver);
+    std::vector<double> values(outputs.size()), jvp(outputs.size());
+    for (std::size_t o = 0; o < outputs.size(); ++o) {
+        values[o] = xad::value(outputs[o]);
+        jvp[o]    = xad::derivative(outputs[o]);
+    }
+    return {values, jvp};
+}
+
+// Scalar convenience: the directional derivative of a scalar functional along
+// `direction`, returning {value, jvp}.
+template<typename Solver, typename Functional>
+std::pair<double, double> compute_directional_derivative(
+    Solver& solver,
+    const DifferentiationTargets& targets,
+    const std::vector<double>& direction,
+    Functional&& functional
+) {
+    scalar_functional<std::decay_t<Functional>> one{std::forward<Functional>(functional)};
+    auto [values, jvp] = compute_jvp(solver, targets, direction, one);
+    return {values[0], jvp[0]};
+}
+
 // Sum of squared residuals between predicted and measured observations.
 template<typename T>
 T sum_of_squares(const std::vector<std::vector<T>>& predicted,
