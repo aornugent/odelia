@@ -290,3 +290,55 @@ ensure_directional_derivative_interface <- function(rebuild = FALSE) {
   .odelia_test_cache$directional_derivative_loaded <- TRUE
   invisible(TRUE)
 }
+
+# Compile and source the JVP / dot-product-oracle example interface on demand. Same
+# sourceCpp mechanics as the supplied_derivative demo (link against the odelia
+# library for the XAD Tape symbols; skip gracefully in a load_all session).
+ensure_jvp_oracle_interface <- function(rebuild = FALSE) {
+  if (!rebuild && isTRUE(.odelia_test_cache$jvp_oracle_loaded)) {
+    return(invisible(TRUE))
+  }
+
+  ensure_ode_interface_loaded(rebuild = rebuild)
+
+  include_dir <- dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  jo_cpp <- resolve_test_path(
+    "examples/jvp_oracle_interface.cpp",
+    "inst/examples/jvp_oracle_interface.cpp"
+  )
+
+  odelia_so <- .odelia_test_cache$odelia_so
+  pkg_libs <- if (is.character(odelia_so) &&
+                  length(odelia_so) == 1 &&
+                  !is.na(odelia_so) &&
+                  nzchar(odelia_so) &&
+                  file.exists(odelia_so)) {
+    shQuote(normalizePath(odelia_so, winslash = "/", mustWork = FALSE))
+  } else {
+    Sys.getenv("PKG_LIBS", unset = "")
+  }
+  withr::local_envvar(
+    PKG_CPPFLAGS = paste0("-I", include_dir),
+    PKG_LIBS = pkg_libs
+  )
+
+  source_cpp_result <- tryCatch(
+    {
+      Rcpp::sourceCpp(jo_cpp, rebuild = rebuild, verbose = FALSE)
+      NULL
+    },
+    error = function(e) e
+  )
+
+  if (inherits(source_cpp_result, "error")) {
+    msg <- conditionMessage(source_cpp_result)
+    if (grepl("active_tape_", msg, fixed = TRUE)) {
+      testthat::skip("jvp_oracle sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
+    }
+    stop(source_cpp_result)
+  }
+
+  .odelia_test_cache$jvp_oracle_loaded <- TRUE
+  invisible(TRUE)
+}
