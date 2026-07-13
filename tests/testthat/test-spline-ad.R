@@ -93,24 +93,34 @@ compile_spline_ad_interface <- function() {
       }
 
       // Active QUERY on a frozen (double) interpolator -- the crown/light read at
-      // an active plant height. Returns (value, d(value)/d(query)); the value must
-      // equal the double eval and the derivative the analytic deriv().
+      // an active plant height. Returns (value, d(value)/d(query) from the explicit
+      // tangent read, d(value)/d(query) from the DEFAULT read). The default read must
+      // FREEZE the query derivative (0); the explicit eval_with_query_derivative
+      // returns the analytic deriv() (odelia#38).
       // [[Rcpp::export]]
       Rcpp::NumericVector interp_query_value_grad(std::vector<double> x,
                                                   std::vector<double> y, double q) {
         using ad = xad::adj<double>;
         using ad_t = ad::active_type;
-        ad::tape_type tape;
-        ad_t qa = q;
-        tape.registerInput(qa);
-        tape.newRecording();
         odelia::interpolator::basic_interpolator<double> I;   // frozen double values
         I.init(x, y);
-        ad_t val = I(qa);                                     // active-query overload
-        tape.registerOutput(val);
-        xad::derivative(val) = 1.0;
-        tape.computeAdjoints();
-        return Rcpp::NumericVector::create(xad::value(val), xad::derivative(qa));
+
+        // Explicit tangent read: carries d(value)/d(query).
+        double val, dq_tangent, dq_default;
+        {
+          ad::tape_type tape; ad_t qa = q; tape.registerInput(qa); tape.newRecording();
+          ad_t v = I.eval_with_query_derivative(qa);
+          tape.registerOutput(v); xad::derivative(v) = 1.0; tape.computeAdjoints();
+          val = xad::value(v); dq_tangent = xad::derivative(qa);
+        }
+        // Default read: query derivative frozen (must be 0).
+        {
+          ad::tape_type tape; ad_t qa = q; tape.registerInput(qa); tape.newRecording();
+          ad_t v = I(qa);
+          tape.registerOutput(v); xad::derivative(v) = 1.0; tape.computeAdjoints();
+          dq_default = xad::derivative(qa);
+        }
+        return Rcpp::NumericVector::create(val, dq_tangent, dq_default);
       }
 
       // [[Rcpp::export]]
@@ -203,12 +213,17 @@ testthat::test_that("basic_interpolator active-query value + derivative (frozen 
     # Value on the tape equals the plain double eval.
     expect_equal(vg[1], interp_value_double(x, y, q), tolerance = 1e-12)
 
-    # d(value)/d(query) equals the analytic derivative...
+    # The EXPLICIT tangent read (eval_with_query_derivative) carries d(value)/d(query)
+    # = the analytic derivative ...
     expect_equal(vg[2], interp_deriv_double(x, y, q), tolerance = 1e-10)
 
-    # ...and central finite differences of the value.
+    # ... and central finite differences of the value.
     h <- 1e-6
     fd <- (interp_value_double(x, y, q + h) - interp_value_double(x, y, q - h)) / (2 * h)
     expect_equal(vg[2], fd, tolerance = 1e-6)
+
+    # The DEFAULT active read (odelia#38) FREEZES the query derivative -- it must be
+    # exactly zero, so a rate-path caller cannot accidentally record the tangent.
+    expect_equal(vg[3], 0, tolerance = 1e-14)
   }
 })
