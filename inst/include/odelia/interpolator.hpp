@@ -175,29 +175,29 @@ public:
 
   // Evaluation at an active query point (e.g. a plant height on the tape).
   //
-  // There are two derivatives an active query can carry, and the caller must
-  // choose deliberately (odelia#38) -- getting this wrong caused a compounding
-  // gradient bug in plant (see plant#39 / the "query-height derivative" note in
-  // plant's ad-implementation.md):
+  // An active query has two derivative channels, and one of them is a footgun
+  // (it caused a compounding gradient bug in plant -- plant#39 / the "query-height
+  // derivative" note in plant's ad-implementation.md):
+  //   * the KNOT-VALUE derivative -- how the value moves when the fitted data moves.
+  //     ALWAYS carried (the spline coefficients are active in the knot values). This
+  //     is the resident-feedback channel.
+  //   * the QUERY-POINT derivative d(value)/du -- the interpolant's analytic tangent
+  //     spline.deriv(uv). Exact for the interpolating polynomial, but for an
+  //     under-resolved spline that tangent is a poor estimate of the true field's
+  //     slope, and recording it for a query point that is an EVOLVING ODE STATE makes
+  //     a spurious slope compound across a time integration.
   //
-  //   * the derivative w.r.t. the KNOT VALUES -- how the interpolated value moves
-  //     when the fitted data moves. Always carried (the spline coefficients are
-  //     active in the knot values). This is the resident-feedback channel.
-  //   * the derivative w.r.t. the QUERY POINT `u` -- d(value)/du. This is the
-  //     interpolant's analytic tangent spline.deriv(uv). It is EXACT for the
-  //     interpolating polynomial, but for an under-resolved spline that polynomial
-  //     tangent is a poor estimate of the true field's slope, and recording it for
-  //     a query point that is an evolving ODE state makes a spurious slope compound
-  //     across a time integration.
+  // So the DEFAULT active read -- eval(Q) / operator()(Q) -- FREEZES the query-point
+  // derivative (reads at the fully-stripped query value) while carrying the knot-value
+  // derivatives. This is the safe rate-path read, and it cannot silently attach the
+  // dangerous tangent. It is value-identical to a double read (the tangent term has
+  // value zero), so it is a no-op for production. Nested-type safe (odelia#35: the
+  // index is util::to_passive(u), all AD layers stripped).
   //
-  // eval(Q) / operator()(Q) CARRY the query-point derivative (the analytic
-  // tangent). Use these when the query point is a genuine differentiation input
-  // and the spline is well resolved (e.g. a fixed quadrature abscissa in a crown
-  // integral). eval_frozen_query(Q) FREEZES the query-point derivative (reads at
-  // xad::value(u)) while still carrying the knot-value derivatives. Use it on a
-  // rate path where the query point is an evolving ODE state. Both are exact for
-  // first-order AD in the knot values; they differ only in the query channel, and
-  // both reduce to spline(u) on the double path.
+  // A caller that genuinely wants d(value)/d(query) -- a WELL-RESOLVED spline queried
+  // at a real differentiation input, e.g. a fixed quadrature abscissa -- must opt in
+  // explicitly via eval_with_query_derivative(Q). Making it explicit is the point
+  // (odelia#38): the query tangent is never the accidental default.
   template <typename Q>
     requires (!std::same_as<Q, double>)
   Q eval(Q u) const {
@@ -206,30 +206,60 @@ public:
     if (not extrapolate and (uv < min() or uv > max())) {
       util::stop("Extrapolation disabled and evaluation point outside of interpolated domain.");
     }
-    return spline(uv) + spline.deriv(uv) * (u - uv);
+    return spline(uv);
   }
 
   template <typename Q>
     requires (!std::same_as<Q, double>)
   Q operator()(Q u) const {
-    const double uv = util::to_passive(u);
-    return spline(uv) + spline.deriv(uv) * (u - uv);
+    return spline(util::to_passive(u));
   }
 
-  // Value at an active query point with the query-point derivative FROZEN: the
-  // knot-value derivatives are carried, but d(value)/d(query) is dropped (the
-  // read is taken at the fully-stripped query value). See the contract above.
-  // Bit-identical to eval() on the double path, and nested-type safe (the query
-  // index is util::to_passive(u), all AD layers stripped -- odelia#35).
+  // Active read that DOES carry the query-point derivative (the analytic tangent).
+  // Opt in only for a well-resolved spline whose query point is a genuine
+  // differentiation input; never on a rate path with an evolving-state query (see
+  // the contract above). Knot-value derivatives are carried by both reads.
   template <typename Q>
     requires (!std::same_as<Q, double>)
-  Q eval_frozen_query(Q u) const {
+  Q eval_with_query_derivative(Q u) const {
     check_active();
     const double uv = util::to_passive(u);
     if (not extrapolate and (uv < min() or uv > max())) {
       util::stop("Extrapolation disabled and evaluation point outside of interpolated domain.");
     }
-    return spline(uv);
+    return spline(uv) + spline.deriv(uv) * (u - uv);
+  }
+
+  // Slope of the interpolated field in the query direction, by SECANT over `step`
+  // (direction < 0 backward, 0 centred, > 0 forward). This is the ROBUST d(value)/du
+  // channel for a rate path: unlike deriv() (the interpolant's analytic tangent,
+  // which is an unreliable slope for an under-resolved fit and compounds when the
+  // query is an evolving ODE state -- see the eval() contract above and plant#39),
+  // the secant is exactly the finite difference the caller's own value stencil
+  // takes, so a consumer's slope matches that stencil by construction WHEN it passes
+  // the same step and direction (e.g. a solver's Control). Query values are frozen
+  // (secant taken at the stripped abscissa), knot-value (parameter) derivatives are
+  // carried, and it is nesting-safe (util::to_passive strips every AD layer), so it
+  // also serves the forward-over-reverse dg/dh at FReal<AReal<double>>.
+  //
+  // This is the single owner of the field-slope quantity (odelia catalog component
+  // 6): callers read it here rather than hand-rolling a secant, so the value and
+  // slope of the field can never disagree on step or direction.
+  S slope(double u, double step, int direction) const {
+    check_active();
+    if (direction < 0) {
+      return (spline(u) - spline(u - step)) / step;
+    } else if (direction == 0) {
+      return (spline(u + step / 2) - spline(u - step / 2)) / step;
+    } else {
+      return (spline(u + step) - spline(u)) / step;
+    }
+  }
+
+  template <typename Q>
+    requires (!std::same_as<Q, double>)
+  Q slope(Q u, double step, int direction) const {
+    return slope(util::to_passive(u), step, direction);
   }
 
   // Return the number of (x,y) pairs contained in the Interpolator.
