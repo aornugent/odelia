@@ -230,6 +230,38 @@ public:
     return spline(uv) + spline.deriv(uv) * (u - uv);
   }
 
+  // Slope of the interpolated field in the query direction, by SECANT over `step`
+  // (direction < 0 backward, 0 centred, > 0 forward). This is the ROBUST d(value)/du
+  // channel for a rate path: unlike deriv() (the interpolant's analytic tangent,
+  // which is an unreliable slope for an under-resolved fit and compounds when the
+  // query is an evolving ODE state -- see the eval() contract above and plant#39),
+  // the secant is exactly the finite difference the caller's own value stencil
+  // takes, so a consumer's slope matches that stencil by construction WHEN it passes
+  // the same step and direction (e.g. a solver's Control). Query values are frozen
+  // (secant taken at the stripped abscissa), knot-value (parameter) derivatives are
+  // carried, and it is nesting-safe (util::to_passive strips every AD layer), so it
+  // also serves the forward-over-reverse dg/dh at FReal<AReal<double>>.
+  //
+  // This is the single owner of the field-slope quantity (odelia catalog component
+  // 6): callers read it here rather than hand-rolling a secant, so the value and
+  // slope of the field can never disagree on step or direction.
+  S slope(double u, double step, int direction) const {
+    check_active();
+    if (direction < 0) {
+      return (spline(u) - spline(u - step)) / step;
+    } else if (direction == 0) {
+      return (spline(u + step / 2) - spline(u - step / 2)) / step;
+    } else {
+      return (spline(u + step) - spline(u)) / step;
+    }
+  }
+
+  template <typename Q>
+    requires (!std::same_as<Q, double>)
+  Q slope(Q u, double step, int direction) const {
+    return slope(util::to_passive(u), step, direction);
+  }
+
   // Return the number of (x,y) pairs contained in the Interpolator.
   size_t size() const {
     return x.size();

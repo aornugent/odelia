@@ -129,6 +129,20 @@ compile_spline_ad_interface <- function() {
         odelia::interpolator::Interpolator I;
         I.init(x, y);
         return I.deriv(q);
+      }
+
+      // Secant slope read (the robust rate-path dS/dx channel). Returns the slope
+      // for backward/centred/forward directions; a double-typed check that it is
+      // the finite difference of the value read (NOT the analytic deriv()).
+      // [[Rcpp::export]]
+      Rcpp::NumericVector interp_slope_double(std::vector<double> x,
+                                              std::vector<double> y,
+                                              double q, double step) {
+        odelia::interpolator::Interpolator I;
+        I.init(x, y);
+        return Rcpp::NumericVector::create(I.slope(q, step, -1),
+                                           I.slope(q, step,  0),
+                                           I.slope(q, step,  1));
       }', verbose = FALSE)
     NULL
   }, error = function(e) e)
@@ -225,5 +239,32 @@ testthat::test_that("basic_interpolator active-query value + derivative (frozen 
     # The DEFAULT active read (odelia#38) FREEZES the query derivative -- it must be
     # exactly zero, so a rate-path caller cannot accidentally record the tangent.
     expect_equal(vg[3], 0, tolerance = 1e-14)
+  }
+})
+
+testthat::test_that("basic_interpolator::slope is the value secant, not the analytic tangent", {
+  testthat::skip_if(is_pkgload_dll(),
+    "Skipping AD interpolator slope in pkgload load_all sessions.")
+  compile_spline_ad_interface()
+
+  x <- c(0.0, 1.0, 2.5, 4.0, 6.0, 9.0)
+  y <- sin(0.4 * x) + 0.1 * x
+  step <- 1e-3
+
+  for (q in c(2.0, 3.3, 5.1, 7.0)) {
+    sl <- interp_slope_double(x, y, q, step)  # backward, centred, forward
+
+    # slope() is EXACTLY the finite difference of the value read -- the robust
+    # rate-path channel, matching a caller's own stencil by construction. It is
+    # NOT deriv() (the analytic tangent) except in the step->0 limit.
+    back <- (interp_value_double(x, y, q) - interp_value_double(x, y, q - step)) / step
+    cen  <- (interp_value_double(x, y, q + step/2) - interp_value_double(x, y, q - step/2)) / step
+    fwd  <- (interp_value_double(x, y, q + step) - interp_value_double(x, y, q)) / step
+    expect_equal(sl[1], back, tolerance = 1e-12)
+    expect_equal(sl[2], cen,  tolerance = 1e-12)
+    expect_equal(sl[3], fwd,  tolerance = 1e-12)
+
+    # Centred secant approximates the analytic tangent to O(step^2).
+    expect_equal(sl[2], interp_deriv_double(x, y, q), tolerance = 1e-4)
   }
 })
