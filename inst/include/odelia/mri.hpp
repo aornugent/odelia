@@ -4,6 +4,7 @@
 
 #include <vector>
 #include <cstddef>
+#include <type_traits>
 #include <odelia/ode_solver_internal.hpp>
 #include <odelia/rosenbrock.hpp>
 
@@ -285,6 +286,17 @@ struct SplitSubcycle {
   }
 };
 
+// Optional per-leg hook. A model whose fast rates read a frozen slow context
+// (rather than a linear aggregate g) captures that context here once per leg --
+// e.g. set the cohorts and rebuild the light field -- so the fast sub-cycle then
+// varies only the fast block. Detected below; a no-op for models without it.
+template <class, class = void>
+struct has_freeze_slow : std::false_type {};
+template <class S>
+struct has_freeze_slow<S, std::void_t<decltype(std::declval<const S&>().freeze_slow(
+    std::declval<const std::vector<typename S::value_type>&>()))>>
+  : std::true_type {};
+
 // One MRI macro step over [t, t+H]: advance slow block x and fast block u.
 template <class System, class Subcycle>
 void mri_macro_step(const System& sys, const MRICoupling& M, const OdeControl& control,
@@ -305,6 +317,7 @@ void mri_macro_step(const System& sys, const MRICoupling& M, const OdeControl& c
   for (int i = 1; i < n; ++i) {
     const double dc = M.c[i] - M.c[i - 1];
     if (dc > 0.0) {
+      if constexpr (has_freeze_slow<System>::value) sys.freeze_slow(x);
       std::vector<std::vector<S>> a_poly(M.nmat + 1, std::vector<S>(cdim, S(0.0)));
       a_poly[0] = agg(x);
       for (int k = 0; k < M.nmat; ++k)
