@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstddef>
 #include <odelia/ode_solver_internal.hpp>
+#include <odelia/rosenbrock.hpp>
 
 // Multirate-infinitesimal (MRI-GARK) stepping for a System that splits into a
 // slow block x and a fast block u. The outer method is an explicit Runge-Kutta
@@ -96,6 +97,17 @@ inline MRICoupling mri_erk33a() {
   return M;
 }
 
+// Evaluate the slow signal g(theta) from its captured polynomial (Horner).
+template <class S>
+void eval_coupling(const std::vector<std::vector<S>>& a_poly, double theta, std::vector<S>& g) {
+  for (size_t d = 0; d < g.size(); ++d) {
+    S s = a_poly[0][d];
+    double p = theta;
+    for (size_t m = 1; m < a_poly.size(); ++m) { s += a_poly[m][d] * p; p *= theta; }
+    g[d] = s;
+  }
+}
+
 // The fast block presented as a plain System over one sub-interval: its rates
 // read the slow signal g(theta), theta the sub-interval time in [0,1], as the
 // polynomial captured for it. This lets the existing adaptive solver sub-cycle it.
@@ -133,12 +145,7 @@ public:
 private:
   void compute_rates() {
     const double theta = (dt_ > 0.0) ? (time_ - ta_) / dt_ : 0.0;
-    for (size_t d = 0; d < g_.size(); ++d) {
-      value_type s = a_poly_[0][d];
-      double p = theta;
-      for (size_t m = 1; m < a_poly_.size(); ++m) { s += a_poly_[m][d] * p; p *= theta; }
-      g_[d] = s;
-    }
+    eval_coupling(a_poly_, theta, g_);
     sys_.fast_rates(u_, g_, du_);
   }
 
@@ -191,13 +198,83 @@ void subcycle_fast(const System& sys, std::vector<typename System::value_type>& 
   u = inner.get_state();
 }
 
-// One MRI macro step over [t, t+H]: advance slow block x and fast block u.
+// Sub-cycle the fast block over one sub-interval by operator splitting: the model
+// integrates its stiff part exactly (analytic_flow) and the gentle remainder
+// (residual_rhs) is stepped by ROS34PW2, composed Strang-symmetrically. With the
+// stiffness removed the residual step takes large steps, so the sub-step count
+// barely grows with the stiffness. Records/replays like the adaptive sub-cycle.
+// Double only (numerical Jacobian + step control). Requires the model to provide
+//   void analytic_flow(std::vector<double>& u, double dt);   // stiff part, exact
+//   void residual_rhs(const u&, const g&, du&);              // gentle remainder
 template <class System>
+void subcycle_split(const System& sys, std::vector<double>& u,
+                    const std::vector<std::vector<double>>& a_poly,
+                    double ta, double dt, OdeControl control,
+                    MRISchedule& sched, bool replay) {
+  const int n = (int)u.size();
+  std::vector<double> g(sys.coupling_size()), yerr(n), rate(n);
+  auto strang = [&](std::vector<double>& z, double t0, double h) {
+    eval_coupling(a_poly, (dt > 0.0) ? (t0 + 0.5 * h - ta) / dt : 0.0, g);
+    sys.analytic_flow(z, 0.5 * h);
+    ros34pw2_step([&](const std::vector<double>& w, std::vector<double>& dw) {
+      sys.residual_rhs(w, g, dw); }, z, h, yerr);
+    sys.analytic_flow(z, 0.5 * h);
+  };
+  if (replay) {
+    const std::vector<double>& hs = sched.subcycles.at(sched.cursor++);
+    double t = ta;
+    for (double h : hs) { strang(u, t, h); t += h; }
+    return;
+  }
+  // The controller tracks the ROS residual error; the Strang splitting error is
+  // O(h^2) and is what the split solution is validated against a reference for.
+  std::vector<double> hs, y(n);
+  double t = ta, h = dt;
+  int guard = 0;
+  while (t < ta + dt - 1e-14) {
+    if (guard++ > 100000) util::stop("MRI split sub-cycle did not converge");
+    if (t + h > ta + dt) h = ta + dt - t;
+    y = u;
+    strang(y, t, h);
+    sys.residual_rhs(y, g, rate);
+    const double hnew = control.adjust_step_size(n, 2, h, y, yerr, rate);
+    if (control.step_size_shrank()) { h = hnew; }
+    else { u = y; t += h; hs.push_back(h); h = hnew; }
+  }
+  sched.subcycles.push_back(std::move(hs));
+}
+
+// The inner-stepper seam: which strategy sub-cycles the fast block. The adaptive
+// black-box RK is the default; the split is opt-in, so the same model can be run
+// both ways to measure the impact of exposing an analytic partial flow. The split
+// only compiles for models that provide the analytic_flow / residual_rhs hooks,
+// so it is never instantiated for a model that lacks them.
+struct AdaptiveSubcycle {
+  template <class System>
+  void operator()(const System& sys, std::vector<typename System::value_type>& u,
+                  const std::vector<std::vector<typename System::value_type>>& a_poly,
+                  double ta, double dt, const OdeControl& control,
+                  MRISchedule& sched, bool replay) const {
+    subcycle_fast(sys, u, a_poly, ta, dt, control, sched, replay);
+  }
+};
+struct SplitSubcycle {
+  template <class System>
+  void operator()(const System& sys, std::vector<double>& u,
+                  const std::vector<std::vector<double>>& a_poly,
+                  double ta, double dt, const OdeControl& control,
+                  MRISchedule& sched, bool replay) const {
+    subcycle_split(sys, u, a_poly, ta, dt, control, sched, replay);
+  }
+};
+
+// One MRI macro step over [t, t+H]: advance slow block x and fast block u.
+template <class System, class Subcycle>
 void mri_macro_step(const System& sys, const MRICoupling& M, const OdeControl& control,
                     double t, double H,
                     std::vector<typename System::value_type>& x,
                     std::vector<typename System::value_type>& u,
-                    MRISchedule& sched, bool replay) {
+                    MRISchedule& sched, bool replay, const Subcycle& subcycle) {
   using S = typename System::value_type;
   const int n = M.nodes;
   const size_t nx = sys.slow_size(), cdim = sys.coupling_size();
@@ -218,7 +295,7 @@ void mri_macro_step(const System& sys, const MRICoupling& M, const OdeControl& c
           for (size_t d = 0; d < cdim; ++d)
             a_poly[k + 1][d] += H / (k + 1) * M.G[k][i][j] * Fbar[j][d];
 
-      subcycle_fast(sys, u, a_poly, t + M.c[i - 1] * H, dc * H, control, sched, replay);
+      subcycle(sys, u, a_poly, t + M.c[i - 1] * H, dc * H, control, sched, replay);
     }
     for (size_t a = 0; a < nx; ++a) {
       S inc(0.0);
@@ -233,11 +310,11 @@ void mri_macro_step(const System& sys, const MRICoupling& M, const OdeControl& c
 // kinks). Returns the full state [u; x] at each grid point; leaves the System at
 // the final state. On a double record pass the schedule is filled; on a replay
 // pass at any scalar it is consumed.
-template <class System>
+template <class System, class Subcycle = AdaptiveSubcycle>
 std::vector<std::vector<typename System::value_type>>
 mri_advance(System& sys, const MRICoupling& M, const OdeControl& control,
             const std::vector<double>& macro_times, MRISchedule& sched,
-            bool replay = false) {
+            bool replay = false, Subcycle subcycle = Subcycle{}) {
   using S = typename System::value_type;
   const size_t nf = sys.fast_size(), ns = sys.slow_size();
   std::vector<S> full(sys.ode_size());
@@ -249,7 +326,7 @@ mri_advance(System& sys, const MRICoupling& M, const OdeControl& control,
   hist.push_back(full);
   for (size_t m = 0; m + 1 < macro_times.size(); ++m) {
     mri_macro_step(sys, M, control, macro_times[m], macro_times[m + 1] - macro_times[m],
-                   x, u, sched, replay);
+                   x, u, sched, replay, subcycle);
     std::vector<S> s;
     s.reserve(nf + ns);
     s.insert(s.end(), u.begin(), u.end());

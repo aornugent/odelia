@@ -12,6 +12,7 @@
 #include <odelia/ode_solver.hpp>
 #include <odelia/mri.hpp>
 #include <examples/two_rate_system.hpp>
+#include <examples/drainage_system.hpp>
 
 using namespace Rcpp;
 using namespace odelia;
@@ -70,6 +71,43 @@ Rcpp::List two_rate_reference(double k, int n_slow, Rcpp::NumericVector times, d
   }
   const long nsteps = (long)solver.times().size() - 1;
   return Rcpp::List::create(_["states"] = out, _["nsteps"] = (double)nsteps);
+}
+
+// Macro-stepped drainage run, with the inner sub-cycle either adaptive (unsplit)
+// or operator-split (exact drainage flow + ROS34PW2 residual). Same model both
+// ways, so the sub-step counts are directly comparable.
+// [[Rcpp::export]]
+Rcpp::List drainage_mri(double c, int n_fast, int n_slow, bool split,
+                        std::string table, Rcpp::NumericVector macro_times, double tol) {
+  DrainageSystem<double> sys(c, n_fast, n_slow);
+  MRICoupling M = pick_table(table);
+  OdeControl control = make_control(tol);
+  std::vector<double> times(macro_times.begin(), macro_times.end());
+  MRISchedule sched;
+  auto hist = split
+    ? mri_advance(sys, M, control, times, sched, false, SplitSubcycle{})
+    : mri_advance(sys, M, control, times, sched, false, AdaptiveSubcycle{});
+  return Rcpp::List::create(_["states"] = to_matrix(hist),
+                            _["n_fast"] = (double)mri_fast_steps(sched));
+}
+
+// [[Rcpp::export]]
+Rcpp::List drainage_reference(double c, int n_fast, int n_slow,
+                              Rcpp::NumericVector times, double tol) {
+  DrainageSystem<double> sys(c, n_fast, n_slow);
+  OdeControl control = make_control(tol);
+  Solver<DrainageSystem<double>> solver(sys, control);
+  std::vector<double> t(times.begin(), times.end());
+  solver.advance_adaptive(t);
+  auto hist = solver.get_history();
+  const int nt = (int)hist.size(), nd = (int)sys.ode_size();
+  Rcpp::NumericMatrix out(nt, nd);
+  for (int i = 0; i < nt; ++i) {
+    std::vector<double> s(nd);
+    hist[i].ode_state(s.begin());
+    for (int j = 0; j < nd; ++j) out(i, j) = s[j];
+  }
+  return Rcpp::List::create(_["states"] = out, _["nsteps"] = (double)(solver.times().size() - 1));
 }
 
 // J = sum of the final slow states -- a smooth scalar of the whole trajectory.

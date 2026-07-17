@@ -117,6 +117,14 @@ two_rate_reference <- function(k, n_slow, times, tol) {
     .Call(`_odelia_two_rate_reference`, k, n_slow, times, tol)
 }
 
+drainage_mri <- function(c, n_fast, n_slow, split, table, macro_times, tol) {
+    .Call(`_odelia_drainage_mri`, c, n_fast, n_slow, split, table, macro_times, tol)
+}
+
+drainage_reference <- function(c, n_fast, n_slow, times, tol) {
+    .Call(`_odelia_drainage_reference`, c, n_fast, n_slow, times, tol)
+}
+
 two_rate_gradient <- function(k, n_slow, table, macro_times, tol, eps_fd) {
     .Call(`_odelia_two_rate_gradient`, k, n_slow, table, macro_times, tol, eps_fd)
 }
