@@ -109,6 +109,14 @@ test_param_types <- function(system_xp) {
     .Call(`_odelia_test_param_types`, system_xp)
 }
 
+two_rate_mri <- function(k, n_slow, table, macro_times, tol) {
+    .Call(`_odelia_two_rate_mri`, k, n_slow, table, macro_times, tol)
+}
+
+two_rate_reference <- function(k, n_slow, times, tol) {
+    .Call(`_odelia_two_rate_reference`, k, n_slow, times, tol)
+}
+
 OdeControl_new <- function() {
     .Call(`_odelia_OdeControl_new`)
 }

@@ -333,6 +333,35 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// two_rate_mri
+Rcpp::List two_rate_mri(double k, int n_slow, std::string table, Rcpp::NumericVector macro_times, double tol);
+RcppExport SEXP _odelia_two_rate_mri(SEXP kSEXP, SEXP n_slowSEXP, SEXP tableSEXP, SEXP macro_timesSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_slow(n_slowSEXP);
+    Rcpp::traits::input_parameter< std::string >::type table(tableSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type macro_times(macro_timesSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(two_rate_mri(k, n_slow, table, macro_times, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
+// two_rate_reference
+Rcpp::List two_rate_reference(double k, int n_slow, Rcpp::NumericVector times, double tol);
+RcppExport SEXP _odelia_two_rate_reference(SEXP kSEXP, SEXP n_slowSEXP, SEXP timesSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< int >::type n_slow(n_slowSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type times(timesSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(two_rate_reference(k, n_slow, times, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
 // OdeControl_new
 SEXP OdeControl_new();
 RcppExport SEXP _odelia_OdeControl_new() {
@@ -571,6 +600,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Solver_fit", (DL_FUNC) &_odelia_Solver_fit, 3},
     {"_odelia_lorenz_rhs", (DL_FUNC) &_odelia_lorenz_rhs, 3},
     {"_odelia_test_param_types", (DL_FUNC) &_odelia_test_param_types, 1},
+    {"_odelia_two_rate_mri", (DL_FUNC) &_odelia_two_rate_mri, 5},
+    {"_odelia_two_rate_reference", (DL_FUNC) &_odelia_two_rate_reference, 4},
     {"_odelia_OdeControl_new", (DL_FUNC) &_odelia_OdeControl_new, 0},
     {"_odelia_OdeControl_get_controls", (DL_FUNC) &_odelia_OdeControl_get_controls, 1},
     {"_odelia_OdeControl_set_controls", (DL_FUNC) &_odelia_OdeControl_set_controls, 8},
