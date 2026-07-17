@@ -31,6 +31,25 @@ inline bool is_finite(double x) {
   return std::isfinite(x);
 }
 
+// Finiteness of an active value without stripping it: ADL picks xad::isfinite
+// for an active type and std::isfinite for double, so a guard reads the value
+// without a to_passive that would drop the derivative from the guarded path.
+template <typename T>
+inline bool is_finite(const T& x) {
+  using std::isfinite;
+  return isfinite(x);
+}
+
+// Smoothed positive part, 0.5 (x + sqrt(x^2 + r^2)): max(0, x) rounded over a
+// corner of half-width r, so it is C-infinity and its derivative is defined at
+// x = 0 (where max(0, x) has a kink). r is the corner radius, declared by the
+// caller rather than a per-site constant. As r -> 0 it recovers max(0, x).
+template <typename T>
+inline T smooth_positive(const T& x, double r) {
+  using std::sqrt;
+  return 0.5 * (x + sqrt(x * x + r * r));
+}
+
 // Strip every AD layer off a value, all the way down to the passive double.
 // xad::value() peels one layer, which is enough for a single active type
 // (AReal<double> or FReal<double>) but NOT for a nested type such as
