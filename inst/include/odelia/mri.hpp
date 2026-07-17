@@ -118,7 +118,7 @@ public:
   using value_type = typename System::value_type;
   using vec = std::vector<value_type>;
 
-  FastSubsystem(const System& sys, const vec& u0,
+  FastSubsystem(System& sys, const vec& u0,
           const std::vector<vec>& a_poly, double ta, double dt)
     : sys_(sys), a_poly_(a_poly), ta_(ta), dt_(dt),
       u_(u0), g_(sys.coupling_size()), du_(sys.fast_size()), time_(ta) {
@@ -150,7 +150,7 @@ private:
     sys_.fast_rates(u_, g_, du_);
   }
 
-  const System& sys_;
+  System& sys_;
   std::vector<vec> a_poly_;   // held by value: the coupling is tiny and its
                               // lifetime must not depend on the caller's scratch
   double ta_, dt_;
@@ -171,7 +171,7 @@ struct MRISchedule {
 // adaptive schedule (double only); replay=true consumes the next recorded
 // sub-cycle with fixed steps.
 template <class System>
-void subcycle_fast(const System& sys, std::vector<typename System::value_type>& u,
+void subcycle_fast(System& sys, std::vector<typename System::value_type>& u,
                    const std::vector<std::vector<typename System::value_type>>& a_poly,
                    double ta, double dt, const OdeControl& control,
                    MRISchedule& sched, bool replay) {
@@ -208,7 +208,7 @@ void subcycle_fast(const System& sys, std::vector<typename System::value_type>& 
 //   void analytic_flow(std::vector<double>& u, double dt);   // stiff part, exact
 //   void residual_rhs(const u&, const g&, du&);              // gentle remainder
 template <class System>
-void subcycle_split(const System& sys, std::vector<typename System::value_type>& u,
+void subcycle_split(System& sys, std::vector<typename System::value_type>& u,
                     const std::vector<std::vector<typename System::value_type>>& a_poly,
                     double ta, double dt, OdeControl control,
                     MRISchedule& sched, bool replay) {
@@ -269,7 +269,7 @@ void subcycle_split(const System& sys, std::vector<typename System::value_type>&
 // so it is never instantiated for a model that lacks them.
 struct AdaptiveSubcycle {
   template <class System>
-  void operator()(const System& sys, std::vector<typename System::value_type>& u,
+  void operator()(System& sys, std::vector<typename System::value_type>& u,
                   const std::vector<std::vector<typename System::value_type>>& a_poly,
                   double ta, double dt, const OdeControl& control,
                   MRISchedule& sched, bool replay) const {
@@ -278,7 +278,7 @@ struct AdaptiveSubcycle {
 };
 struct SplitSubcycle {
   template <class System>
-  void operator()(const System& sys, std::vector<typename System::value_type>& u,
+  void operator()(System& sys, std::vector<typename System::value_type>& u,
                   const std::vector<std::vector<typename System::value_type>>& a_poly,
                   double ta, double dt, const OdeControl& control,
                   MRISchedule& sched, bool replay) const {
@@ -293,13 +293,13 @@ struct SplitSubcycle {
 template <class, class = void>
 struct has_freeze_slow : std::false_type {};
 template <class S>
-struct has_freeze_slow<S, std::void_t<decltype(std::declval<const S&>().freeze_slow(
+struct has_freeze_slow<S, std::void_t<decltype(std::declval<S&>().freeze_slow(
     std::declval<const std::vector<typename S::value_type>&>()))>>
   : std::true_type {};
 
 // One MRI macro step over [t, t+H]: advance slow block x and fast block u.
 template <class System, class Subcycle>
-void mri_macro_step(const System& sys, const MRICoupling& M, const OdeControl& control,
+void mri_macro_step(System& sys, const MRICoupling& M, const OdeControl& control,
                     double t, double H,
                     std::vector<typename System::value_type>& x,
                     std::vector<typename System::value_type>& u,
