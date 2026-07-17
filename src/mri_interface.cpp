@@ -181,3 +181,66 @@ Rcpp::List two_rate_gradient(double k, int n_slow, std::string table,
                             _["grad_adjoint"] = Rcpp::wrap(grad_adj),
                             _["grad_fd"] = Rcpp::wrap(grad_fd));
 }
+
+// Gradient of J w.r.t. [c, initial state] through the operator-split inner by
+// record->replay: a double split pass records the sub-cycle schedule, an active
+// split pass replays it under the tape (the ROS Jacobian is passive, the exact
+// drainage flow and the stages tape), checked against a frozen-schedule central
+// difference. Demonstrates reverse mode through the exact flow + ROS34PW2 split.
+// [[Rcpp::export]]
+Rcpp::List drainage_gradient_split(double c, int n_fast, int n_slow, std::string table,
+                                   Rcpp::NumericVector macro_times, double tol, double eps_fd) {
+  using ad = xad::adj<double>;
+  using ad_type = ad::active_type;
+  MRICoupling M = pick_table(table);
+  OdeControl control = make_control(tol);
+  std::vector<double> times(macro_times.begin(), macro_times.end());
+
+  DrainageSystem<double> sys_d(c, n_fast, n_slow);
+  const size_t fast = sys_d.fast_size(), nd = sys_d.ode_size();
+  std::vector<double> x0(nd);
+  sys_d.ode_state(x0.begin());
+  MRISchedule sched;
+  mri_advance(sys_d, M, control, times, sched, /*replay=*/false, SplitSubcycle{});
+
+  ad::tape_type tape(false);
+  tape.activate();
+  DrainageSystem<ad_type> sys_a(c, n_fast, n_slow);
+  std::vector<double> cv{c};
+  std::vector<ad_type*> inputs = sys_a.set_params(tape, cv.begin());
+  auto ic = sys_a.set_initial_state(tape, x0.begin(), times.front());
+  inputs.insert(inputs.end(), ic.begin(), ic.end());
+  tape.newRecording();
+  sys_a.reset();
+  auto hist = mri_advance(sys_a, M, control, times, sched, /*replay=*/true, SplitSubcycle{});
+  ad_type J = functional(hist.back(), fast);
+  tape.registerOutput(J);
+  xad::derivative(J) = 1.0;
+  tape.computeAdjoints();
+  std::vector<double> grad_adj(inputs.size());
+  for (size_t i = 0; i < inputs.size(); ++i) grad_adj[i] = xad::derivative(*inputs[i]);
+  const double value = xad::value(J);
+  tape.deactivate();
+
+  auto replay_J = [&](DrainageSystem<double>& s) {
+    auto h = mri_advance(s, M, control, times, sched, /*replay=*/true, SplitSubcycle{});
+    return functional(h.back(), fast);
+  };
+  std::vector<double> grad_fd(inputs.size());
+  {
+    DrainageSystem<double> sp(c + eps_fd, n_fast, n_slow), sm(c - eps_fd, n_fast, n_slow);
+    grad_fd[0] = (replay_J(sp) - replay_J(sm)) / (2 * eps_fd);
+  }
+  for (size_t i = 0; i < nd; ++i) {
+    std::vector<double> xp = x0, xm = x0;
+    xp[i] += eps_fd; xm[i] -= eps_fd;
+    DrainageSystem<double> sp(c, n_fast, n_slow), sm(c, n_fast, n_slow);
+    sp.set_initial_state(xp.begin(), times.front()); sp.reset();
+    sm.set_initial_state(xm.begin(), times.front()); sm.reset();
+    grad_fd[1 + i] = (replay_J(sp) - replay_J(sm)) / (2 * eps_fd);
+  }
+
+  return Rcpp::List::create(_["value"] = value,
+                            _["grad_adjoint"] = Rcpp::wrap(grad_adj),
+                            _["grad_fd"] = Rcpp::wrap(grad_fd));
+}

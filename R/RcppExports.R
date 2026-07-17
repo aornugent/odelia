@@ -129,6 +129,10 @@ two_rate_gradient <- function(k, n_slow, table, macro_times, tol, eps_fd) {
     .Call(`_odelia_two_rate_gradient`, k, n_slow, table, macro_times, tol, eps_fd)
 }
 
+drainage_gradient_split <- function(c, n_fast, n_slow, table, macro_times, tol, eps_fd) {
+    .Call(`_odelia_drainage_gradient_split`, c, n_fast, n_slow, table, macro_times, tol, eps_fd)
+}
+
 OdeControl_new <- function() {
     .Call(`_odelia_OdeControl_new`)
 }

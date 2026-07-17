@@ -32,3 +32,19 @@ testthat::test_that("the exact drainage recession preserves positivity", {
   sp <- odelia:::drainage_mri(1000, L, M, TRUE, "erk33a", tt, 1e-5)
   expect_true(all(sp$states[, 1:L] > 0))
 })
+
+testthat::test_that("reverse mode through the split inner matches finite difference", {
+  # record->replay through Strang(exact flow, ROS34PW2, exact flow): the ROS
+  # Jacobian is passive, the exact drainage recession and stages tape. Checked
+  # against a frozen-schedule central difference over [c, initial state].
+  # The match is exact here because the residual r(g-u) is linear in u, so the
+  # passive Jacobian is the true one; a residual nonlinear in u would differ from
+  # this finite difference by the omitted d(Jacobian) terms (a W-method approximation).
+  L <- 5; M <- 8; tt <- seq(0, 20, by = 1.0)
+  for (c in c(10, 100, 1000)) {
+    g <- odelia:::drainage_gradient_split(c, L, M, "erk33a", tt, 1e-6, 1e-6)
+    expect_length(g$grad_adjoint, 1 + L + M)          # c + initial [u; x]
+    expect_lt(max(abs(g$grad_adjoint - g$grad_fd)), 1e-6)
+    expect_gt(abs(g$grad_adjoint[1]), 1e-6)           # a non-trivial dJ/dc through the flow
+  }
+})

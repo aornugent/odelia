@@ -410,6 +410,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// drainage_gradient_split
+Rcpp::List drainage_gradient_split(double c, int n_fast, int n_slow, std::string table, Rcpp::NumericVector macro_times, double tol, double eps_fd);
+RcppExport SEXP _odelia_drainage_gradient_split(SEXP cSEXP, SEXP n_fastSEXP, SEXP n_slowSEXP, SEXP tableSEXP, SEXP macro_timesSEXP, SEXP tolSEXP, SEXP eps_fdSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type c(cSEXP);
+    Rcpp::traits::input_parameter< int >::type n_fast(n_fastSEXP);
+    Rcpp::traits::input_parameter< int >::type n_slow(n_slowSEXP);
+    Rcpp::traits::input_parameter< std::string >::type table(tableSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type macro_times(macro_timesSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    Rcpp::traits::input_parameter< double >::type eps_fd(eps_fdSEXP);
+    rcpp_result_gen = Rcpp::wrap(drainage_gradient_split(c, n_fast, n_slow, table, macro_times, tol, eps_fd));
+    return rcpp_result_gen;
+END_RCPP
+}
 // OdeControl_new
 SEXP OdeControl_new();
 RcppExport SEXP _odelia_OdeControl_new() {
@@ -653,6 +670,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_drainage_mri", (DL_FUNC) &_odelia_drainage_mri, 7},
     {"_odelia_drainage_reference", (DL_FUNC) &_odelia_drainage_reference, 5},
     {"_odelia_two_rate_gradient", (DL_FUNC) &_odelia_two_rate_gradient, 6},
+    {"_odelia_drainage_gradient_split", (DL_FUNC) &_odelia_drainage_gradient_split, 7},
     {"_odelia_OdeControl_new", (DL_FUNC) &_odelia_OdeControl_new, 0},
     {"_odelia_OdeControl_get_controls", (DL_FUNC) &_odelia_OdeControl_get_controls, 1},
     {"_odelia_OdeControl_set_controls", (DL_FUNC) &_odelia_OdeControl_set_controls, 8},

@@ -2,6 +2,7 @@
 #define DRAINAGE_SYSTEM_HPP_
 
 #include <odelia/mri.hpp>
+#include <XAD/XAD.hpp>
 #include <vector>
 #include <cmath>
 
@@ -11,7 +12,8 @@
 // track the layer mean. The drainage is the stiff part; splitting integrates it
 // exactly (analytic_flow) and leaves ROS34PW2 only the gentle refill, so the same
 // model can be run with and without splitting to measure what an analytic-flow
-// exposure buys as the drainage stiffness grows.
+// exposure buys as the drainage stiffness grows. The drainage rate c and the
+// initial state are seedable, so gradients can flow through the exact recession.
 //
 // Fast:  u_l' = -c u_l^p            (drainage, stiff; recession u_l = [u_l^{1-p} + (p-1) c t]^{-1/(p-1)})
 //              + r (g - u_l)        (gentle refill toward the slow signal g)
@@ -25,9 +27,12 @@ public:
 
   DrainageSystem(double drain_c, int n_fast_, int n_slow_)
     : c(drain_c), p(16.0), r(0.3), n_fast(n_fast_), n_slow(n_slow_),
-      omega(n_slow_), u(n_fast_), x(n_slow_), t0(0.0), time(0.0) {
+      omega(n_slow_), u_init(n_fast_), x_init(n_slow_), u(n_fast_), x(n_slow_),
+      t0(0.0), time(0.0) {
     for (int j = 0; j < n_slow; ++j)
       omega[j] = 0.02 + 0.18 * (n_slow > 1 ? double(j) / (n_slow - 1) : 0.0);
+    for (int l = 0; l < n_fast; ++l) u_init[l] = T(0.9);   // wet: drainage active
+    for (int j = 0; j < n_slow; ++j) x_init[j] = T(0.5 + 0.2 * std::cos(3.14159265358979 * j / n_slow));
     reset();
   }
 
@@ -56,16 +61,19 @@ public:
     for (int j = 0; j < n_slow; ++j) dx[j] = omega[j] * (m - xs[j]);
   }
 
-  // Split hooks (double): the exact drainage recession, and the gentle remainder.
-  void analytic_flow(std::vector<double>& us, double dt) const {
+  // Split hooks: the exact drainage recession (at the state scalar, so it tapes),
+  // and the gentle remainder (templated on the argument scalar so the value-
+  // Jacobian can evaluate it at double while the stages run active).
+  void analytic_flow(vec& us, double dt) const {
+    using std::pow; using xad::pow;
     for (auto& ul : us) {
-      if (ul <= 0.0) continue;
-      const double base = std::pow(ul, 1.0 - p) + (p - 1.0) * c * dt;
-      ul = std::pow(base, -1.0 / (p - 1.0));
+      if (xad::value(ul) <= 0.0) continue;
+      const T base = pow(ul, 1.0 - p) + (p - 1.0) * c * dt;
+      ul = pow(base, -1.0 / (p - 1.0));
     }
   }
-  void residual_rhs(const std::vector<double>& us, const std::vector<double>& g,
-                    std::vector<double>& du) const {
+  template <class U>
+  void residual_rhs(const std::vector<U>& us, const std::vector<U>& g, std::vector<U>& du) const {
     for (int l = 0; l < n_fast; ++l) du[l] = r * (g[0] - us[l]);
   }
 
@@ -93,19 +101,47 @@ public:
     return it;
   }
 
+  template <typename Iterator>
+  Iterator set_params(Iterator it) { c = *it++; return it; }
+  template <typename Tape, typename Iterator>
+  std::vector<T*> set_params(Tape& tape, Iterator it) {
+    c = *it++;
+    tape.registerInput(c);
+    return {&c};
+  }
+
+  template <typename Iterator>
+  Iterator set_initial_state(Iterator it, double t0_ = 0.0) {
+    t0 = t0_;
+    for (auto& ul : u_init) ul = *it++;
+    for (auto& xj : x_init) xj = *it++;
+    return it;
+  }
+  template <typename Tape, typename Iterator>
+  std::vector<T*> set_initial_state(Tape& tape, Iterator it, double t0_ = 0.0) {
+    t0 = t0_;
+    std::vector<T*> refs;
+    for (auto& ul : u_init) { ul = *it++; tape.registerInput(ul); refs.push_back(&ul); }
+    for (auto& xj : x_init) { xj = *it++; tape.registerInput(xj); refs.push_back(&xj); }
+    return refs;
+  }
+
   void reset() {
-    for (auto& ul : u) ul = T(0.9);   // wet: drainage active
-    for (int j = 0; j < n_slow; ++j) x[j] = T(0.5 + 0.2 * std::cos(3.14159265358979 * j / n_slow));
+    for (int l = 0; l < n_fast; ++l) u[l] = u_init[l];
+    for (int j = 0; j < n_slow; ++j) x[j] = x_init[j];
     time = t0;
   }
 
-private:
-  T drainage(const T& ul) const { using std::pow; return c * pow(ul, p); }
+  std::vector<double> pars() const { return {xad::value(c), double(n_fast), double(n_slow)}; }
 
-  double c, p, r;
+private:
+  T drainage(const T& ul) const { using std::pow; using xad::pow; return c * pow(ul, p); }
+
+  T c;
+  double p, r;
   int n_fast, n_slow;
   std::vector<double> omega;
-  vec u, x;
+  vec u_init, x_init, u, x;
   double t0, time;
 };
 

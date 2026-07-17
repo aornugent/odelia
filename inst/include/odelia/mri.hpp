@@ -207,17 +207,30 @@ void subcycle_fast(const System& sys, std::vector<typename System::value_type>& 
 //   void analytic_flow(std::vector<double>& u, double dt);   // stiff part, exact
 //   void residual_rhs(const u&, const g&, du&);              // gentle remainder
 template <class System>
-void subcycle_split(const System& sys, std::vector<double>& u,
-                    const std::vector<std::vector<double>>& a_poly,
+void subcycle_split(const System& sys, std::vector<typename System::value_type>& u,
+                    const std::vector<std::vector<typename System::value_type>>& a_poly,
                     double ta, double dt, OdeControl control,
                     MRISchedule& sched, bool replay) {
+  using S = typename System::value_type;
   const int n = (int)u.size();
-  std::vector<double> g(sys.coupling_size()), yerr(n), rate(n);
-  auto strang = [&](std::vector<double>& z, double t0, double h) {
+  std::vector<S> g(sys.coupling_size()), yerr(n);
+  // The residual read by ROS34PW2. The stages run at the state scalar S (so g is
+  // active on a replay pass); the value-Jacobian evaluates it at double with g
+  // held passive, which is exact where the residual is linear in u.
+  auto res = [&](const auto& w, auto& dw) {
+    using U = typename std::decay<decltype(w)>::type::value_type;
+    if constexpr (std::is_same<U, S>::value) {
+      sys.residual_rhs(w, g, dw);
+    } else {
+      std::vector<U> gv(g.size());
+      for (size_t d = 0; d < g.size(); ++d) gv[d] = U(xad::value(g[d]));
+      sys.residual_rhs(w, gv, dw);
+    }
+  };
+  auto strang = [&](std::vector<S>& z, double t0, double h) {
     eval_coupling(a_poly, (dt > 0.0) ? (t0 + 0.5 * h - ta) / dt : 0.0, g);
     sys.analytic_flow(z, 0.5 * h);
-    ros34pw2_step([&](const std::vector<double>& w, std::vector<double>& dw) {
-      sys.residual_rhs(w, g, dw); }, z, h, yerr);
+    ros34pw2_step<S>(res, z, h, yerr);
     sys.analytic_flow(z, 0.5 * h);
   };
   if (replay) {
@@ -228,20 +241,24 @@ void subcycle_split(const System& sys, std::vector<double>& u,
   }
   // The controller tracks the ROS residual error; the Strang splitting error is
   // O(h^2) and is what the split solution is validated against a reference for.
-  std::vector<double> hs, y(n);
-  double t = ta, h = dt;
-  int guard = 0;
-  while (t < ta + dt - 1e-14) {
-    if (guard++ > 100000) util::stop("MRI split sub-cycle did not converge");
-    if (t + h > ta + dt) h = ta + dt - t;
-    y = u;
-    strang(y, t, h);
-    sys.residual_rhs(y, g, rate);
-    const double hnew = control.adjust_step_size(n, 2, h, y, yerr, rate);
-    if (control.step_size_shrank()) { h = hnew; }
-    else { u = y; t += h; hs.push_back(h); h = hnew; }
+  if constexpr (std::is_same<S, double>::value) {
+    std::vector<double> hs, y(n), rate(n);
+    double t = ta, h = dt;
+    int guard = 0;
+    while (t < ta + dt - 1e-14) {
+      if (guard++ > 100000) util::stop("MRI split sub-cycle did not converge");
+      if (t + h > ta + dt) h = ta + dt - t;
+      y = u;
+      strang(y, t, h);
+      sys.residual_rhs(y, g, rate);
+      const double hnew = control.adjust_step_size(n, 2, h, y, yerr, rate);
+      if (control.step_size_shrank()) { h = hnew; }
+      else { u = y; t += h; hs.push_back(h); h = hnew; }
+    }
+    sched.subcycles.push_back(std::move(hs));
+  } else {
+    util::stop("MRI split record pass must run at double");
   }
-  sched.subcycles.push_back(std::move(hs));
 }
 
 // The inner-stepper seam: which strategy sub-cycles the fast block. The adaptive
@@ -260,8 +277,8 @@ struct AdaptiveSubcycle {
 };
 struct SplitSubcycle {
   template <class System>
-  void operator()(const System& sys, std::vector<double>& u,
-                  const std::vector<std::vector<double>>& a_poly,
+  void operator()(const System& sys, std::vector<typename System::value_type>& u,
+                  const std::vector<std::vector<typename System::value_type>>& a_poly,
                   double ta, double dt, const OdeControl& control,
                   MRISchedule& sched, bool replay) const {
     subcycle_split(sys, u, a_poly, ta, dt, control, sched, replay);

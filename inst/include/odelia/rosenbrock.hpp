@@ -5,6 +5,7 @@
 #include <vector>
 #include <cmath>
 #include <cstddef>
+#include <XAD/XAD.hpp>
 #include <odelia/ode_util.hpp>
 
 // ROS34PW2: a four-stage, third-order, L-stable Rosenbrock-W step (Rang &
@@ -37,10 +38,13 @@ struct ROS34PW2 {
     {3.7810903145819369e-01, -9.6042292212423178e-02, 5.0000000000000000e-01, 2.1793326075422950e-01};
 };
 
-// Solve M z = rhs in place by Gaussian elimination with partial pivoting; M is
-// n x n row-major and is overwritten. For the small fast block a dense solve is
-// cheaper than any sparsity bookkeeping.
-inline void dense_solve(std::vector<double>& M, std::vector<double>& rhs, int n) {
+// Solve M z = rhs in place by Gaussian elimination with partial pivoting; M is a
+// double n x n row-major matrix (overwritten), rhs any scalar T (double or an
+// active AD type). Pivots on the passive matrix, so the same factorisation drives
+// an active back-substitution -- the discrete adjoint of a solve with a constant
+// matrix. For the small fast block a dense solve beats any sparsity bookkeeping.
+template <class T>
+void dense_solve(std::vector<double>& M, std::vector<T>& rhs, int n) {
   for (int col = 0; col < n; ++col) {
     int piv = col;
     for (int r = col + 1; r < n; ++r)
@@ -57,49 +61,49 @@ inline void dense_solve(std::vector<double>& M, std::vector<double>& rhs, int n)
     }
   }
   for (int r = n - 1; r >= 0; --r) {
-    double acc = rhs[r];
+    T acc = rhs[r];
     for (int c = r + 1; c < n; ++c) acc -= M[r * n + c] * rhs[c];
     rhs[r] = acc / M[r * n + r];
   }
 }
 
-// One ROS34PW2 step of size h on the autonomous system y' = f(y). Updates y and
-// fills yerr with the embedded (order-2) error estimate. f is any callable
-// (std::vector<double>) -> void filling the derivative.
-template <class F>
-void ros34pw2_step(F f, std::vector<double>& y, double h, std::vector<double>& yerr) {
+// One ROS34PW2 step of size h on the autonomous system y' = res(y). Updates y and
+// fills yerr with the embedded (order-2) error estimate. `res` is a functor with a
+// templated call operator res(const std::vector<U>&, std::vector<U>&) usable at
+// both double and the active scalar S. The Jacobian is a forward difference on the
+// values (a W-method tolerates an approximate one) and reused across the stages;
+// held off the tape, it makes each stage a solve with a constant matrix, so the
+// step differentiates by an active back-substitution with recorded factors.
+template <class S, class Residual>
+void ros34pw2_step(const Residual& res, std::vector<S>& y, double h, std::vector<S>& yerr) {
   using R = ROS34PW2;
   const int n = (int)y.size();
 
-  std::vector<double> f0(n), fp(n), ytmp(n);
-  f(y, f0);
-
-  // Forward-difference Jacobian J at y, reused for all stages (W-method).
+  std::vector<double> yv(n), f0(n), fp(n), yd(n);
+  for (int r = 0; r < n; ++r) yv[r] = xad::value(y[r]);
+  res(yv, f0);
   std::vector<double> J((size_t)n * n);
   for (int col = 0; col < n; ++col) {
-    const double d = 1e-7 * std::max(1.0, std::fabs(y[col]));
-    ytmp = y; ytmp[col] += d;
-    f(ytmp, fp);
+    const double d = 1e-7 * std::max(1.0, std::fabs(yv[col]));
+    yd = yv; yd[col] += d;
+    res(yd, fp);
     for (int r = 0; r < n; ++r) J[r * n + col] = (fp[r] - f0[r]) / d;
   }
-
-  // Left matrix (I - h*gamma*J), same for every stage.
   std::vector<double> Abase((size_t)n * n);
   for (int r = 0; r < n; ++r)
     for (int c = 0; c < n; ++c)
       Abase[r * n + c] = (r == c ? 1.0 : 0.0) - h * R::gamma * J[r * n + c];
 
-  std::vector<std::vector<double>> k(R::s, std::vector<double>(n));
-  std::vector<double> rhs(n), stagef(n), Jsum(n);
+  std::vector<std::vector<S>> k(R::s, std::vector<S>(n));
+  std::vector<S> ytmp(n), stagef(n), Jsum(n), rhs(n);
   for (int i = 0; i < R::s; ++i) {
     for (int r = 0; r < n; ++r) {
       ytmp[r] = y[r];
       for (int j = 0; j < i; ++j) ytmp[r] += R::A[i][j] * k[j][r];
     }
-    f(ytmp, stagef);
-    // J * sum_{j<i} gamma_ij k_j
+    res(ytmp, stagef);
     for (int r = 0; r < n; ++r) {
-      double acc = 0.0;
+      S acc(0.0);
       for (int j = 0; j < i; ++j) {
         const double g = R::G[i][j];
         if (g != 0.0) for (int c = 0; c < n; ++c) acc += J[r * n + c] * (g * k[j][c]);
@@ -113,7 +117,7 @@ void ros34pw2_step(F f, std::vector<double>& y, double h, std::vector<double>& y
   }
 
   for (int r = 0; r < n; ++r) {
-    double yn = 0.0, err = 0.0;
+    S yn(0.0), err(0.0);
     for (int i = 0; i < R::s; ++i) { yn += R::b[i] * k[i][r]; err += (R::b[i] - R::b2[i]) * k[i][r]; }
     y[r] += yn;
     yerr[r] = err;
