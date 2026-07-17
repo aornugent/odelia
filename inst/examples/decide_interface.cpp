@@ -138,11 +138,23 @@ Rcpp::List decide_demo(double gain = 2.0, double Tmax = 3.0, int nsteps = 30) {
   const double fd_frozen =
       (replay_final(gain + h, branches, grid, ctrl) - replay_final(gain - h, branches, grid, ctrl)) / (2 * h);
 
+  // The counterfactual: the branch schedule is parameter-dependent -- recorded
+  // at a different gain, the crossing moves and the choices differ. decide pins
+  // the gradient to the RECORDED schedule (above), not to whatever the perturbed
+  // trajectory would re-decide; the two are genuinely different control flows.
+  RelaxDecide<double> dbl2(gain * 1.3);
+  dbl2.log.start_recording();
+  ode::Solver<RelaxDecide<double>> dbl2_solver(dbl2, ctrl);
+  dbl2_solver.advance_fixed(grid);
+  const std::vector<char> branches_perturbed = dbl2_solver.get_system_ref().log.recorded();
+  const bool schedule_changed = (branches_perturbed != branches);
+
   return Rcpp::List::create(
       Rcpp::Named("value") = value,
       Rcpp::Named("value_double") = value_double,
       Rcpp::Named("grad") = grad[0],
       Rcpp::Named("fd_frozen") = fd_frozen,
       Rcpp::Named("n_branches") = static_cast<int>(branches.size()),
+      Rcpp::Named("schedule_changed") = schedule_changed,
       Rcpp::Named("monitored") = monitored);
 }

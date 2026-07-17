@@ -25,4 +25,7 @@ test_that("incomplete_gamma matches pgamma and gives exact value and shape deriv
 
   # The differentiated-trait channel dG/dc (through d/da) matches a finite difference.
   expect_equal(r$dG_dc, r$dG_dc_fd, tolerance = 1e-6)
+
+  # Large x: the series still reaches gamma(a, x) within the term cap.
+  expect_equal(r$value_large, pgamma(r$x_large, r$a) * gamma(r$a), tolerance = 1e-9)
 })

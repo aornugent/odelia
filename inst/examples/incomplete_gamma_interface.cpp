@@ -72,9 +72,16 @@ Rcpp::List incomplete_gamma_demo(double a = 0.4, double x = 3.0,
       (odelia::incomplete_gamma(a + h, x) - odelia::incomplete_gamma(a - h, x)) / (2 * h);
   const double dG_dc_fd = (weibull_int(m, b, c + h) - weibull_int(m, b, c - h)) / (2 * h);
 
+  // Large x: the integrand has no mass past a few multiples of a, so the series
+  // must still reach gamma(a, x) within the term cap. Checked in R against pgamma.
+  const double x_large = 40.0;
+  const double value_large = odelia::incomplete_gamma(a, x_large);
+
   return Rcpp::List::create(
       Rcpp::Named("a") = a, Rcpp::Named("x") = x,
       Rcpp::Named("value") = value,
+      Rcpp::Named("x_large") = x_large,
+      Rcpp::Named("value_large") = value_large,
       Rcpp::Named("d_dx") = d_dx,
       Rcpp::Named("d_dx_ref") = std::pow(x, a - 1.0) * std::exp(-x),
       Rcpp::Named("d_da") = d_da,

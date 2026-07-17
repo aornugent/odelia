@@ -21,6 +21,11 @@ test_that("decide replays the recorded branch and gives the frozen-schedule grad
   # difference (same recorded branches) matches it.
   expect_equal(r$grad, r$fd_frozen, tolerance = 1e-6)
 
+  # The counterfactual: the branch schedule is parameter-dependent (recorded at a
+  # different gain the choices differ), so pinning the recorded one is a real
+  # choice -- decide's gradient is w.r.t. that schedule, not the re-adapted one.
+  expect_true(r$schedule_changed)
+
   # diagnostic is a dead read: the plain value of the (active) final state.
   expect_equal(r$monitored, r$value, tolerance = 1e-12)
 })

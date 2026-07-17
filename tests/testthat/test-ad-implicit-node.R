@@ -24,3 +24,22 @@ test_that("register_implicit gives an exact IFT gradient across double, forward,
   # The oracle: J v (forward) == <v, gradient> (reverse) to machine precision.
   expect_equal(r$jvp, r$dot_v_grad, tolerance = 1e-11)
 })
+
+test_that("register_implicit handles a maximiser (negative denominator) and asserts the sign", {
+  testthat::skip_if(is_pkgload_dll(), "native-pointer lifecycle unstable under load_all")
+  ensure_implicit_node_interface()
+
+  r <- implicit_node_optimum_demo(a = 2.0)
+
+  # The golden-section argmax reaches q* = sqrt(a) to its (flat-max) precision.
+  expect_equal(r$q_star, r$q_star_analytic, tolerance = 1e-6)
+
+  # The IFT sensitivity is exact at the operating point: dq*/da = 1/(2 q*).
+  expect_equal(r$dq_da, r$dq_da_ift, tolerance = 1e-10)
+
+  # ... and so matches the analytic 1/(2 sqrt(a)) to the solver's precision.
+  expect_equal(r$dq_da, 1 / (2 * sqrt(2.0)), tolerance = 1e-6)
+
+  # Declaring the wrong denominator sign for this maximiser stops loudly.
+  expect_true(r$sign_assert_fired)
+})
