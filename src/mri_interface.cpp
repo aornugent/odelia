@@ -1,8 +1,10 @@
 /* Multirate (MRI-GARK) interface for the two-rate demonstrator.
  *
  * Exposes the model-agnostic MRI macro stepper on the TwoRateSystem example so
- * the native multirate capability can be checked from R: a macro-stepped run,
- * and a single-rate adaptive reference of the same system to check it against.
+ * the native multirate capability can be checked from R: a macro-stepped run, a
+ * single-rate adaptive reference to check it against, and a reverse-mode gradient
+ * through the stepper by record->replay, validated against a frozen-schedule
+ * finite difference.
  */
 
 #include <Rcpp.h>
@@ -23,11 +25,16 @@ static MRICoupling pick_table(const std::string& name) {
   Rcpp::stop("unknown MRI table: " + name);
 }
 
-static Rcpp::NumericMatrix to_matrix(const std::vector<std::vector<double>>& h) {
+static OdeControl make_control(double tol) {
+  return OdeControl(tol, tol, 1.0, 0.0, 1e-10, 1e10, 1e-4);
+}
+
+template <class State>
+static Rcpp::NumericMatrix to_matrix(const std::vector<State>& h) {
   const int nt = (int)h.size(), nd = h.empty() ? 0 : (int)h[0].size();
   Rcpp::NumericMatrix out(nt, nd);
   for (int i = 0; i < nt; ++i)
-    for (int j = 0; j < nd; ++j) out(i, j) = h[i][j];
+    for (int j = 0; j < nd; ++j) out(i, j) = xad::value(h[i][j]);
   return out;
 }
 
@@ -36,19 +43,19 @@ Rcpp::List two_rate_mri(double k, int n_slow, std::string table,
                         Rcpp::NumericVector macro_times, double tol) {
   TwoRateSystem<double> sys(k, n_slow);
   MRICoupling M = pick_table(table);
-  OdeControl control(tol, tol, 1.0, 0.0, 1e-10, 1e10, 1e-4);
+  OdeControl control = make_control(tol);
   std::vector<double> times(macro_times.begin(), macro_times.end());
-  long n_fast = 0;
-  auto hist = mri_advance(sys, M, control, times, &n_fast);
+  MRISchedule sched;
+  auto hist = mri_advance(sys, M, control, times, sched, /*replay=*/false);
   return Rcpp::List::create(_["states"] = to_matrix(hist),
-                            _["n_fast"] = (double)n_fast,
+                            _["n_fast"] = (double)mri_fast_steps(sched),
                             _["order"]  = M.order);
 }
 
 // [[Rcpp::export]]
 Rcpp::List two_rate_reference(double k, int n_slow, Rcpp::NumericVector times, double tol) {
   TwoRateSystem<double> sys(k, n_slow);
-  OdeControl control(tol, tol, 1.0, 0.0, 1e-10, 1e10, 1e-4);
+  OdeControl control = make_control(tol);
   Solver<TwoRateSystem<double>> solver(sys, control);
   std::vector<double> t(times.begin(), times.end());
   solver.advance_adaptive(t);
@@ -63,4 +70,76 @@ Rcpp::List two_rate_reference(double k, int n_slow, Rcpp::NumericVector times, d
   }
   const long nsteps = (long)solver.times().size() - 1;
   return Rcpp::List::create(_["states"] = out, _["nsteps"] = (double)nsteps);
+}
+
+// J = sum of the final slow states -- a smooth scalar of the whole trajectory.
+template <class T>
+static T functional(const std::vector<T>& final_state, size_t fast) {
+  T s(0.0);
+  for (size_t i = fast; i < final_state.size(); ++i) s += final_state[i];
+  return s;
+}
+
+// Gradient of J w.r.t. [k, initial state] through the MRI stepper by
+// record->replay, checked against a frozen-schedule central finite difference.
+// [[Rcpp::export]]
+Rcpp::List two_rate_gradient(double k, int n_slow, std::string table,
+                             Rcpp::NumericVector macro_times, double tol, double eps_fd) {
+  using ad = xad::adj<double>;
+  using ad_type = ad::active_type;
+  MRICoupling M = pick_table(table);
+  OdeControl control = make_control(tol);
+  std::vector<double> times(macro_times.begin(), macro_times.end());
+
+  // Record the sub-cycle schedule with a double adaptive pass; capture the
+  // baseline initial state the perturbations start from.
+  TwoRateSystem<double> sys_d(k, n_slow);
+  const size_t fast = sys_d.fast_size(), nd = sys_d.ode_size();
+  std::vector<double> x0(nd);
+  sys_d.ode_state(x0.begin());
+  MRISchedule sched;
+  mri_advance(sys_d, M, control, times, sched, /*replay=*/false);
+
+  // Active replay under the tape: the tape is the discrete adjoint of the run.
+  ad::tape_type tape(false);
+  tape.activate();
+  TwoRateSystem<ad_type> sys_a(k, n_slow);
+  std::vector<double> kv{k};
+  std::vector<ad_type*> inputs = sys_a.set_params(tape, kv.begin());
+  auto ic = sys_a.set_initial_state(tape, x0.begin(), times.front());
+  inputs.insert(inputs.end(), ic.begin(), ic.end());
+  tape.newRecording();
+  sys_a.reset();
+  auto hist_a = mri_advance(sys_a, M, control, times, sched, /*replay=*/true);
+  ad_type J = functional(hist_a.back(), fast);
+  tape.registerOutput(J);
+  xad::derivative(J) = 1.0;
+  tape.computeAdjoints();
+  std::vector<double> grad_adj(inputs.size());
+  for (size_t i = 0; i < inputs.size(); ++i) grad_adj[i] = xad::derivative(*inputs[i]);
+  const double value = xad::value(J);
+  tape.deactivate();
+
+  // Frozen-schedule central finite difference over the same inputs [k, state].
+  auto replay_J = [&](TwoRateSystem<double>& s) {
+    auto h = mri_advance(s, M, control, times, sched, /*replay=*/true);
+    return functional(h.back(), fast);
+  };
+  std::vector<double> grad_fd(inputs.size());
+  {
+    TwoRateSystem<double> sp(k + eps_fd, n_slow), sm(k - eps_fd, n_slow);
+    grad_fd[0] = (replay_J(sp) - replay_J(sm)) / (2 * eps_fd);
+  }
+  for (size_t i = 0; i < nd; ++i) {
+    std::vector<double> xp = x0, xm = x0;
+    xp[i] += eps_fd; xm[i] -= eps_fd;
+    TwoRateSystem<double> sp(k, n_slow), sm(k, n_slow);
+    sp.set_initial_state(xp.begin(), times.front()); sp.reset();
+    sm.set_initial_state(xm.begin(), times.front()); sm.reset();
+    grad_fd[1 + i] = (replay_J(sp) - replay_J(sm)) / (2 * eps_fd);
+  }
+
+  return Rcpp::List::create(_["value"] = value,
+                            _["grad_adjoint"] = Rcpp::wrap(grad_adj),
+                            _["grad_fd"] = Rcpp::wrap(grad_fd));
 }

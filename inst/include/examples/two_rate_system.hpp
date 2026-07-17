@@ -2,6 +2,7 @@
 #define TWO_RATE_SYSTEM_HPP_
 
 #include <odelia/mri.hpp>
+#include <XAD/XAD.hpp>
 #include <vector>
 #include <cmath>
 
@@ -14,7 +15,7 @@
 // single-rate step's grows linearly. It is a valid plain System too (rates
 // compose the two blocks), so the existing adaptive solver gives a single-rate
 // reference to check the macro step against. Templated on T so the same code runs
-// at double or an active AD type.
+// at double or an active AD type; k and the initial state are seedable inputs.
 template <typename T = double>
 class TwoRateSystem {
 public:
@@ -23,9 +24,11 @@ public:
 
   TwoRateSystem(double k_, int n_slow_)
     : k(k_), n_slow(n_slow_), omega(n_slow_),
-      u(2), x(n_slow_), t0(0.0), time(0.0) {
+      u_init(2), x_init(n_slow_), u(2), x(n_slow_), t0(0.0), time(0.0) {
     for (int j = 0; j < n_slow; ++j)
       omega[j] = 0.02 + 0.18 * (n_slow > 1 ? double(j) / (n_slow - 1) : 0.0);
+    u_init[0] = T(0.0); u_init[1] = T(0.0);
+    for (int j = 0; j < n_slow; ++j) x_init[j] = T(1.0 + 0.5 * std::cos(3.14159265358979 * j / n_slow));
     reset();
   }
 
@@ -81,19 +84,49 @@ public:
     return it;
   }
 
+  // The single differentiable parameter (the relaxation rate). The plain form
+  // sets it; the tape form also seeds it as an AD input.
+  template <typename Iterator>
+  Iterator set_params(Iterator it) { k = *it++; return it; }
+
+  template <typename Tape, typename Iterator>
+  std::vector<T*> set_params(Tape& tape, Iterator it) {
+    k = *it++;
+    tape.registerInput(k);
+    return {&k};
+  }
+
+  // The initial state [u; x], seedable for gradients w.r.t. initial conditions.
+  template <typename Iterator>
+  Iterator set_initial_state(Iterator it, double t0_ = 0.0) {
+    t0 = t0_;
+    for (auto& ui : u_init) ui = *it++;
+    for (auto& xj : x_init) xj = *it++;
+    return it;
+  }
+
+  template <typename Tape, typename Iterator>
+  std::vector<T*> set_initial_state(Tape& tape, Iterator it, double t0_ = 0.0) {
+    t0 = t0_;
+    std::vector<T*> refs;
+    for (auto& ui : u_init) { ui = *it++; tape.registerInput(ui); refs.push_back(&ui); }
+    for (auto& xj : x_init) { xj = *it++; tape.registerInput(xj); refs.push_back(&xj); }
+    return refs;
+  }
+
   void reset() {
-    for (auto& ui : u) ui = T(0.0);
-    for (int j = 0; j < n_slow; ++j) x[j] = T(1.0 + 0.5 * std::cos(3.14159265358979 * j / n_slow));
+    for (size_t i = 0; i < u.size(); ++i) u[i] = u_init[i];
+    for (int j = 0; j < n_slow; ++j) x[j] = x_init[j];
     time = t0;
   }
 
-  std::vector<double> pars() const { return {k, double(n_slow)}; }
+  std::vector<double> pars() const { return {xad::value(k), double(n_slow)}; }
 
 private:
-  double k;
+  T k;
   int n_slow;
   std::vector<double> omega;
-  vec u, x;
+  vec u_init, x_init, u, x;
   double t0, time;
 };
 

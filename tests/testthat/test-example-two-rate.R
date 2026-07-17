@@ -71,3 +71,24 @@ testthat::test_that("fast sub-cycle cost is independent of the slow block size",
                numeric(1))
   expect_lt(abs(nf[3] - nf[1]) / nf[1], 0.05)
 })
+
+testthat::test_that("reverse-mode gradient through the stepper matches finite difference", {
+  # record->replay: a double adaptive pass fixes the sub-cycle schedule; an active
+  # pass replays it under the tape, so the adjoint is the discrete gradient of the
+  # scheme as run. Checked against a frozen-schedule central difference.
+  M <- 8; tt <- seq(0, 15, by = 1.0)
+  for (k in c(5, 20, 50)) {
+    g <- odelia:::two_rate_gradient(k, M, "erk33a", tt, 1e-10, 1e-6)
+    expect_length(g$grad_adjoint, 1 + 2 + M)          # k + initial [u; x]
+    expect_lt(max(abs(g$grad_adjoint - g$grad_fd)), 1e-6)
+    expect_gt(max(abs(g$grad_adjoint)), 1e-3)         # a non-trivial gradient
+  }
+})
+
+testthat::test_that("adjoint is independent of the finite-difference step", {
+  # the adjoint is exact, so it does not move with eps; only the FD reference does
+  M <- 6; tt <- seq(0, 12, by = 1.0)
+  g1 <- odelia:::two_rate_gradient(20, M, "erk33a", tt, 1e-10, 1e-5)
+  g2 <- odelia:::two_rate_gradient(20, M, "erk33a", tt, 1e-10, 1e-7)
+  expect_lt(max(abs(g1$grad_adjoint - g2$grad_adjoint)), 1e-11)
+})

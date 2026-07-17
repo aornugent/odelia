@@ -117,6 +117,10 @@ two_rate_reference <- function(k, n_slow, times, tol) {
     .Call(`_odelia_two_rate_reference`, k, n_slow, times, tol)
 }
 
+two_rate_gradient <- function(k, n_slow, table, macro_times, tol, eps_fd) {
+    .Call(`_odelia_two_rate_gradient`, k, n_slow, table, macro_times, tol, eps_fd)
+}
+
 OdeControl_new <- function() {
     .Call(`_odelia_OdeControl_new`)
 }
