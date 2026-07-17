@@ -6,7 +6,7 @@ new implicit RODAS4(3) stepper (`rodas`, odelia #35/#37), diagnosing why the ada
 size collapses, and demonstrating that multi-rate sub-cycling — not a global implicit
 method — is the fix.*
 
-All code and figures are reproducible from `study/tf24-multirate/`. Three independent
+All code and figures are reproducible from `scripts/tf24-multirate/`. Three independent
 integrators (odelia RK45, odelia RODAS, R `deSolve::lsoda`) agree on the model to ~1e-8.
 
 ---
@@ -189,7 +189,7 @@ from the soil's step rate.
 ## 7. Reproduce
 
 ```
-cd study/tf24-multirate
+cd scripts/tf24-multirate
 Rscript gen_rainfall.R        # -> out/rainfall.csv, fig/rainfall.png
 Rscript desolve_check.R       # 3-integrator cross-validation (~1e-8)
 Rscript bench_main.R          # stiffness sweep (soil-only)  [Sweep A]

@@ -23,6 +23,7 @@
 #include <chrono>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_solver.hpp>
+#include "mri_core.hpp"
 
 using namespace odelia;
 
@@ -240,6 +241,113 @@ Rcpp::List multirate_run(std::vector<double> rain, std::vector<double> macro_tim
     Rcpp::Named("M")=M, Rcpp::Named("n_macro")=(double)(ng-1),
     Rcpp::Named("soil_steps")=(double)soil_steps, Rcpp::Named("wall_ms")=wall,
     Rcpp::Named("rhs_double")=(double)g_rhs_double,
+    Rcpp::Named("theta")=theta_tr, Rcpp::Named("xbar")=xbar_tr,
+    Rcpp::Named("x_final")=Rcpp::wrap(x));
+}
+
+// ---- soil leg system: 5 soil states reading the slow aggregate x̄(τ) ---------
+// The fast (soil) sub-IVP over a leg [ta,tb]. It reads the canopy aggregate x̄ as a
+// polynomial in normalized leg time τ=(t-ta)/(tb-ta) (the MRI "aggregate dense
+// output"), while rainfall kinks are read in absolute time t. No explicit forcing
+// (component partition): the slow influence enters only through x̄(τ).
+template <typename T = double>
+class SoilLegPoly {
+public:
+  using value_type = T;
+  SoilLegPoly(P p_, const std::vector<double>& rain_, std::vector<double> poly_,
+              double ta_, double tb_)
+      : p(p_), nL(5), rain(rain_), poly(std::move(poly_)), ta(ta_), tb(tb_) {
+    dz=p.depth_mm/double(nL); p_drain=2*p.n_psi+3; root={0.35,0.28,0.20,0.12,0.05};
+    th_init.assign(nL,T(0.30*p.theta_sat)); t0=ta; reset();
+  }
+  size_t ode_size() const { return nL; }
+  double ode_time() const { return time; }
+  double ode_t0() const { return t0; }
+  double rain_at(double t) const { long d=(long)std::floor(t); if(d<0)d=0; if(d>=(long)rain.size())d=rain.size()-1; return rain[d]; }
+  double xbar_at(double t) const { double tau=(tb>ta)?(t-ta)/(tb-ta):0.0, s=0,pw=1; for(double c:poly){ s+=c*pw; pw*=tau; } return s; }
+  T Kf(const T& th_) const { T r=th_/p.theta_sat; if(r<0)r=T(0.0); return p.stiff*p.K_sat*powT(r,p_drain); }
+  T stress(const T& th_) const { T s=(th_-p.theta_res)/(p.theta_wilt-p.theta_res); if(s<=0)return T(0.0); if(s>=1)return T(1.0); return s*s*(T(3.0)-T(2.0)*s); }
+  void compute_rates(){
+    if constexpr (std::is_same_v<T,double>) ++g_rhs_double; else ++g_rhs_twin;
+    const double rain_t=rain_at(time); const double xbar=xbar_at(time);
+    T Tpot=p.t_pot*(T(0.5)+T(xbar));
+    T r0=th[0]/p.theta_sat; if(r0<0)r0=T(0.0);
+    T runoff=T(1.0)-p.a_infil*powT(r0,p.b_infil); if(runoff<0)runoff=T(0.0);
+    T infil=rain_t*runoff; std::vector<T> out(nL); for(size_t i=0;i<nL;++i)out[i]=Kf(th[i]);
+    for(size_t i=0;i<nL;++i){ T win=(i==0)?infil:out[i-1];
+      dth[i]=(win-out[i]-Tpot*root[i]*stress(th[i]))/dz; }
+  }
+  template <typename It> It set_ode_state(It it,double time_){ time=time_; for(size_t i=0;i<nL;++i)th[i]=*it++; compute_rates(); return it; }
+  template <typename It> It set_initial_state(It it,double t0_=0.0){ t0=t0_; for(size_t i=0;i<nL;++i)th_init[i]=*it++; return it; }
+  template <typename It> It ode_state(It it) const { for(size_t i=0;i<nL;++i)*it++=th[i]; return it; }
+  template <typename It> It ode_initial_state(It it) const { for(size_t i=0;i<nL;++i)*it++=th_init[i]; return it; }
+  template <typename It> It ode_rates(It it) const { for(size_t i=0;i<nL;++i)*it++=dth[i]; return it; }
+  void reset(){ th=th_init; dth.assign(nL,T(0.0)); time=t0; compute_rates(); }
+  std::vector<double> pars() const { return { p.stiff }; }
+  template <class S2> using rebind = SoilLegPoly<S2>;
+  template <typename U> rebind<U> rebind_from() const {
+    SoilLegPoly<U> s(p,rain,poly,ta,tb); std::vector<U> init(nL),st(nL);
+    for(size_t i=0;i<nL;++i){init[i]=U(xad::value(th_init[i])); st[i]=U(xad::value(th[i]));}
+    s.set_initial_state(init.begin(),t0); s.set_ode_state(st.begin(),time); return s;
+  }
+private:
+  P p; size_t nL; std::vector<double> rain, poly; double ta,tb;
+  double dz,p_drain,t0,time=0.0; std::vector<double> root;
+  std::vector<T> th,dth,th_init;
+};
+
+static MRICoupling pick_table(const std::string& name){
+  if(name=="fwd_euler") return table_fwd_euler();
+  if(name=="midpoint")  return table_midpoint();
+  if(name=="heun")      return table_heun();
+  if(name=="kutta3")    return table_kutta3();
+  return table_midpoint();
+}
+
+// ---- MRI run: canopy = slow block (M), soil = fast block (5) ----------------
+// [[Rcpp::export]]
+Rcpp::List mri_run(std::vector<double> rain, std::vector<double> macro_times,
+                   int M, double tol_rel, double tol_abs, std::string table,
+                   double stiff, double t_pot, double alpha_lo, double alpha_hi) {
+  P p; p.stiff=stiff; p.t_pot=t_pot; p.alpha_lo=alpha_lo; p.alpha_hi=alpha_hi;
+  const size_t nL=5; MRICoupling MT=pick_table(table);
+  std::vector<double> alpha(M);
+  for(int k=0;k<M;++k) alpha[k]=alpha_lo+(alpha_hi-alpha_lo)*((M>1)?double(k)/(M-1):0.0);
+  std::vector<double> x(M,0.30), u(nL,0.30*p.theta_sat);   // canopy, soil
+  double hmax = std::min(0.5, 0.5*(macro_times.size()>1?macro_times[1]-macro_times[0]:1.0));
+  ode::OdeControl ctrl(tol_abs,tol_rel,1.0,0.0,1e-10,hmax,1e-4);
+
+  size_t ng=macro_times.size();
+  Rcpp::NumericMatrix theta_tr(ng,nL); Rcpp::NumericVector xbar_tr(ng);
+  for(size_t j=0;j<nL;++j) theta_tr(0,j)=u[j];
+  { double xb=0; for(int k=0;k<M;++k)xb+=x[k]; xbar_tr[0]=(M>0)?xb/M:0.0; }
+
+  long soil_steps=0; g_rhs_double=0; g_rhs_twin=0;
+  auto agg=[&](const std::vector<double>& v){ double s=0; for(double e:v)s+=e; return (v.empty()?0.0:s/v.size()); };
+  auto slow=[&](const std::vector<double>& canopy, const std::vector<double>& soil){
+    double thsum=0; for(size_t i=0;i<nL;++i) thsum+=soil[i]; double Sbar=thsum/double(nL)/p.theta_sat;
+    std::vector<double> d(M); for(int k=0;k<M;++k) d[k]=alpha[k]*(Sbar - canopy[k]); return d; };
+  auto inner=[&](std::vector<double>& soil, const std::vector<double>& poly, double ta, double tb){
+    SoilLegPoly<double> leg(p, rain, poly, ta, tb);
+    ode::Solver<SoilLegPoly<double>> s(leg, ctrl, ode::Method::rkck); s.set_collect(false);
+    s.set_state(soil, ta); std::vector<double> grid{ta,tb}; s.advance_adaptive(grid);
+    soil_steps += (long)s.times().size(); auto st=s.state();
+    for(size_t i=0;i<nL;++i) soil[i]=st[i];
+  };
+
+  auto t0=std::chrono::high_resolution_clock::now();
+  for(size_t m=0;m+1<ng;++m){
+    double ta=macro_times[m], tb=macro_times[m+1], H=tb-ta;
+    // remap the table's [0,1] abscissae onto [ta,tb] inside mri_macro_step (uses t + c*H)
+    mri_macro_step(MT, ta, H, x, u, slow, agg, inner);
+    for(size_t j=0;j<nL;++j) theta_tr(m+1,j)=u[j];
+    double xb=0; for(int k=0;k<M;++k)xb+=x[k]; xbar_tr[m+1]=(M>0)?xb/M:0.0;
+  }
+  auto t1=std::chrono::high_resolution_clock::now();
+  double wall=std::chrono::duration<double,std::milli>(t1-t0).count();
+  return Rcpp::List::create(
+    Rcpp::Named("table")=table, Rcpp::Named("M")=M, Rcpp::Named("n_macro")=(double)(ng-1),
+    Rcpp::Named("soil_steps")=(double)soil_steps, Rcpp::Named("wall_ms")=wall,
     Rcpp::Named("theta")=theta_tr, Rcpp::Named("xbar")=xbar_tr,
     Rcpp::Named("x_final")=Rcpp::wrap(x));
 }
