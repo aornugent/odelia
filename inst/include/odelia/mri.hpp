@@ -9,8 +9,9 @@
 // Multirate-infinitesimal (MRI-GARK) stepping for a System that splits into a
 // slow block x and a fast block u. The outer method is an explicit Runge-Kutta
 // on x; between its stages the fast block is sub-cycled by the existing adaptive
-// solver over one leg, reading the slow influence as a low-dimensional signal
-// g that follows a polynomial in the leg-local time. A System is multirate when,
+// solver over each sub-interval, reading the slow influence as a low-dimensional
+// signal g that follows a polynomial in the sub-interval's time. A System is
+// multirate when,
 // on top of the plain ODE interface, it provides:
 //   size_t fast_size(), slow_size(), coupling_size();
 //   void slow_rates(x, u, dxdt);   // slow tendency, reads the fast block
@@ -26,7 +27,7 @@ namespace ode {
 // c[0]=0, c[nodes-1]=1, and `nmat` coupling matrices G[k] (each nodes x nodes).
 // The slow block advances by the induced RK increments abar(i,j) = sum_k
 // G[k][i][j]/(k+1); the fast block reads a degree-nmat polynomial in the
-// leg-local time built from the same G. nmat=1 is a multirate-infinitesimal-step
+// sub-interval time built from the same G. nmat=1 is a multirate-infinitesimal-step
 // method; nmat=2 carries the extra coupling of a genuine order-3 MRI-GARK.
 struct MRICoupling {
   int nodes;
@@ -95,16 +96,16 @@ inline MRICoupling mri_erk33a() {
   return M;
 }
 
-// The fast block presented as a plain System over a single leg: its rates read
-// the slow signal g(theta), theta the leg-local time in [0,1], as the polynomial
-// captured for the leg. This lets the existing adaptive solver sub-cycle it.
+// The fast block presented as a plain System over one sub-interval: its rates
+// read the slow signal g(theta), theta the sub-interval time in [0,1], as the
+// polynomial captured for it. This lets the existing adaptive solver sub-cycle it.
 template <class System>
-class FastLeg {
+class FastSubsystem {
 public:
   using value_type = typename System::value_type;
   using vec = std::vector<value_type>;
 
-  FastLeg(const System& sys, const vec& u0,
+  FastSubsystem(const System& sys, const vec& u0,
           const std::vector<vec>& a_poly, double ta, double dt)
     : sys_(sys), a_poly_(a_poly), ta_(ta), dt_(dt),
       u_(u0), g_(sys.coupling_size()), du_(sys.fast_size()), time_(ta) {
@@ -142,47 +143,48 @@ private:
   }
 
   const System& sys_;
-  std::vector<vec> a_poly_;   // held by value: the leg's coupling is tiny and its
+  std::vector<vec> a_poly_;   // held by value: the coupling is tiny and its
                               // lifetime must not depend on the caller's scratch
   double ta_, dt_;
   vec u_, g_, du_;
   double time_;
 };
 
-// The fast sub-cycle schedule: for each leg, the accepted step sizes. A double
-// adaptive pass fills it (record); a later pass at any scalar replays it with
-// fixed steps, so both passes take identical steps and a tape of the replay is
-// the exact discrete adjoint of the scheme as run.
+// The fast sub-cycle schedule: for each sub-interval, the accepted step sizes. A
+// double adaptive pass fills it (record); a later pass at any scalar replays it
+// with fixed steps, so both passes take identical steps and a tape of the replay
+// is the exact discrete adjoint of the scheme as run.
 struct MRISchedule {
-  std::vector<std::vector<double>> legs;
+  std::vector<std::vector<double>> subcycles;
   size_t cursor = 0;
 };
 
-// Advance the fast block over one leg. replay=false records an adaptive schedule
-// (double only); replay=true consumes the next recorded leg with fixed steps.
+// Sub-cycle the fast block over one sub-interval. replay=false records an
+// adaptive schedule (double only); replay=true consumes the next recorded
+// sub-cycle with fixed steps.
 template <class System>
-void advance_fast_leg(const System& sys, std::vector<typename System::value_type>& u,
-                      const std::vector<std::vector<typename System::value_type>>& a_poly,
-                      double ta, double dt, const OdeControl& control,
-                      MRISchedule& sched, bool replay) {
+void subcycle_fast(const System& sys, std::vector<typename System::value_type>& u,
+                   const std::vector<std::vector<typename System::value_type>>& a_poly,
+                   double ta, double dt, const OdeControl& control,
+                   MRISchedule& sched, bool replay) {
   using S = typename System::value_type;
-  FastLeg<System> leg(sys, u, a_poly, ta, dt);
-  SolverInternal<FastLeg<System>> inner(leg, control);
+  FastSubsystem<System> sub(sys, u, a_poly, ta, dt);
+  SolverInternal<FastSubsystem<System>> inner(sub, control);
   if (replay) {
-    const std::vector<double>& hs = sched.legs.at(sched.cursor++);
+    const std::vector<double>& hs = sched.subcycles.at(sched.cursor++);
     std::vector<double> times;
     times.reserve(hs.size() + 1);
     double t = ta;
     times.push_back(t);
     for (double h : hs) times.push_back(t += h);
-    inner.advance_fixed(leg, times);
+    inner.advance_fixed(sub, times);
   } else if constexpr (std::is_same<S, double>::value) {
-    inner.advance_adaptive(leg, ta + dt);
+    inner.advance_adaptive(sub, ta + dt);
     const std::vector<double> ts = inner.get_times();
     std::vector<double> hs;
     hs.reserve(ts.size() - 1);
     for (size_t i = 1; i < ts.size(); ++i) hs.push_back(ts[i] - ts[i - 1]);
-    sched.legs.push_back(std::move(hs));
+    sched.subcycles.push_back(std::move(hs));
   } else {
     util::stop("MRI record pass must run at double");
   }
@@ -216,7 +218,7 @@ void mri_macro_step(const System& sys, const MRICoupling& M, const OdeControl& c
           for (size_t d = 0; d < cdim; ++d)
             a_poly[k + 1][d] += H / (k + 1) * M.G[k][i][j] * Fbar[j][d];
 
-      advance_fast_leg(sys, u, a_poly, t + M.c[i - 1] * H, dc * H, control, sched, replay);
+      subcycle_fast(sys, u, a_poly, t + M.c[i - 1] * H, dc * H, control, sched, replay);
     }
     for (size_t a = 0; a < nx; ++a) {
       S inc(0.0);
@@ -242,7 +244,7 @@ mri_advance(System& sys, const MRICoupling& M, const OdeControl& control,
   sys.ode_state(full.begin());
   std::vector<S> u(full.begin(), full.begin() + nf), x(full.begin() + nf, full.end());
 
-  if (replay) sched.cursor = 0;   // a full pass always consumes legs from the start
+  if (replay) sched.cursor = 0;   // a full pass always consumes from the first sub-cycle
   std::vector<std::vector<S>> hist;
   hist.push_back(full);
   for (size_t m = 0; m + 1 < macro_times.size(); ++m) {
@@ -264,7 +266,7 @@ mri_advance(System& sys, const MRICoupling& M, const OdeControl& control,
 // Fast-substep count in a schedule (cost accounting for the forward/record pass).
 inline long mri_fast_steps(const MRISchedule& sched) {
   long n = 0;
-  for (const auto& leg : sched.legs) n += (long)leg.size();
+  for (const auto& sc : sched.subcycles) n += (long)sc.size();
   return n;
 }
 
