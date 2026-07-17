@@ -57,19 +57,20 @@ public:
     for (int j = 0; j < n_slow; ++j) dx[j] = omega[j] * (us[1] - xs[j]);
   }
 
-  // Plain ODE interface: state laid out [u; x], rates compose the two blocks.
+  // Plain ODE interface: state laid out [slow x | fast u], rates compose the two
+  // blocks. Slow-first is the multirate layout the macro stepper assumes.
   template <typename Iterator>
   Iterator set_ode_state(Iterator it, double time_) {
     time = time_;
-    for (auto& ui : u) ui = *it++;
     for (auto& xj : x) xj = *it++;
+    for (auto& ui : u) ui = *it++;
     return it;
   }
 
   template <typename Iterator>
   Iterator ode_state(Iterator it) const {
-    for (const auto& ui : u) *it++ = ui;
     for (const auto& xj : x) *it++ = xj;
+    for (const auto& ui : u) *it++ = ui;
     return it;
   }
 
@@ -79,8 +80,8 @@ public:
     aggregate(x, g);
     fast_rates(u, g, du);
     slow_rates(x, u, dx);
-    for (const auto& d : du) *it++ = d;
     for (const auto& d : dx) *it++ = d;
+    for (const auto& d : du) *it++ = d;
     return it;
   }
 
@@ -96,12 +97,13 @@ public:
     return {&k};
   }
 
-  // The initial state [u; x], seedable for gradients w.r.t. initial conditions.
+  // The initial state [slow x | fast u], seedable for gradients w.r.t. initial
+  // conditions (same order as ode_state).
   template <typename Iterator>
   Iterator set_initial_state(Iterator it, double t0_ = 0.0) {
     t0 = t0_;
-    for (auto& ui : u_init) ui = *it++;
     for (auto& xj : x_init) xj = *it++;
+    for (auto& ui : u_init) ui = *it++;
     return it;
   }
 
@@ -109,8 +111,8 @@ public:
   std::vector<T*> set_initial_state(Tape& tape, Iterator it, double t0_ = 0.0) {
     t0 = t0_;
     std::vector<T*> refs;
-    for (auto& ui : u_init) { ui = *it++; tape.registerInput(ui); refs.push_back(&ui); }
     for (auto& xj : x_init) { xj = *it++; tape.registerInput(xj); refs.push_back(&xj); }
+    for (auto& ui : u_init) { ui = *it++; tape.registerInput(ui); refs.push_back(&ui); }
     return refs;
   }
 

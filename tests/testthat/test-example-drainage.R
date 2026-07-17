@@ -30,7 +30,7 @@ testthat::test_that("splitting cuts fast-step cost and the win is robust to stif
 testthat::test_that("the exact drainage recession preserves positivity", {
   L <- 5; M <- 8; tt <- seq(0, 20, by = 1.0)
   sp <- odelia:::drainage_mri(1000, L, M, TRUE, "erk33a", tt, 1e-5)
-  expect_true(all(sp$states[, 1:L] > 0))
+  expect_true(all(sp$states[, (M + 1):(M + L)] > 0))   # soil (fast) block is the tail
 })
 
 testthat::test_that("reverse mode through the split inner matches finite difference", {

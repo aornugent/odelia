@@ -31,7 +31,8 @@ testthat::test_that("with an inert fast block the macro step is a pure ERK", {
   omega <- 0.02 + 0.18 * ((0:(M - 1)) / (M - 1))
   x0 <- 1.0 + 0.5 * cos(pi * (0:(M - 1)) / M)
   checkt <- seq(0, T_end, by = 1.0)
-  analytic <- t(sapply(checkt, function(t) c(0, 0, x0 * exp(-omega * t))))
+  # state is [slow x (M) | fast u (2)]; with k=0 the fast block stays 0
+  analytic <- t(sapply(checkt, function(t) c(x0 * exp(-omega * t), 0, 0)))
   Hs <- c(1, 0.5, 0.25, 0.125)
   for (tab in c("heun", "kutta3", "erk33a")) {
     errs <- vapply(Hs, function(H) {

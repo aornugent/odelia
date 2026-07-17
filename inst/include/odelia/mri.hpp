@@ -337,19 +337,27 @@ void mri_macro_step(const System& sys, const MRICoupling& M, const OdeControl& c
 }
 
 // Advance a multirate System over a macro grid (which must land on the forcing
-// kinks). Returns the full state [u; x] at each grid point; leaves the System at
-// the final state. On a double record pass the schedule is filled; on a replay
-// pass at any scalar it is consumed.
+// kinks). State is laid out [slow | fast]; returns the full state at each grid
+// point and leaves the System at the final state. On a double record pass the
+// schedule is filled; on a replay pass at any scalar it is consumed.
 template <class System, class Subcycle = AdaptiveSubcycle>
 std::vector<std::vector<typename System::value_type>>
 mri_advance(System& sys, const MRICoupling& M, const OdeControl& control,
             const std::vector<double>& macro_times, MRISchedule& sched,
             bool replay = false, Subcycle subcycle = Subcycle{}) {
   using S = typename System::value_type;
-  const size_t nf = sys.fast_size(), ns = sys.slow_size();
+  const size_t ns = sys.slow_size();
   std::vector<S> full(sys.ode_size());
   sys.ode_state(full.begin());
-  std::vector<S> u(full.begin(), full.begin() + nf), x(full.begin() + nf, full.end());
+  std::vector<S> x(full.begin(), full.begin() + ns), u(full.begin() + ns, full.end());
+
+  auto combine = [&]() {
+    std::vector<S> s;
+    s.reserve(x.size() + u.size());
+    s.insert(s.end(), x.begin(), x.end());
+    s.insert(s.end(), u.begin(), u.end());
+    return s;
+  };
 
   if (replay) sched.cursor = 0;   // a full pass always consumes from the first sub-cycle
   std::vector<std::vector<S>> hist;
@@ -357,15 +365,9 @@ mri_advance(System& sys, const MRICoupling& M, const OdeControl& control,
   for (size_t m = 0; m + 1 < macro_times.size(); ++m) {
     mri_macro_step(sys, M, control, macro_times[m], macro_times[m + 1] - macro_times[m],
                    x, u, sched, replay, subcycle);
-    std::vector<S> s;
-    s.reserve(nf + ns);
-    s.insert(s.end(), u.begin(), u.end());
-    s.insert(s.end(), x.begin(), x.end());
-    hist.push_back(s);
+    hist.push_back(combine());
   }
-  std::vector<S> s;
-  s.insert(s.end(), u.begin(), u.end());
-  s.insert(s.end(), x.begin(), x.end());
+  std::vector<S> s = combine();
   internal::set_ode_state(sys, s, macro_times.back());
   return hist;
 }

@@ -77,17 +77,18 @@ public:
     for (int l = 0; l < n_fast; ++l) du[l] = r * (g[0] - us[l]);
   }
 
+  // State laid out [slow x | fast u] (slow-first, the multirate layout).
   template <typename Iterator>
   Iterator set_ode_state(Iterator it, double time_) {
     time = time_;
-    for (auto& ul : u) ul = *it++;
     for (auto& xj : x) xj = *it++;
+    for (auto& ul : u) ul = *it++;
     return it;
   }
   template <typename Iterator>
   Iterator ode_state(Iterator it) const {
-    for (const auto& ul : u) *it++ = ul;
     for (const auto& xj : x) *it++ = xj;
+    for (const auto& ul : u) *it++ = ul;
     return it;
   }
   template <typename Iterator>
@@ -96,8 +97,8 @@ public:
     aggregate(x, g);
     fast_rates(u, g, du);
     slow_rates(x, u, dx);
-    for (const auto& d : du) *it++ = d;
     for (const auto& d : dx) *it++ = d;
+    for (const auto& d : du) *it++ = d;
     return it;
   }
 
@@ -110,19 +111,20 @@ public:
     return {&c};
   }
 
+  // Initial state laid out [slow x | fast u], matching ode_state.
   template <typename Iterator>
   Iterator set_initial_state(Iterator it, double t0_ = 0.0) {
     t0 = t0_;
-    for (auto& ul : u_init) ul = *it++;
     for (auto& xj : x_init) xj = *it++;
+    for (auto& ul : u_init) ul = *it++;
     return it;
   }
   template <typename Tape, typename Iterator>
   std::vector<T*> set_initial_state(Tape& tape, Iterator it, double t0_ = 0.0) {
     t0 = t0_;
     std::vector<T*> refs;
-    for (auto& ul : u_init) { ul = *it++; tape.registerInput(ul); refs.push_back(&ul); }
     for (auto& xj : x_init) { xj = *it++; tape.registerInput(xj); refs.push_back(&xj); }
+    for (auto& ul : u_init) { ul = *it++; tape.registerInput(ul); refs.push_back(&ul); }
     return refs;
   }
 

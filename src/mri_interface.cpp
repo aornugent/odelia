@@ -137,9 +137,9 @@ Rcpp::List drainage_reference(double c, int n_fast, int n_slow,
 
 // J = sum of the final slow states -- a smooth scalar of the whole trajectory.
 template <class T>
-static T functional(const std::vector<T>& final_state, size_t fast) {
+static T functional(const std::vector<T>& final_state, size_t n_slow_) {
   T s(0.0);
-  for (size_t i = fast; i < final_state.size(); ++i) s += final_state[i];
+  for (size_t i = 0; i < n_slow_; ++i) s += final_state[i];   // slow block is [0, n_slow)
   return s;
 }
 
@@ -157,7 +157,7 @@ Rcpp::List two_rate_gradient(double k, int n_slow, std::string table,
   // Record the sub-cycle schedule with a double adaptive pass; capture the
   // baseline initial state the perturbations start from.
   TwoRateSystem<double> sys_d(k, n_slow);
-  const size_t fast = sys_d.fast_size(), nd = sys_d.ode_size();
+  const size_t slow = sys_d.slow_size(), nd = sys_d.ode_size();
   std::vector<double> x0(nd);
   sys_d.ode_state(x0.begin());
   MRISchedule sched;
@@ -174,7 +174,7 @@ Rcpp::List two_rate_gradient(double k, int n_slow, std::string table,
   tape.newRecording();
   sys_a.reset();
   auto hist_a = mri_advance(sys_a, M, control, times, sched, /*replay=*/true);
-  ad_type J = functional(hist_a.back(), fast);
+  ad_type J = functional(hist_a.back(), slow);
   tape.registerOutput(J);
   xad::derivative(J) = 1.0;
   tape.computeAdjoints();
@@ -186,7 +186,7 @@ Rcpp::List two_rate_gradient(double k, int n_slow, std::string table,
   // Frozen-schedule central finite difference over the same inputs [k, state].
   auto replay_J = [&](TwoRateSystem<double>& s) {
     auto h = mri_advance(s, M, control, times, sched, /*replay=*/true);
-    return functional(h.back(), fast);
+    return functional(h.back(), slow);
   };
   std::vector<double> grad_fd(inputs.size());
   {
@@ -222,7 +222,7 @@ Rcpp::List drainage_gradient_split(double c, int n_fast, int n_slow, std::string
   std::vector<double> times(macro_times.begin(), macro_times.end());
 
   DrainageSystem<double> sys_d(c, n_fast, n_slow);
-  const size_t fast = sys_d.fast_size(), nd = sys_d.ode_size();
+  const size_t slow = sys_d.slow_size(), nd = sys_d.ode_size();
   std::vector<double> x0(nd);
   sys_d.ode_state(x0.begin());
   MRISchedule sched;
@@ -238,7 +238,7 @@ Rcpp::List drainage_gradient_split(double c, int n_fast, int n_slow, std::string
   tape.newRecording();
   sys_a.reset();
   auto hist = mri_advance(sys_a, M, control, times, sched, /*replay=*/true, SplitSubcycle{});
-  ad_type J = functional(hist.back(), fast);
+  ad_type J = functional(hist.back(), slow);
   tape.registerOutput(J);
   xad::derivative(J) = 1.0;
   tape.computeAdjoints();
@@ -249,7 +249,7 @@ Rcpp::List drainage_gradient_split(double c, int n_fast, int n_slow, std::string
 
   auto replay_J = [&](DrainageSystem<double>& s) {
     auto h = mri_advance(s, M, control, times, sched, /*replay=*/true, SplitSubcycle{});
-    return functional(h.back(), fast);
+    return functional(h.back(), slow);
   };
   std::vector<double> grad_fd(inputs.size());
   {
