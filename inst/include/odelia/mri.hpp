@@ -367,4 +367,11 @@ inline long mri_fast_steps(const MRISchedule& sched) {
 }
 }
 
+// MriStep::step (the method="mri" stepper) is defined here, after both
+// SolverInternal and mri_macro_step are available, so it can sub-cycle the fast
+// block. A translation unit that includes any multirate System (hence mri.hpp)
+// therefore gets the definition; one that never touches a multirate System never
+// instantiates it.
+#include <odelia/ode_step_mri_impl.hpp>
+
 #endif

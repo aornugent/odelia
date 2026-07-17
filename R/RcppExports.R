@@ -113,6 +113,10 @@ two_rate_mri <- function(k, n_slow, table, macro_times, tol) {
     .Call(`_odelia_two_rate_mri`, k, n_slow, table, macro_times, tol)
 }
 
+two_rate_solver <- function(k, n_slow, method, times, tol) {
+    .Call(`_odelia_two_rate_solver`, k, n_slow, method, times, tol)
+}
+
 two_rate_reference <- function(k, n_slow, times, tol) {
     .Call(`_odelia_two_rate_reference`, k, n_slow, times, tol)
 }

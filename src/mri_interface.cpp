@@ -53,6 +53,31 @@ Rcpp::List two_rate_mri(double k, int n_slow, std::string table,
                             _["order"]  = M.order);
 }
 
+// Drive the two-rate system through the Solver `method` surface: method="mri"
+// selects the multirate stepper exactly as "rkck"/"rodas" select theirs, so this
+// is the path the SCM uses. Fixed macro grid (the forcing-kink grid).
+// [[Rcpp::export]]
+Rcpp::List two_rate_solver(double k, int n_slow, std::string method,
+                           Rcpp::NumericVector times, double tol) {
+  TwoRateSystem<double> sys(k, n_slow);
+  OdeControl control = make_control(tol);
+  Method m = method == "mri"   ? Method::mri
+           : method == "rodas" ? Method::rodas
+                               : Method::rkck;
+  Solver<TwoRateSystem<double>> solver(sys, control, m);
+  std::vector<double> t(times.begin(), times.end());
+  solver.advance_fixed(t);
+  auto hist = solver.get_history();
+  const int nt = (int)hist.size(), nd = (int)sys.ode_size();
+  Rcpp::NumericMatrix out(nt, nd);
+  for (int i = 0; i < nt; ++i) {
+    std::vector<double> s(nd);
+    hist[i].ode_state(s.begin());
+    for (int j = 0; j < nd; ++j) out(i, j) = s[j];
+  }
+  return Rcpp::List::create(_["states"] = out);
+}
+
 // [[Rcpp::export]]
 Rcpp::List two_rate_reference(double k, int n_slow, Rcpp::NumericVector times, double tol) {
   TwoRateSystem<double> sys(k, n_slow);

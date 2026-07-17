@@ -72,6 +72,19 @@ testthat::test_that("fast sub-cycle cost is independent of the slow block size",
   expect_lt(abs(nf[3] - nf[1]) / nf[1], 0.05)
 })
 
+testthat::test_that("method='mri' via the Solver surface is stable at the macro grid", {
+  # the integration path the SCM uses: method="mri" selects the multirate stepper
+  # like "rkck"/"rodas". On a fixed daily grid it sub-cycles the fast block and
+  # stays stable + accurate, where a single explicit step of that size blows up.
+  k <- 40; M <- 12; tt <- seq(0, 20, by = 1.0)
+  mri <- odelia:::two_rate_solver(k, M, "mri", tt, 1e-8)$states
+  ref <- odelia:::two_rate_reference(k, M, tt, 1e-10)$states
+  expect_true(all(is.finite(mri)))
+  expect_lt(max(abs(mri - ref)), 0.1)                 # MRI macro accuracy at H=1
+  rk <- odelia:::two_rate_solver(k, M, "rkck", tt, 1e-8)$states
+  expect_gt(max(abs(rk - ref)), 1)                    # fixed-step explicit is unstable
+})
+
 testthat::test_that("reverse-mode gradient through the stepper matches finite difference", {
   # record->replay: a double adaptive pass fixes the sub-cycle schedule; an active
   # pass replays it under the tape, so the adjoint is the discrete gradient of the
