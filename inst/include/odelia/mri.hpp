@@ -297,6 +297,16 @@ struct has_freeze_slow<S, std::void_t<decltype(std::declval<S&>().freeze_slow(
     std::declval<const std::vector<typename S::value_type>&>()))>>
   : std::true_type {};
 
+// A System opting into the operator-split inner (exact stiff flow + ROS34PW2 on
+// the remainder) exposes a runtime `bool mri_split()`; the presence of that
+// method also asserts it provides the analytic_flow / residual_rhs hooks the
+// split calls. A System without it always uses the adaptive black-box inner.
+template <class, class = void>
+struct mri_wants_split : std::false_type {};
+template <class S>
+struct mri_wants_split<S, std::void_t<decltype(std::declval<S&>().mri_split())>>
+  : std::true_type {};
+
 // One MRI macro step over [t, t+H]: advance slow block x and fast block u.
 template <class System, class Subcycle>
 void mri_macro_step(System& sys, const MRICoupling& M, const OdeControl& control,

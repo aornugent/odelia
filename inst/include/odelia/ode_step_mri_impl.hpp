@@ -23,8 +23,20 @@ void MriStep<System>::step(System& system, double time, double step_size,
     state_type x(y.begin(), y.begin() + ns), u(y.begin() + ns, y.end());
     MRICoupling coupling = mri_erk33a();
     MRISchedule sched;
-    mri_macro_step(system, coupling, inner_control, time, step_size,
-                   x, u, sched, /*replay=*/false, AdaptiveSubcycle{});
+    // Select the fast-block inner: the exact-flow split (Lever 1) when the
+    // System opts in at runtime, else the adaptive black-box inner. Both are
+    // instantiated only for a System that provides mri_split() (which implies
+    // the analytic_flow / residual_rhs hooks the split needs).
+    auto run = [&](auto subcycle) {
+      mri_macro_step(system, coupling, inner_control, time, step_size,
+                     x, u, sched, /*replay=*/false, subcycle);
+    };
+    if constexpr (mri_wants_split<System>::value) {
+      if (system.mri_split()) run(SplitSubcycle{});
+      else                    run(AdaptiveSubcycle{});
+    } else {
+      run(AdaptiveSubcycle{});
+    }
     std::copy(x.begin(), x.end(), y.begin());
     std::copy(u.begin(), u.end(), y.begin() + ns);
     // The macro grid is the fixed forcing-kink grid, so there is no macro-level
