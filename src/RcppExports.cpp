@@ -652,6 +652,35 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// step_log_enable
+void step_log_enable(bool on);
+RcppExport SEXP _odelia_step_log_enable(SEXP onSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< bool >::type on(onSEXP);
+    step_log_enable(on);
+    return R_NilValue;
+END_RCPP
+}
+// step_log_reset
+void step_log_reset();
+RcppExport SEXP _odelia_step_log_reset() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    step_log_reset();
+    return R_NilValue;
+END_RCPP
+}
+// step_log_get
+Rcpp::DataFrame step_log_get();
+RcppExport SEXP _odelia_step_log_get() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(step_log_get());
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_odelia_System_new", (DL_FUNC) &_odelia_System_new, 3},
@@ -706,6 +735,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Drivers_evaluate_range", (DL_FUNC) &_odelia_Drivers_evaluate_range, 3},
     {"_odelia_Drivers_get_names", (DL_FUNC) &_odelia_Drivers_get_names, 1},
     {"_odelia_Drivers_clear", (DL_FUNC) &_odelia_Drivers_clear, 1},
+    {"_odelia_step_log_enable", (DL_FUNC) &_odelia_step_log_enable, 1},
+    {"_odelia_step_log_reset", (DL_FUNC) &_odelia_step_log_reset, 0},
+    {"_odelia_step_log_get", (DL_FUNC) &_odelia_step_log_get, 0},
     {NULL, NULL, 0}
 };
 

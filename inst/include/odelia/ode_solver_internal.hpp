@@ -8,6 +8,7 @@
 #include <odelia/ode_step_rodas.hpp>
 #include <odelia/ode_step_imex.hpp>
 #include <odelia/ode_step_mri.hpp>
+#include <odelia/step_diag.hpp>
 
 #include <limits>
 #include <vector>
@@ -322,6 +323,7 @@ void SolverInternal<System>::step(System& system) {
       if (step_size_next < step_size && time_next > time_orig) {
       	// Step was decreased. Undo step (resetting the state y and
         // time), and try again with the new step_size.
+      	step_log_record(time_orig, step_size, 0);  // rejected: retried smaller
       	y         = y_orig;
       	time      = time_orig;
       	step_size = step_size_next;
@@ -344,6 +346,7 @@ void SolverInternal<System>::step(System& system) {
 	      time += step_size;
 	      step_size_last = step_size_next;
       }
+      step_log_record(time_orig, step_size, 1);  // accepted
       prev_times.push_back(time);
       save_dydt_out_as_in();
       cache(system);

@@ -209,3 +209,15 @@ Drivers_clear <- function(drivers_xp) {
     invisible(.Call(`_odelia_Drivers_clear`, drivers_xp))
 }
 
+step_log_enable <- function(on) {
+    invisible(.Call(`_odelia_step_log_enable`, on))
+}
+
+step_log_reset <- function() {
+    invisible(.Call(`_odelia_step_log_reset`))
+}
+
+step_log_get <- function() {
+    .Call(`_odelia_step_log_get`)
+}
+
