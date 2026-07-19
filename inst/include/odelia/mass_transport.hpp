@@ -1,6 +1,7 @@
 #ifndef ODELIA_MASS_TRANSPORT_HPP_
 #define ODELIA_MASS_TRANSPORT_HPP_
 
+#include <cmath>
 #include <cstddef>
 #include <vector>
 
@@ -20,6 +21,38 @@ std::vector<S> cohort_spacing(const std::vector<S>& x) {
   dx[n - 1] = x[n - 2] - x[n - 1];
   for (std::size_t i = 1; i + 1 < n; ++i) dx[i] = (x[i - 1] - x[i + 1]) / 2.0;
   return dx;
+}
+
+// The transport-log-mass chart. The population state is carried as log mass
+//
+//     lambda_i = log_density_i + log(cohort_spacing_i),
+//
+// which evolves by d(lambda)/dt = -loss (the compression C cancels identically,
+// so it is never formed -- no numerical d(g)/d(size), stable through a growth
+// stall, and no severed derivative on the tape). log density is a read-side view
+// reconstructed from lambda and the SAME cohort_spacing that defines the chart;
+// sharing the one operator is what keeps the value and its parameter-derivative
+// self-consistent. These two are inverse maps on that shared spacing:
+//
+//   log_mass_from_log_density : seed lambda from a freshly set birth log-density.
+//   log_density_from_log_mass : the view a model reads to express in log-density.
+template <class S>
+std::vector<S> log_mass_from_log_density(const std::vector<S>& x,
+                                         const std::vector<S>& log_density) {
+  using std::log;
+  const std::vector<S> dx = cohort_spacing(x);
+  std::vector<S> lm(x.size());
+  for (std::size_t i = 0; i < x.size(); ++i) lm[i] = log_density[i] + log(dx[i]);
+  return lm;
+}
+template <class S>
+std::vector<S> log_density_from_log_mass(const std::vector<S>& x,
+                                         const std::vector<S>& log_mass) {
+  using std::log;
+  const std::vector<S> dx = cohort_spacing(x);
+  std::vector<S> ld(x.size());
+  for (std::size_t i = 0; i < x.size(); ++i) ld[i] = log_mass[i] - log(dx[i]);
+  return ld;
 }
 
 // The density-transport rate: d(log density)/dt = -C - loss, with C the
