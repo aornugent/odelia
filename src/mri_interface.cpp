@@ -63,6 +63,7 @@ Rcpp::List two_rate_solver(double k, int n_slow, std::string method,
   OdeControl control = make_control(tol);
   Method m = method == "mri"   ? Method::mri
            : method == "rodas" ? Method::rodas
+           : method == "imex"  ? Method::imex
                                : Method::rkck;
   Solver<TwoRateSystem<double>> solver(sys, control, m);
   std::vector<double> t(times.begin(), times.end());
