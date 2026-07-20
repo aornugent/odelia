@@ -66,6 +66,28 @@ inline void step_monitor_record(double t, double h,
   step_mon_sig.insert(step_mon_sig.end(), sig.begin(), sig.end());
 }
 
+// -------------------------------------------------------------------------
+// Norm-argmax log (off by default). Per step ATTEMPT, records which state
+// component set rmax in the adaptive error norm (from OdeControl::last_rmax_*),
+// the rmax value, the state dimension, and whether the attempt was accepted.
+// Tests whether the rmax-setting component churns step-to-step and whether it
+// is a soil reservoir (low index) or a member (item D / extreme-value-of-max-
+// norm). Not part of any model or gradient path; one bool test when off.
+extern bool step_argmax_enabled;
+extern std::vector<int>    step_argmax_i;     // component index achieving rmax
+extern std::vector<double> step_argmax_rmax;  // the rmax value
+extern std::vector<int>    step_argmax_dim;   // state dimension at this attempt
+extern std::vector<int>    step_argmax_ok;    // 1 accepted, 0 rejected
+
+inline void step_argmax_record(int i, double rmax, int dim, int ok) {
+  if (step_argmax_enabled) {
+    step_argmax_i.push_back(i);
+    step_argmax_rmax.push_back(rmax);
+    step_argmax_dim.push_back(dim);
+    step_argmax_ok.push_back(ok);
+  }
+}
+
 }  // namespace ode
 }  // namespace odelia
 

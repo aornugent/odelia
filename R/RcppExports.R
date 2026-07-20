@@ -233,3 +233,15 @@ step_monitor_get <- function() {
     .Call(`_odelia_step_monitor_get`)
 }
 
+step_argmax_enable <- function(on) {
+    invisible(.Call(`_odelia_step_argmax_enable`, on))
+}
+
+step_argmax_reset <- function() {
+    invisible(.Call(`_odelia_step_argmax_reset`))
+}
+
+step_argmax_get <- function() {
+    .Call(`_odelia_step_argmax_get`)
+}
+

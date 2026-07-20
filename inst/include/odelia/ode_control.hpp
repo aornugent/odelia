@@ -74,13 +74,22 @@ struct OdeControl {
     double rmax = std::numeric_limits<double>::min();
     const double S = 0.9;
 
+    // Track which component achieves rmax (norm-argmax log, off-path). Pure
+    // integer bookkeeping: rmax and every returned value are computed exactly
+    // as before, so production is bit-identical whether or not the log reads
+    // these members. See step_diag.hpp / step_argmax_record.
+    int argmax = -1;
     for (size_t i = 0; i < dim; i++)
     {
       const double D0 = errlevel(y[i], dydt[i], step_size);
       using std::abs;
       const double r = abs(yerr[i]) / abs(D0);
-      rmax = std::max(r, rmax);
+      const double rprev = rmax;
+      rmax = std::max(r, rmax);       // unchanged: preserves NaN propagation
+      if (rmax != rprev) { argmax = static_cast<int>(i); }
     }
+    last_rmax_index = argmax;
+    last_rmax = rmax;
 
     if (rmax > 1.1)
     {
@@ -154,6 +163,15 @@ struct OdeControl {
   // and the System offers clip_time_after(), the controller caps each trial step
   // at the next forcing feature time. See SolverInternal::step.
   bool clip_forcing = false;
+
+  // Norm-argmax log (off-path diagnostic): the component index that achieved
+  // rmax on the last adjust_step_size call, and that rmax value. Written every
+  // call (pure int/double stores, no effect on the returned step size); read
+  // only by SolverInternal::step when the argmax log is enabled. -1 until the
+  // first attempt. Lets the analysis test whether the rmax-setting component
+  // churns step-to-step (extreme-value-of-max-norm hypothesis, item D).
+  int last_rmax_index = -1;
+  double last_rmax = 0.0;
 };
 
 }

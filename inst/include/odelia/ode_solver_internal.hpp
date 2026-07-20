@@ -342,6 +342,8 @@ void SolverInternal<System>::step(System& system) {
       	// Step was decreased. Undo step (resetting the state y and
         // time), and try again with the new step_size.
       	step_log_record(time_orig, step_size, 0);  // rejected: retried smaller
+      	step_argmax_record(control.last_rmax_index, control.last_rmax,
+      	                   static_cast<int>(size), 0);
       	y         = y_orig;
       	time      = time_orig;
       	step_size = step_size_next;
@@ -365,6 +367,8 @@ void SolverInternal<System>::step(System& system) {
 	      step_size_last = step_size_next;
       }
       step_log_record(time_orig, step_size, 1);  // accepted
+      step_argmax_record(control.last_rmax_index, control.last_rmax,
+                         static_cast<int>(size), 1);
       prev_times.push_back(time);
       save_dydt_out_as_in();
       cache(system);

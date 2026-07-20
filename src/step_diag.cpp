@@ -19,6 +19,13 @@ std::vector<double> step_mon_margins;
 std::vector<int>    step_mon_sig;
 int step_mon_ncol_margin = -1;
 int step_mon_ncol_sig = -1;
+
+// Norm-argmax log storage (see step_diag.hpp).
+bool step_argmax_enabled = false;
+std::vector<int>    step_argmax_i;
+std::vector<double> step_argmax_rmax;
+std::vector<int>    step_argmax_dim;
+std::vector<int>    step_argmax_ok;
 }  // namespace ode
 }  // namespace odelia
 
@@ -83,4 +90,26 @@ Rcpp::List step_monitor_get() {
     Rcpp::Named("h")       = odelia::ode::step_mon_h,
     Rcpp::Named("margins") = margins,
     Rcpp::Named("sig")     = sig);
+}
+
+// [[Rcpp::export]]
+void step_argmax_enable(bool on) {
+  odelia::ode::step_argmax_enabled = on;
+}
+
+// [[Rcpp::export]]
+void step_argmax_reset() {
+  odelia::ode::step_argmax_i.clear();
+  odelia::ode::step_argmax_rmax.clear();
+  odelia::ode::step_argmax_dim.clear();
+  odelia::ode::step_argmax_ok.clear();
+}
+
+// [[Rcpp::export]]
+Rcpp::DataFrame step_argmax_get() {
+  return Rcpp::DataFrame::create(
+    Rcpp::Named("i")    = odelia::ode::step_argmax_i,
+    Rcpp::Named("rmax") = odelia::ode::step_argmax_rmax,
+    Rcpp::Named("dim")  = odelia::ode::step_argmax_dim,
+    Rcpp::Named("ok")   = odelia::ode::step_argmax_ok);
 }

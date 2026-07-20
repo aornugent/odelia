@@ -710,6 +710,35 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// step_argmax_enable
+void step_argmax_enable(bool on);
+RcppExport SEXP _odelia_step_argmax_enable(SEXP onSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< bool >::type on(onSEXP);
+    step_argmax_enable(on);
+    return R_NilValue;
+END_RCPP
+}
+// step_argmax_reset
+void step_argmax_reset();
+RcppExport SEXP _odelia_step_argmax_reset() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    step_argmax_reset();
+    return R_NilValue;
+END_RCPP
+}
+// step_argmax_get
+Rcpp::DataFrame step_argmax_get();
+RcppExport SEXP _odelia_step_argmax_get() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(step_argmax_get());
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_odelia_System_new", (DL_FUNC) &_odelia_System_new, 3},
@@ -770,6 +799,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_step_monitor_enable", (DL_FUNC) &_odelia_step_monitor_enable, 1},
     {"_odelia_step_monitor_reset", (DL_FUNC) &_odelia_step_monitor_reset, 0},
     {"_odelia_step_monitor_get", (DL_FUNC) &_odelia_step_monitor_get, 0},
+    {"_odelia_step_argmax_enable", (DL_FUNC) &_odelia_step_argmax_enable, 1},
+    {"_odelia_step_argmax_reset", (DL_FUNC) &_odelia_step_argmax_reset, 0},
+    {"_odelia_step_argmax_get", (DL_FUNC) &_odelia_step_argmax_get, 0},
     {NULL, NULL, 0}
 };
 
