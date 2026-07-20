@@ -135,6 +135,24 @@ fixed order, so a 30-parameter System is one `return {&a, &b, …}` rather than 
 Nothing forces a System to be differentiable — one without these still simulates.
 (`LorenzSystem` is the worked example.)
 
+### Precomputed state must be re-derived in `reset()`, after seeding
+
+A System often caches quantities derived from its parameters: a root-solve result, a shape
+object, a normalisation constant. The driver seeds the active parameters *after* the System
+is built — it takes the `ad_parameters()` handles, writes the seeds, then calls `reset()`
+and `advance_fixed`. So anything derived at construction time holds the *pre-seed* values,
+and its derivative with respect to the seeded parameters is **zero on the tape**. A rate
+that later reads such a cached quantity silently severs every parameter whose influence runs
+only through it — the run succeeds and returns a plausible number missing that whole channel.
+
+The rule, and it is not optional for a differentiable System: **`reset()` re-derives every
+parameter-dependent precomputed quantity from the current parameters.** `reset()` is the one
+hook the driver calls after seeding and before the recorded run, so it is the only correct
+home for input-dependent precompute. Doing it at construction is an optimisation for the
+double run alone; on the active pass it must be redone. This is the same failure shape as
+populating the L3 field-value cache (below) — a value frozen before its derivative was
+seeded — and it is silent in exactly the same way.
+
 ## Differentiation targets and the drivers
 
 ```cpp
@@ -292,6 +310,9 @@ optimiser loop (asking for value and gradient each iteration) amortizes them.
 contract members — `value_type`, `rebind` / `rebind_from`, `ad_parameters`,
 `ad_initial_state`. That's it: `compute_gradient` / `compute_jacobian` work, doubles in
 and out, and a downstream package gets `Solver_gradient` / `Solver_jacobian` for free.
+If the System caches any parameter-derived quantity, re-derive it in `reset()` (see
+"Precomputed state must be re-derived in `reset()`") — constructor-time precompute is
+severed on the active pass.
 
 The complete member set:
 

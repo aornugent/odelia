@@ -61,6 +61,17 @@ inline double to_passive(double x) { return x; }
 template <typename T>
 inline double to_passive(const T& x) { return to_passive(xad::value(x)); }
 
+// Read a value where its derivative is deliberately not wanted: a diagnostic, a
+// report, a message, a value crossing back to R, or a control decision (an error
+// estimate, a convergence/NaN check, a discrete branch). Identical to to_passive
+// (strips every AD layer to a plain double), but names the intent. A bare
+// to_passive on a rate path can equally be an accidental severance of a live
+// derivative; diagnostic() declares "no derivative here, on purpose", so a reader
+// or reviewer can tell a deliberate strip from a bug at the call site.
+inline double diagnostic(double x) { return x; }
+template <typename T>
+inline double diagnostic(const T& x) { return to_passive(x); }
+
 inline void check_length(size_t received, size_t expected)
 {
   if (expected != received)

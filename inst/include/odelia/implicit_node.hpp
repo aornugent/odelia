@@ -5,12 +5,48 @@
 #include <odelia/ode_util.hpp>
 #include <odelia/supplied_derivative.hpp>
 
+#include <cmath>
 #include <type_traits>
 #include <vector>
 
 namespace odelia {
 
 template <class> inline constexpr bool always_false = false;
+
+// The value y* defined implicitly by a scalar equation F(y; p) = 0, made
+// differentiable. y* is solved OFF the tape (in double, e.g. by a root-find); this
+// returns it on the tape carrying the derivative the implicit function theorem gives
+// for the root of an equation:
+//     dy*/dp = -(dF/dp) / (dF/dy).
+// F is a callable F(S y) that evaluates the equation at the active parameters,
+// reaching them through its enclosing scope (not an enumerated vector); dF/dy is a
+// double central difference at y*. This suits a System that reads its own parameter
+// members: the argument is just the defining equation written in the working scalar,
+// and no AD machinery appears in the caller. The returned value is exactly y*
+// (bit-identical), so a quantity other parameters do not depend on introduces no
+// spurious shift; a plain-double S returns y* with nothing recorded.
+//
+// Sibling of register_implicit -- both give the implicit-function-theorem derivative
+// of a solved value. Use register_implicit when the reacting inputs are a known
+// vector and F cannot read them from scope (it forward-differentiates F per input and
+// injects via supplied_derivative); use implicit_value when F reads the active inputs
+// directly, the common case for a Strategy.
+template <class S, class Equation>
+S implicit_value(double y_star, Equation&& F) {
+  if constexpr (std::is_same_v<S, double>) {
+    return y_star;
+  } else {
+    const double eps = 1e-6 * (std::abs(y_star) + 1.0);
+    auto Fd = [&](double y) { return util::to_passive(F(S(y))); };
+    const double dFdy = (Fd(y_star + eps) - Fd(y_star - eps)) / (2.0 * eps);
+    // corr's value is ~0 (y* is the root); its derivative is (dF/dp)/(dF/dy).
+    // Subtracting its own passive value keeps the returned value exactly y* while
+    // leaving the derivative as -corr' = dy*/dp. to_passive (not xad::value) strips
+    // every layer, so this composes at a nested forward-over-reverse S too.
+    const S corr = F(S(y_star)) / dFdy;
+    return S(y_star) - corr + util::to_passive(corr);
+  }
+}
 
 // Which way the residual's own derivative must point at the operating point:
 // dF/dy > 0 (a rising balance) or dF/dy < 0 (a maximiser, where the objective's
