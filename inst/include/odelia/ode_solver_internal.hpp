@@ -384,7 +384,11 @@ void SolverInternal<System>::step(System& system) {
         if (step_monitor_enabled) {
           std::vector<double> mon_margins;
           std::vector<int> mon_sig;
-          system.step_monitor(mon_margins, mon_sig);
+          // Pass the accepted step's rmax-attaining component index so the
+          // System can append the attaining member's weight/marginality (2b
+          // safety join). control.last_rmax_index is the argmax of this
+          // (accepted) trial's error norm; -1 before the first attempt.
+          system.step_monitor(mon_margins, mon_sig, control.last_rmax_index);
           step_monitor_record(time_orig, step_size, mon_margins, mon_sig);
         }
       }
