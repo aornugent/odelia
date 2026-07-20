@@ -303,9 +303,27 @@ void SolverInternal<System>::step(System& system) {
 
   while (true) {
     // Does this appear to be the last step before reaching `time_max`?
-    const bool final_step = step_size > time_remaining;
+    bool final_step = step_size > time_remaining;
     if (final_step) {
       step_size = time_remaining;
+    }
+
+    // Forcing-kink clip: cap the trial step at the next forcing feature time so
+    // it lands on the feature instead of stepping across it (which the controller
+    // would otherwise discover by rejection-bisection). Off unless enabled AND
+    // the System offers the hook -> bit-identical when off. A feature strictly
+    // inside (time, time_max) clears final_step so we land on the feature, not on
+    // time_max; features at/after time_max are left to the final_step branch,
+    // which lands on time_max exactly (avoiding boundary fp drift that would trip
+    // the next interval's set_time check).
+    if constexpr (has_clip_times<System>::value) {
+      if (control.clip_forcing) {
+        const double t_clip = system.clip_time_after(time);
+        if (t_clip < time + step_size && t_clip < time_max) {
+          step_size = t_clip - time;
+          final_step = false;
+        }
+      }
     }
 
     stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);

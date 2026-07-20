@@ -150,6 +150,10 @@ struct OdeControl {
   double tol_abs, tol_rel, a_y, a_dydt;
   double step_size_min, step_size_max, step_size_initial;
   bool last_step_size_shrank;
+  // Forcing-kink clip (off by default -> production is bit-identical). When true
+  // and the System offers clip_time_after(), the controller caps each trial step
+  // at the next forcing feature time. See SolverInternal::step.
+  bool clip_forcing = false;
 };
 
 }

@@ -36,6 +36,21 @@ public:
   enum { value = sizeof(test<System>(0)) == sizeof(true_type) };
 };
 
+// A System may offer a forcing-kink clip: clip_time_after(t) returns the next
+// known non-smooth feature time in the forcing (> t), or +inf if none. When the
+// controller's clip is enabled (OdeControl::clip_forcing) it caps trial steps at
+// this time so a step lands on the feature rather than stepping across it.
+// Absent on a System -> the clip compiles out (bit-identical).
+template <typename System>
+class has_clip_times {
+  typedef char true_type;
+  typedef long false_type;
+  template <typename C> static true_type test(decltype(&C::clip_time_after));
+  template <typename C> static false_type test(...);
+public:
+  enum { value = sizeof(test<System>(0)) == sizeof(true_type) };
+};
+
 // The recursive interface
 template <typename ForwardIterator>
 size_t ode_size(ForwardIterator first, ForwardIterator last) {
