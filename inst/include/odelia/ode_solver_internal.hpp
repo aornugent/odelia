@@ -368,6 +368,22 @@ void SolverInternal<System>::step(System& system) {
       prev_times.push_back(time);
       save_dydt_out_as_in();
       cache(system);
+
+      // Stage-1 event classifier: record the System's event margins /
+      // branch-signatures for this accepted step. The stepper's final operation
+      // is a derivative evaluation at (y, time+h) (see Step::step), so the System
+      // is already synced to the accepted endpoint and its per-cohort solve sink
+      // already holds this step's cohorts -- no extra RHS eval is taken, so the
+      // trajectory is bit-identical. Diagnostic path only (gated by the monitor
+      // flag AND the System hook).
+      if constexpr (has_step_monitor<System>::value) {
+        if (step_monitor_enabled) {
+          std::vector<double> mon_margins;
+          std::vector<int> mon_sig;
+          system.step_monitor(mon_margins, mon_sig);
+          step_monitor_record(time_orig, step_size, mon_margins, mon_sig);
+        }
+      }
       return; // This exits the infinite loop.
     }
   }

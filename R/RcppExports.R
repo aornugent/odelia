@@ -221,3 +221,15 @@ step_log_get <- function() {
     .Call(`_odelia_step_log_get`)
 }
 
+step_monitor_enable <- function(on) {
+    invisible(.Call(`_odelia_step_monitor_enable`, on))
+}
+
+step_monitor_reset <- function() {
+    invisible(.Call(`_odelia_step_monitor_reset`))
+}
+
+step_monitor_get <- function() {
+    .Call(`_odelia_step_monitor_get`)
+}
+

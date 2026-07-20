@@ -51,6 +51,23 @@ public:
   enum { value = sizeof(test<System>(0)) == sizeof(true_type) };
 };
 
+// A System may offer a step monitor: step_monitor(margins, sig) fills a
+// fixed-width vector of double event-margin values and int branch-signature
+// codes from the state already computed for the accepted step (no extra solve).
+// The adaptive controller records these per accepted step when monitoring is
+// enabled (odelia::ode::step_monitor_enabled), for the Stage-1 event classifier
+// -- attributing step collapse to margin sign-changes / signature flips vs
+// intrinsic fast structure. Absent on a System -> compiles out (zero cost).
+template <typename System>
+class has_step_monitor {
+  typedef char true_type;
+  typedef long false_type;
+  template <typename C> static true_type test(decltype(&C::step_monitor));
+  template <typename C> static false_type test(...);
+public:
+  enum { value = sizeof(test<System>(0)) == sizeof(true_type) };
+};
+
 // The recursive interface
 template <typename ForwardIterator>
 size_t ode_size(ForwardIterator first, ForwardIterator last) {
