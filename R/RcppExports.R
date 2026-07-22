@@ -129,8 +129,20 @@ drainage_reference <- function(c, n_fast, n_slow, times, tol) {
     .Call(`_odelia_drainage_reference`, c, n_fast, n_slow, times, tol)
 }
 
+uptake_mri <- function(a_scale, n_fast, n_slow, macro_times, tol, nmicro, oracle) {
+    .Call(`_odelia_uptake_mri`, a_scale, n_fast, n_slow, macro_times, tol, nmicro, oracle)
+}
+
+uptake_reference <- function(a_scale, n_fast, n_slow, times, tol) {
+    .Call(`_odelia_uptake_reference`, a_scale, n_fast, n_slow, times, tol)
+}
+
 two_rate_gradient <- function(k, n_slow, table, macro_times, tol, eps_fd) {
     .Call(`_odelia_two_rate_gradient`, k, n_slow, table, macro_times, tol, eps_fd)
+}
+
+uptake_gradient <- function(a_scale, n_fast, n_slow, macro_times, tol, nmicro, eps_fd) {
+    .Call(`_odelia_uptake_gradient`, a_scale, n_fast, n_slow, macro_times, tol, nmicro, eps_fd)
 }
 
 drainage_gradient_split <- function(c, n_fast, n_slow, table, macro_times, tol, eps_fd) {

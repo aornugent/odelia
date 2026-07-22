@@ -410,6 +410,38 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// uptake_mri
+Rcpp::List uptake_mri(double a_scale, int n_fast, int n_slow, Rcpp::NumericVector macro_times, double tol, int nmicro, bool oracle);
+RcppExport SEXP _odelia_uptake_mri(SEXP a_scaleSEXP, SEXP n_fastSEXP, SEXP n_slowSEXP, SEXP macro_timesSEXP, SEXP tolSEXP, SEXP nmicroSEXP, SEXP oracleSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type a_scale(a_scaleSEXP);
+    Rcpp::traits::input_parameter< int >::type n_fast(n_fastSEXP);
+    Rcpp::traits::input_parameter< int >::type n_slow(n_slowSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type macro_times(macro_timesSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    Rcpp::traits::input_parameter< int >::type nmicro(nmicroSEXP);
+    Rcpp::traits::input_parameter< bool >::type oracle(oracleSEXP);
+    rcpp_result_gen = Rcpp::wrap(uptake_mri(a_scale, n_fast, n_slow, macro_times, tol, nmicro, oracle));
+    return rcpp_result_gen;
+END_RCPP
+}
+// uptake_reference
+Rcpp::List uptake_reference(double a_scale, int n_fast, int n_slow, Rcpp::NumericVector times, double tol);
+RcppExport SEXP _odelia_uptake_reference(SEXP a_scaleSEXP, SEXP n_fastSEXP, SEXP n_slowSEXP, SEXP timesSEXP, SEXP tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type a_scale(a_scaleSEXP);
+    Rcpp::traits::input_parameter< int >::type n_fast(n_fastSEXP);
+    Rcpp::traits::input_parameter< int >::type n_slow(n_slowSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type times(timesSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(uptake_reference(a_scale, n_fast, n_slow, times, tol));
+    return rcpp_result_gen;
+END_RCPP
+}
 // two_rate_gradient
 Rcpp::List two_rate_gradient(double k, int n_slow, std::string table, Rcpp::NumericVector macro_times, double tol, double eps_fd);
 RcppExport SEXP _odelia_two_rate_gradient(SEXP kSEXP, SEXP n_slowSEXP, SEXP tableSEXP, SEXP macro_timesSEXP, SEXP tolSEXP, SEXP eps_fdSEXP) {
@@ -423,6 +455,23 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
     Rcpp::traits::input_parameter< double >::type eps_fd(eps_fdSEXP);
     rcpp_result_gen = Rcpp::wrap(two_rate_gradient(k, n_slow, table, macro_times, tol, eps_fd));
+    return rcpp_result_gen;
+END_RCPP
+}
+// uptake_gradient
+Rcpp::List uptake_gradient(double a_scale, int n_fast, int n_slow, Rcpp::NumericVector macro_times, double tol, int nmicro, double eps_fd);
+RcppExport SEXP _odelia_uptake_gradient(SEXP a_scaleSEXP, SEXP n_fastSEXP, SEXP n_slowSEXP, SEXP macro_timesSEXP, SEXP tolSEXP, SEXP nmicroSEXP, SEXP eps_fdSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type a_scale(a_scaleSEXP);
+    Rcpp::traits::input_parameter< int >::type n_fast(n_fastSEXP);
+    Rcpp::traits::input_parameter< int >::type n_slow(n_slowSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type macro_times(macro_timesSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    Rcpp::traits::input_parameter< int >::type nmicro(nmicroSEXP);
+    Rcpp::traits::input_parameter< double >::type eps_fd(eps_fdSEXP);
+    rcpp_result_gen = Rcpp::wrap(uptake_gradient(a_scale, n_fast, n_slow, macro_times, tol, nmicro, eps_fd));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -773,7 +822,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_two_rate_reference", (DL_FUNC) &_odelia_two_rate_reference, 4},
     {"_odelia_drainage_mri", (DL_FUNC) &_odelia_drainage_mri, 7},
     {"_odelia_drainage_reference", (DL_FUNC) &_odelia_drainage_reference, 5},
+    {"_odelia_uptake_mri", (DL_FUNC) &_odelia_uptake_mri, 7},
+    {"_odelia_uptake_reference", (DL_FUNC) &_odelia_uptake_reference, 5},
     {"_odelia_two_rate_gradient", (DL_FUNC) &_odelia_two_rate_gradient, 6},
+    {"_odelia_uptake_gradient", (DL_FUNC) &_odelia_uptake_gradient, 7},
     {"_odelia_drainage_gradient_split", (DL_FUNC) &_odelia_drainage_gradient_split, 7},
     {"_odelia_OdeControl_new", (DL_FUNC) &_odelia_OdeControl_new, 0},
     {"_odelia_OdeControl_get_controls", (DL_FUNC) &_odelia_OdeControl_get_controls, 1},

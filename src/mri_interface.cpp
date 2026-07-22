@@ -13,6 +13,7 @@
 #include <odelia/mri.hpp>
 #include <examples/two_rate_system.hpp>
 #include <examples/drainage_system.hpp>
+#include <examples/uptake_system.hpp>
 
 using namespace Rcpp;
 using namespace odelia;
@@ -136,6 +137,54 @@ Rcpp::List drainage_reference(double c, int n_fast, int n_slow,
   return Rcpp::List::create(_["states"] = out, _["nsteps"] = (double)(solver.times().size() - 1));
 }
 
+// --- T6 uptake arbitrage (Slice 3b-iii): the frozen affine-coupling inner ------
+// Macro-stepped run of the uptake demonstrator. The fast block reads a(u)
+// refreshed as a0 + J*(u - anchor); a trust monitor re-captures the expensive
+// coupling only when it drifts. oracle=false uses the cheap sensitivity-scaled
+// excursion (the production monitor); oracle=true uses the true a-error (the ideal
+// lower bound). tol<0 forces a capture every micro-step -> the full-resolve macro
+// run (the accuracy truth the refresh is graded against). Returns the trajectory,
+// the expensive-coupling evaluation count (the scarce resource), and the baseline
+// (one per micro-step) for the speedup ratio.
+// [[Rcpp::export]]
+Rcpp::List uptake_mri(double a_scale, int n_fast, int n_slow,
+                      Rcpp::NumericVector macro_times, double tol, int nmicro,
+                      bool oracle) {
+  UptakeSystem<double> sys(a_scale, n_fast, n_slow);
+  MRICoupling M = mri_forward_euler();          // freeze slow over the leg, advance once
+  OdeControl control = make_control(1e-8);
+  std::vector<double> times(macro_times.begin(), macro_times.end());
+  MRISchedule sched;
+  auto hist = mri_advance(sys, M, control, times, sched, /*replay=*/false,
+                          UptakeSubcycle{tol, nmicro, oracle});
+  const long nlegs = (long)times.size() - 1;
+  return Rcpp::List::create(_["states"] = to_matrix(hist),
+                            _["coupling_evals"] = (double)mri_coupling_evals(sched),
+                            _["baseline"] = (double)(nlegs * nmicro));
+}
+
+// Full-resolve reference: the adaptive solver on the exact coupling (fast_rates_true
+// every RHS eval). The accuracy anchor the macro grid is compared against.
+// [[Rcpp::export]]
+Rcpp::List uptake_reference(double a_scale, int n_fast, int n_slow,
+                            Rcpp::NumericVector times, double tol) {
+  UptakeSystem<double> sys(a_scale, n_fast, n_slow);
+  OdeControl control = make_control(tol);
+  Solver<UptakeSystem<double>> solver(sys, control);
+  std::vector<double> t(times.begin(), times.end());
+  solver.advance_adaptive(t);
+  auto hist = solver.get_history();
+  const int nt = (int)hist.size(), nd = (int)sys.ode_size();
+  Rcpp::NumericMatrix out(nt, nd);
+  for (int i = 0; i < nt; ++i) {
+    std::vector<double> s(nd);
+    hist[i].ode_state(s.begin());
+    for (int j = 0; j < nd; ++j) out(i, j) = s[j];
+  }
+  return Rcpp::List::create(_["states"] = out,
+                            _["nsteps"] = (double)(solver.times().size() - 1));
+}
+
 // J = sum of the final slow states -- a smooth scalar of the whole trajectory.
 template <class T>
 static T functional(const std::vector<T>& final_state, size_t n_slow_) {
@@ -198,6 +247,75 @@ Rcpp::List two_rate_gradient(double k, int n_slow, std::string table,
     std::vector<double> xp = x0, xm = x0;
     xp[i] += eps_fd; xm[i] -= eps_fd;
     TwoRateSystem<double> sp(k, n_slow), sm(k, n_slow);
+    sp.set_initial_state(xp.begin(), times.front()); sp.reset();
+    sm.set_initial_state(xm.begin(), times.front()); sm.reset();
+    grad_fd[1 + i] = (replay_J(sp) - replay_J(sm)) / (2 * eps_fd);
+  }
+
+  return Rcpp::List::create(_["value"] = value,
+                            _["grad_adjoint"] = Rcpp::wrap(grad_adj),
+                            _["grad_fd"] = Rcpp::wrap(grad_fd));
+}
+
+// Gradient of J w.r.t. [a_scale, initial state] through the uptake inner by
+// record->replay. The double pass records where the trust monitor re-captured the
+// affine coupling; the active pass replays those exact indices under the tape, so
+// the adjoint accounts for how a0/J at each capture depend on the trajectory --
+// the exact discrete gradient of the scheme as run. Checked against a
+// frozen-schedule central finite difference (same re-expansion indices), so the
+// two differ only by the linearization the adjoint captures and FD approximates.
+// [[Rcpp::export]]
+Rcpp::List uptake_gradient(double a_scale, int n_fast, int n_slow,
+                           Rcpp::NumericVector macro_times, double tol, int nmicro,
+                           double eps_fd) {
+  using ad = xad::adj<double>;
+  using ad_type = ad::active_type;
+  MRICoupling M = mri_forward_euler();
+  OdeControl control = make_control(1e-8);
+  std::vector<double> times(macro_times.begin(), macro_times.end());
+  const UptakeSubcycle sub{tol, nmicro, /*oracle=*/false};
+
+  UptakeSystem<double> sys_d(a_scale, n_fast, n_slow);
+  const size_t slow = sys_d.slow_size(), nd = sys_d.ode_size();
+  std::vector<double> x0(nd);
+  sys_d.ode_state(x0.begin());
+  MRISchedule sched;
+  mri_advance(sys_d, M, control, times, sched, /*replay=*/false, sub);
+
+  ad::tape_type tape(false);
+  tape.activate();
+  UptakeSystem<ad_type> sys_a(a_scale, n_fast, n_slow);
+  std::vector<double> av{a_scale};
+  std::vector<ad_type*> inputs = sys_a.set_params(tape, av.begin());
+  auto ic = sys_a.set_initial_state(tape, x0.begin(), times.front());
+  inputs.insert(inputs.end(), ic.begin(), ic.end());
+  tape.newRecording();
+  sys_a.reset();
+  auto hist = mri_advance(sys_a, M, control, times, sched, /*replay=*/true,
+                          UptakeSubcycle{tol, nmicro, false});
+  ad_type J = functional(hist.back(), slow);
+  tape.registerOutput(J);
+  xad::derivative(J) = 1.0;
+  tape.computeAdjoints();
+  std::vector<double> grad_adj(inputs.size());
+  for (size_t i = 0; i < inputs.size(); ++i) grad_adj[i] = xad::derivative(*inputs[i]);
+  const double value = xad::value(J);
+  tape.deactivate();
+
+  auto replay_J = [&](UptakeSystem<double>& s) {
+    auto h = mri_advance(s, M, control, times, sched, /*replay=*/true,
+                         UptakeSubcycle{tol, nmicro, false});
+    return functional(h.back(), slow);
+  };
+  std::vector<double> grad_fd(inputs.size());
+  {
+    UptakeSystem<double> sp(a_scale + eps_fd, n_fast, n_slow), sm(a_scale - eps_fd, n_fast, n_slow);
+    grad_fd[0] = (replay_J(sp) - replay_J(sm)) / (2 * eps_fd);
+  }
+  for (size_t i = 0; i < nd; ++i) {
+    std::vector<double> xp = x0, xm = x0;
+    xp[i] += eps_fd; xm[i] -= eps_fd;
+    UptakeSystem<double> sp(a_scale, n_fast, n_slow), sm(a_scale, n_fast, n_slow);
     sp.set_initial_state(xp.begin(), times.front()); sp.reset();
     sm.set_initial_state(xm.begin(), times.front()); sm.reset();
     grad_fd[1 + i] = (replay_J(sp) - replay_J(sm)) / (2 * eps_fd);

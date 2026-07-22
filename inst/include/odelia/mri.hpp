@@ -164,6 +164,12 @@ private:
 // is the exact discrete adjoint of the scheme as run.
 struct MRISchedule {
   std::vector<std::vector<double>> subcycles;
+  // Per leg, the micro-step indices at which the uptake inner re-captured the
+  // affine coupling (subcycle_uptake). Recorded on the double pass, replayed at
+  // any scalar so the re-expansion control flow is identical -- the record->replay
+  // shape that keeps the reverse pass a straight-line tape (no branch on an AD
+  // value). Empty for the adaptive/split inners, which record `subcycles` instead.
+  std::vector<std::vector<int>> reexpansions;
   size_t cursor = 0;
 };
 
@@ -262,6 +268,54 @@ void subcycle_split(System& sys, std::vector<typename System::value_type>& u,
   }
 }
 
+// Sub-cycle the fast block over one sub-interval reading a coupling `a` that is
+// an EXPENSIVE nonlinear function of the fast state (the TF24 root-uptake sink =
+// the O(M) cohort sum), refreshed cheaply as an affine model a0 + J*(u - anchor)
+// captured by refresh_anchor. A trust monitor re-captures only when the affine
+// model has drifted, so the expensive coupling is evaluated a handful of times per
+// leg instead of every micro-step. The System supplies:
+//   void   refresh_anchor(u);          // capture a0, J, anchor at u (the one cost)
+//   void   fast_rates_frozen(u, du);   // du from the affine coupling
+//   double trust_excursion(u);         // cheap probe-free re-expansion estimate
+//   double trust_true_error(u);        // exact a-error (oracle mode / diagnostics)
+// Fixed nmicro forward-Euler micro-steps (the toy is not stiff; the plant wiring
+// reuses the soil's own split stepper). replay=false (double) records the trip
+// indices; replay=true re-captures at exactly those indices, so record->replay
+// gives the exact discrete adjoint of the scheme as run. oracle=true triggers on
+// the true a-error (an ideal lower bound on re-expansions; costs true_a per step),
+// oracle=false on the cheap sensitivity-scaled excursion (the production monitor).
+template <class System>
+void subcycle_uptake(System& sys, std::vector<typename System::value_type>& u,
+                     double ta, double dt, const OdeControl& /*control*/,
+                     MRISchedule& sched, bool replay, double tol, int nmicro,
+                     bool oracle) {
+  using S = typename System::value_type;
+  const int n = (int)u.size();
+  const double h = (nmicro > 0) ? dt / nmicro : dt;
+  std::vector<S> du(n);
+  sys.refresh_anchor(u);                          // mandatory leg-start capture
+  if (replay) {
+    const std::vector<int>& reexp = sched.reexpansions.at(sched.cursor++);
+    size_t ri = 0;
+    for (int m = 0; m < nmicro; ++m) {
+      if (ri < reexp.size() && reexp[ri] == m) { sys.refresh_anchor(u); ++ri; }
+      sys.fast_rates_frozen(u, du);
+      for (int i = 0; i < n; ++i) u[i] += h * du[i];
+    }
+  } else if constexpr (std::is_same<S, double>::value) {
+    std::vector<int> reexp;
+    for (int m = 0; m < nmicro; ++m) {
+      const double trust = oracle ? sys.trust_true_error(u) : sys.trust_excursion(u);
+      if (trust > tol) { sys.refresh_anchor(u); reexp.push_back(m); }
+      sys.fast_rates_frozen(u, du);
+      for (int i = 0; i < n; ++i) u[i] += h * du[i];
+    }
+    sched.reexpansions.push_back(std::move(reexp));
+  } else {
+    util::stop("MRI uptake record pass must run at double");
+  }
+}
+
 // The inner-stepper seam: which strategy sub-cycles the fast block. The adaptive
 // black-box RK is the default; the split is opt-in, so the same model can be run
 // both ways to measure the impact of exposing an analytic partial flow. The split
@@ -283,6 +337,24 @@ struct SplitSubcycle {
                   double ta, double dt, const OdeControl& control,
                   MRISchedule& sched, bool replay) const {
     subcycle_split(sys, u, a_poly, ta, dt, control, sched, replay);
+  }
+};
+// The uptake inner (T6): frozen affine coupling + trust monitor. Ignores a_poly
+// (the linear-aggregate slow signal) -- its coupling is the frozen a(u) captured
+// by refresh_anchor, not a signal in the sub-interval time. tol/nmicro/oracle are
+// carried on the functor so the same seam and macro stepper drive it. Only
+// instantiated for Systems providing the uptake hooks, so other models are
+// unaffected.
+struct UptakeSubcycle {
+  double tol = 1e-2;
+  int nmicro = 40;
+  bool oracle = false;
+  template <class System>
+  void operator()(System& sys, std::vector<typename System::value_type>& u,
+                  const std::vector<std::vector<typename System::value_type>>& /*a_poly*/,
+                  double ta, double dt, const OdeControl& control,
+                  MRISchedule& sched, bool replay) const {
+    subcycle_uptake(sys, u, ta, dt, control, sched, replay, tol, nmicro, oracle);
   }
 };
 
@@ -386,6 +458,15 @@ mri_advance(System& sys, const MRICoupling& M, const OdeControl& control,
 inline long mri_fast_steps(const MRISchedule& sched) {
   long n = 0;
   for (const auto& sc : sched.subcycles) n += (long)sc.size();
+  return n;
+}
+
+// Total expensive-coupling evaluations under the uptake inner: one mandatory
+// capture per leg plus one per recorded re-expansion. This is the scarce resource
+// (the O(M) cohort sum on the real patch) -- the number the arbitrage minimises.
+inline long mri_coupling_evals(const MRISchedule& sched) {
+  long n = 0;
+  for (const auto& re : sched.reexpansions) n += 1 + (long)re.size();
   return n;
 }
 
