@@ -13,37 +13,66 @@
 namespace odelia {
 namespace ode {
 
+// The body shared by the MRI steppers: split [slow | fast], run one macro step
+// with the given coupling + inner, copy back, report no macro-level error (the
+// macro grid is the fixed forcing-kink grid), and sync rates/state for history.
+template <class System, class Subcycle>
+void mri_step_run(System& system, const MRICoupling& coupling,
+                  const OdeControl& inner_control, double time, double step_size,
+                  std::vector<typename System::value_type>& y,
+                  std::vector<typename System::value_type>& yerr,
+                  std::vector<typename System::value_type>& dydt_out,
+                  const Subcycle& subcycle) {
+  using value_type = typename System::value_type;
+  const size_t ns = system.slow_size();
+  std::vector<value_type> x(y.begin(), y.begin() + ns), u(y.begin() + ns, y.end());
+  MRISchedule sched;
+  mri_macro_step(system, coupling, inner_control, time, step_size,
+                 x, u, sched, /*replay=*/false, subcycle);
+  std::copy(x.begin(), x.end(), y.begin());
+  std::copy(u.begin(), u.end(), y.begin() + ns);
+  std::fill(yerr.begin(), yerr.end(), value_type(0.0));
+  ode::derivs(system, y, dydt_out, time + step_size);
+}
+
 template <class System>
 void MriStep<System>::step(System& system, double time, double step_size,
                            state_type& y, state_type& yerr,
                            const state_type& /*dydt_in*/, state_type& dydt_out) {
   if constexpr (supported) {
-    const size_t ns = system.slow_size();
-    // State is laid out [slow | fast], fast block last.
-    state_type x(y.begin(), y.begin() + ns), u(y.begin() + ns, y.end());
     MRICoupling coupling = mri_erk33a();
-    MRISchedule sched;
     // Select the fast-block inner: the exact-flow split (Lever 1) when the
     // System opts in at runtime, else the adaptive black-box inner. Both are
     // instantiated only for a System that provides mri_split() (which implies
     // the analytic_flow / residual_rhs hooks the split needs).
-    auto run = [&](auto subcycle) {
-      mri_macro_step(system, coupling, inner_control, time, step_size,
-                     x, u, sched, /*replay=*/false, subcycle);
-    };
     if constexpr (mri_wants_split<System>::value) {
-      if (system.mri_split()) run(SplitSubcycle{});
-      else                    run(AdaptiveSubcycle{});
+      if (system.mri_split())
+        mri_step_run(system, coupling, inner_control, time, step_size, y, yerr,
+                     dydt_out, SplitSubcycle{});
+      else
+        mri_step_run(system, coupling, inner_control, time, step_size, y, yerr,
+                     dydt_out, AdaptiveSubcycle{});
     } else {
-      run(AdaptiveSubcycle{});
+      mri_step_run(system, coupling, inner_control, time, step_size, y, yerr,
+                   dydt_out, AdaptiveSubcycle{});
     }
-    std::copy(x.begin(), x.end(), y.begin());
-    std::copy(u.begin(), u.end(), y.begin() + ns);
-    // The macro grid is the fixed forcing-kink grid, so there is no macro-level
-    // error to report; the fast sub-cycle is error-controlled internally.
-    std::fill(yerr.begin(), yerr.end(), value_type(0.0));
-    // Rates at the new state -- also syncs the System onto y for history.
-    ode::derivs(system, y, dydt_out, time + step_size);
+  }
+}
+
+template <class System>
+void MriUptakeStep<System>::step(System& system, double time, double step_size,
+                                 state_type& y, state_type& yerr,
+                                 const state_type& /*dydt_in*/,
+                                 state_type& dydt_out) {
+  if constexpr (supported) {
+    // Freeze cohorts over the leg (mri_forward_euler advances the slow block once)
+    // and sub-cycle the soil against the affine-refreshed uptake with a trust
+    // monitor. Production monitor (oracle=false); tol / nmicro from the System.
+    MRICoupling coupling = mri_forward_euler();
+    UptakeSubcycle sub{system.mri_uptake_tol(), system.mri_uptake_nmicro(),
+                       /*oracle=*/false};
+    mri_step_run(system, coupling, inner_control, time, step_size, y, yerr,
+                 dydt_out, sub);
   }
 }
 

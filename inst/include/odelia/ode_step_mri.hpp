@@ -62,6 +62,46 @@ private:
   size_t size = 0;
 };
 
+// A System opts into the T6 uptake arbitrage (method="mri_uptake") by declaring
+// refresh_anchor on top of the multirate partition: over a macro leg the fast
+// block reads the expensive coupling refreshed as an affine model, re-captured
+// only when a trust monitor trips (see subcycle_uptake in mri.hpp). The System
+// also supplies mri_uptake_tol() / mri_uptake_nmicro() (the monitor threshold and
+// the fast sub-step count per leg). Forward (double) only.
+template <class, class = void>
+struct has_uptake_inner : std::false_type {};
+template <class S>
+struct has_uptake_inner<S, std::void_t<decltype(std::declval<S&>().refresh_anchor(
+    std::declval<const std::vector<typename S::value_type>&>()))>>
+  : std::true_type {};
+
+template <class System>
+class MriUptakeStep {
+public:
+  using value_type = typename System::value_type;
+  using state_type = std::vector<value_type>;
+
+  static constexpr bool supported =
+    is_multirate<System>::value && has_uptake_inner<System>::value &&
+    std::is_same<value_type, double>::value;
+
+  static const bool can_use_dydt_in = false;
+  static const bool first_same_as_last = false;
+
+  void resize(size_t size_) { size = size_; }
+  size_t order() const { return 1; }   // forward-Euler slow advance (frozen cohorts)
+
+  // One macro step over [time, time+step_size]. Defined in ode_step_mri_impl.hpp.
+  void step(System& system, double time, double step_size,
+            state_type& y, state_type& yerr,
+            const state_type& dydt_in, state_type& dydt_out);
+
+  OdeControl inner_control{1e-6, 1e-6, 1.0, 0.0, 1e-10, 1e10, 1e-4};
+
+private:
+  size_t size = 0;
+};
+
 }
 }
 

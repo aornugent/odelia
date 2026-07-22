@@ -268,6 +268,21 @@ void subcycle_split(System& sys, std::vector<typename System::value_type>& u,
   }
 }
 
+// A System whose fast block is stiff exposes a frozen-coupling operator split:
+//   void residual_frozen(u, du);   // gentle remainder (rain+cascade-uptake) with
+//                                   // the affine coupling, drainage handled by
+//                                   // analytic_flow (already required by the split
+//                                   // inner). Detected below; when present the
+//                                   // uptake sub-cycle uses a Strang split micro-
+//                                   // step instead of forward Euler.
+template <class, class = void>
+struct has_residual_frozen : std::false_type {};
+template <class S>
+struct has_residual_frozen<S, std::void_t<decltype(std::declval<S&>().residual_frozen(
+    std::declval<const std::vector<typename S::value_type>&>(),
+    std::declval<std::vector<typename S::value_type>&>()))>>
+  : std::true_type {};
+
 // Sub-cycle the fast block over one sub-interval reading a coupling `a` that is
 // an EXPENSIVE nonlinear function of the fast state (the TF24 root-uptake sink =
 // the O(M) cohort sum), refreshed cheaply as an affine model a0 + J*(u - anchor)
@@ -278,12 +293,14 @@ void subcycle_split(System& sys, std::vector<typename System::value_type>& u,
 //   void   fast_rates_frozen(u, du);   // du from the affine coupling
 //   double trust_excursion(u);         // cheap probe-free re-expansion estimate
 //   double trust_true_error(u);        // exact a-error (oracle mode / diagnostics)
-// Fixed nmicro forward-Euler micro-steps (the toy is not stiff; the plant wiring
-// reuses the soil's own split stepper). replay=false (double) records the trip
-// indices; replay=true re-captures at exactly those indices, so record->replay
-// gives the exact discrete adjoint of the scheme as run. oracle=true triggers on
-// the true a-error (an ideal lower bound on re-expansions; costs true_a per step),
-// oracle=false on the cheap sensitivity-scaled excursion (the production monitor).
+// Fixed nmicro micro-steps. The micro-step is a Strang operator split (exact
+// analytic_flow drainage + explicit frozen-coupling residual, the 3b-ii stepper)
+// for a stiff System exposing residual_frozen; plain forward Euler otherwise (the
+// non-stiff toy). replay=false (double) records the trip indices; replay=true
+// re-captures at exactly those indices, so record->replay gives the exact discrete
+// adjoint of the scheme as run. oracle=true triggers on the true a-error (an ideal
+// lower bound on re-expansions; costs true_a per step), oracle=false on the cheap
+// sensitivity-scaled excursion (the production monitor).
 template <class System>
 void subcycle_uptake(System& sys, std::vector<typename System::value_type>& u,
                      double ta, double dt, const OdeControl& /*control*/,
@@ -293,22 +310,32 @@ void subcycle_uptake(System& sys, std::vector<typename System::value_type>& u,
   const int n = (int)u.size();
   const double h = (nmicro > 0) ? dt / nmicro : dt;
   std::vector<S> du(n);
+  // One fast micro-step of size h at the current u, reading the frozen coupling.
+  auto micro = [&]() {
+    if constexpr (has_residual_frozen<System>::value) {
+      sys.analytic_flow(u, 0.5 * h);            // exact stiff drainage
+      sys.residual_frozen(u, du);               // rain+cascade-uptake, frozen a
+      for (int i = 0; i < n; ++i) u[i] += h * du[i];
+      sys.analytic_flow(u, 0.5 * h);
+    } else {
+      sys.fast_rates_frozen(u, du);             // non-stiff: plain forward Euler
+      for (int i = 0; i < n; ++i) u[i] += h * du[i];
+    }
+  };
   sys.refresh_anchor(u);                          // mandatory leg-start capture
   if (replay) {
     const std::vector<int>& reexp = sched.reexpansions.at(sched.cursor++);
     size_t ri = 0;
     for (int m = 0; m < nmicro; ++m) {
       if (ri < reexp.size() && reexp[ri] == m) { sys.refresh_anchor(u); ++ri; }
-      sys.fast_rates_frozen(u, du);
-      for (int i = 0; i < n; ++i) u[i] += h * du[i];
+      micro();
     }
   } else if constexpr (std::is_same<S, double>::value) {
     std::vector<int> reexp;
     for (int m = 0; m < nmicro; ++m) {
       const double trust = oracle ? sys.trust_true_error(u) : sys.trust_excursion(u);
       if (trust > tol) { sys.refresh_anchor(u); reexp.push_back(m); }
-      sys.fast_rates_frozen(u, du);
-      for (int i = 0; i < n; ++i) u[i] += h * du[i];
+      micro();
     }
     sched.reexpansions.push_back(std::move(reexp));
   } else {

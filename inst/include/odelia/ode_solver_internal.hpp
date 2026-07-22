@@ -20,7 +20,7 @@ namespace ode {
 // Integration method: the explicit Cash-Karp RKCK 4(5) stepper (default), the
 // implicit RODAS4(3) Rosenbrock stepper for stiff systems, or the MRI-GARK
 // multirate stepper for a System that declares a fast/slow split.
-enum class Method { rkck, rodas, imex, mri };
+enum class Method { rkck, rodas, imex, mri, mri_uptake };
 
 template <class System>
 class SolverInternal {
@@ -93,6 +93,17 @@ private:
                    "(needs a multirate fast/slow split and a non-active scalar); "
                    "use method='rkck'.");
       }
+    } else if (method == Method::mri_uptake) {
+      if constexpr (MriUptakeStep<System>::supported) {
+        mri_uptake_stepper.step(system, time_, step_size, y_, yerr_, dydt_in_,
+                                dydt_out_);
+      } else {
+        // mri_uptake additionally needs the uptake inner hooks (refresh_anchor
+        // etc.); a multirate System without them cannot use the arbitrage.
+        util::stop("method='mri_uptake' is not available for this system/scalar "
+                   "type (needs the uptake inner hooks and a non-active scalar); "
+                   "use method='rkck'.");
+      }
     } else {
       stepper.step(system, time_, step_size, y_, yerr_, dydt_in_, dydt_out_);
     }
@@ -101,18 +112,21 @@ private:
     if (method == Method::rodas) return rodas_stepper.order();
     if (method == Method::imex) return imex_stepper.order();
     if (method == Method::mri) return mri_stepper.order();
+    if (method == Method::mri_uptake) return mri_uptake_stepper.order();
     return stepper.order();
   }
   bool stepper_can_use_dydt_in() const {
     if (method == Method::rodas) return RodasStep<System>::can_use_dydt_in;
     if (method == Method::imex) return ImexStep<System>::can_use_dydt_in;
     if (method == Method::mri) return MriStep<System>::can_use_dydt_in;
+    if (method == Method::mri_uptake) return MriUptakeStep<System>::can_use_dydt_in;
     return Step<System>::can_use_dydt_in;
   }
   bool stepper_first_same_as_last() const {
     if (method == Method::rodas) return RodasStep<System>::first_same_as_last;
     if (method == Method::imex) return ImexStep<System>::first_same_as_last;
     if (method == Method::mri) return MriStep<System>::first_same_as_last;
+    if (method == Method::mri_uptake) return MriUptakeStep<System>::first_same_as_last;
     return Step<System>::first_same_as_last;
   }
 
@@ -122,6 +136,7 @@ private:
   RodasStep<System> rodas_stepper;
   ImexStep<System> imex_stepper;
   MriStep<System> mri_stepper;
+  MriUptakeStep<System> mri_uptake_stepper;
 
   double step_size_last; // Size of last successful step (or suggestion)
 
@@ -422,6 +437,7 @@ void SolverInternal<System>::resize(size_t size_) {
   rodas_stepper.resize(size_);
   imex_stepper.resize(size_);
   mri_stepper.resize(size_);
+  mri_uptake_stepper.resize(size_);
 }
 
 template <class System>

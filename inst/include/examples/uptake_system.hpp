@@ -139,6 +139,13 @@ public:
     return num / std::max(den, 1e-30);
   }
 
+  // Trust threshold / micro-steps for the method="mri_uptake" Solver path. The toy
+  // drives the uptake inner directly via mri_advance (see uptake_mri) so these are
+  // only here to satisfy MriUptakeStep instantiation when a Solver is built over
+  // this System (e.g. the adaptive reference); the direct path passes its own.
+  double mri_uptake_tol() const { return 1e-2; }
+  int mri_uptake_nmicro() const { return 40; }
+
   void slow_rates(const vec& xs, const vec& us, vec& dx) const {
     T m(0.0);
     for (const auto& ul : us) m += ul;
