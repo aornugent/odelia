@@ -246,6 +246,10 @@ class Tape
     size_type getNumVariables() const;
     size_type getNumOperations() const;
     size_type getNumStatements() const;
+    // [diagnostic] per-term sizes, to attribute getMemory() across the tape's arrays
+    size_type diagNumDerivatives() const { return size_type(derivatives_.size()); }
+    size_type diagNumCheckpoints() const { return size_type(checkpoints_.size()); }
+    size_type diagMaxDerivative() const { return size_type(currentRec_->maxDerivative_); }
 
     std::string getReusableSlotsString() const;
     size_type getNumReusableSlotSections() const;
