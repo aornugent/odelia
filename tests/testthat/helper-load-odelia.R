@@ -8,6 +8,7 @@
 .odelia_test_cache$value_guards_loaded <- FALSE
 .odelia_test_cache$implicit_node_loaded <- FALSE
 .odelia_test_cache$incomplete_gamma_loaded <- FALSE
+.odelia_test_cache$weibull_leaf_loaded <- FALSE
 .odelia_test_cache$decide_loaded <- FALSE
 .odelia_test_cache$odelia_so <- NA_character_
 
@@ -606,6 +607,60 @@ ensure_incomplete_gamma_interface <- function(rebuild = FALSE) {
   }
 
   .odelia_test_cache$incomplete_gamma_loaded <- TRUE
+  invisible(TRUE)
+}
+
+# Compile and source the self-contained Weibull-leaf example on demand. Same
+# sourceCpp mechanics as the incomplete_gamma demo (link against the odelia
+# library for the XAD Tape symbols; skip gracefully in a load_all session). This
+# is the plant-free miniature of the TF24 leaf: incomplete_gamma hydraulics +
+# nested implicit_value (ci) + implicit_value optimum (p*) + envelope asymmetry.
+ensure_weibull_leaf_interface <- function(rebuild = FALSE) {
+  if (!rebuild && isTRUE(.odelia_test_cache$weibull_leaf_loaded)) {
+    return(invisible(TRUE))
+  }
+
+  ensure_ode_interface_loaded(rebuild = rebuild)
+
+  include_dir <- dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  wl_cpp <- resolve_test_path(
+    "examples/weibull_leaf_interface.cpp",
+    "inst/examples/weibull_leaf_interface.cpp"
+  )
+
+  odelia_so <- .odelia_test_cache$odelia_so
+  pkg_libs <- if (is.character(odelia_so) &&
+                  length(odelia_so) == 1 &&
+                  !is.na(odelia_so) &&
+                  nzchar(odelia_so) &&
+                  file.exists(odelia_so)) {
+    shQuote(normalizePath(odelia_so, winslash = "/", mustWork = FALSE))
+  } else {
+    Sys.getenv("PKG_LIBS", unset = "")
+  }
+  withr::local_envvar(
+    PKG_CPPFLAGS = paste0("-I", include_dir),
+    PKG_LIBS = pkg_libs
+  )
+
+  source_cpp_result <- tryCatch(
+    {
+      Rcpp::sourceCpp(wl_cpp, rebuild = rebuild, verbose = FALSE)
+      NULL
+    },
+    error = function(e) e
+  )
+
+  if (inherits(source_cpp_result, "error")) {
+    msg <- conditionMessage(source_cpp_result)
+    if (grepl("active_tape_", msg, fixed = TRUE)) {
+      testthat::skip("weibull_leaf sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
+    }
+    stop(source_cpp_result)
+  }
+
+  .odelia_test_cache$weibull_leaf_loaded <- TRUE
   invisible(TRUE)
 }
 
