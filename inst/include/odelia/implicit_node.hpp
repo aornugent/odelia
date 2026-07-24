@@ -40,8 +40,19 @@ S implicit_value(double y_star, Equation&& F, denom_sign expect = denom_sign::an
     return y_star;
   } else {
     const double eps = 1e-6 * (std::abs(y_star) + 1.0);
+    // The dF/dy central difference is a pure double probe. If F internally builds
+    // tape nodes (e.g. a nested implicit_value, as in a re-optimised leaf), those
+    // must NOT be recorded here: their value is discarded by to_passive, so they
+    // would be orphan nodes on the active tape, and accumulating them (probe x
+    // central-difference x nesting) corrupts the tape (a segfault in XAD's operand
+    // push at depth). Pause recording across the probe; the single derivative-
+    // carrying evaluation of F is the graft below.
+    auto* tape = xad::Tape<double>::getActive();
+    const bool was_recording = (tape != nullptr) && tape->isActive();
+    if (was_recording) tape->deactivate();
     auto Fd = [&](double y) { return util::to_passive(F(S(y))); };
     const double dFdy = (Fd(y_star + eps) - Fd(y_star - eps)) / (2.0 * eps);
+    if (was_recording) tape->activate();
     if (expect != denom_sign::any) {
       const bool ok = (expect == denom_sign::positive) ? (dFdy > 0.0) : (dFdy < 0.0);
       if (!ok)
