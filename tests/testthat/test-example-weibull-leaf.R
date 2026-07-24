@@ -112,3 +112,55 @@ testthat::test_that("soil: the spatial psi channels are live and correctly signe
   expect_lt(s$dE0_ad[i0], 0)
   expect_lt(s$dE1_ad[i1], 0)
 })
+
+# --- The 3-deep nest with the psi_stem inversion node restored (design 4.2) -----
+testthat::test_that("stem: psi_stem is a genuine inversion root below the collar", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  s <- weibull_leaf_stem_demo()
+  expect_true(s$psi_stem_below_collar)       # distinct from the collar tension p*
+  expect_gt(s$psi_stem, 0.4)                  # above soil potential
+  expect_lt(abs(s$dW_dp_at_pstar), 1e-4)      # interior optimum of the full nest
+})
+
+testthat::test_that("stem: p*, profit, and psi_stem match FD through the full nest", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  s <- weibull_leaf_stem_demo()
+  # Every trait threads p -> psi_stem (inversion node) -> ci (root node); each of
+  # the three outputs is checked against a re-optimising FD across all four traits.
+  expect_true(all(channel_reld(s, "dpstar") < 2e-4))
+  expect_true(all(channel_reld(s, "dprofit") < 1e-4))
+  expect_true(all(channel_reld(s, "dpsistem") < 2e-4))
+  # The inversion channel must be live on the shape trait c (incomplete_gamma d/dc).
+  expect_gt(abs(s$dpsistem_ad[match("c", s$traits)]), 1e-3)
+})
+
+# --- Tape-memory bound: confirm the design addresses the TF24 OOM (design 4/9) -
+testthat::test_that("tape footprint is independent of the inner solver's iterations", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  # The design claim: implicit_value solves OFF the tape, so tape size does not
+  # depend on how many iterations the inner solve takes.
+  node <- lapply(c(30, 60, 120, 240),
+                 function(it) weibull_leaf_tape_profile(1, it, record_solver = FALSE))
+  ops <- vapply(node, function(r) r$ops, numeric(1))
+  expect_equal(length(unique(ops)), 1L)   # exactly constant across iteration counts
+  # The recorded (on-tape solve) path, by contrast, grows with iterations.
+  rec <- lapply(c(30, 240),
+                function(it) weibull_leaf_tape_profile(1, it, record_solver = TRUE))
+  expect_gt(rec[[2]]$ops, 3 * rec[[1]]$ops)
+})
+
+testthat::test_that("per-solve tape cost stays small vs the recorded (OOM) path", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  node1  <- weibull_leaf_tape_profile(1,    60, FALSE)
+  node1k <- weibull_leaf_tape_profile(1000, 60, FALSE)
+  rec1   <- weibull_leaf_tape_profile(1,    60, TRUE)
+  rec1k  <- weibull_leaf_tape_profile(1000, 60, TRUE)
+  node_per <- (node1k$ops - node1$ops) / 999
+  rec_per  <- (rec1k$ops  - rec1$ops)  / 999
+  expect_gt(rec_per, 10 * node_per)       # recorded solve is >10x the per-solve cost
+  expect_lt(node_per, 2000)               # node path: a few thousand ops per solve
+  # ... and the node path also stays CORRECT: the recorded bisection carries p* as a
+  # frozen-endpoint affine combination, so its trait gradient collapses to zero.
+  expect_gt(abs(node1$grad_kmax), 1e-3)
+  expect_equal(rec1$grad_kmax, 0)
+})

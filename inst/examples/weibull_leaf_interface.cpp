@@ -412,6 +412,236 @@ static std::vector<double> fd_grad_soil(int which, SoilTraits<double> t0,
   return g;
 }
 
+// ===========================================================================
+// (D) The stem-tension inversion -- the middle solve of the 3-deep nest (4.2).
+//
+// The demos above collapse gc = alpha*E_up, skipping the transpiration inversion
+// that in TF24 sits between the collar optimum and the ci root. Restore it: the
+// collar supply E_up(p) is transpired through the stem, whose tension psi_stem is
+// the root of a DISTINCT-scale Weibull supply matching that demand,
+//   stem_supply(psi_stem) = kmax (G_stem(psi_stem) - G_stem(psi_soil)) = E_up(p),
+// a monotone-rising inversion (denominator kmax*cond_stem(psi_stem) > 0, sign-
+// definite and regular -- an inversion root, not an optimum). The stem is what
+// cavitates, so the hydraulic cost is borne on psi_stem, not p; because the stem
+// uses a different scale, that cost is NOT a function of p alone, so d(psi_stem)/
+// dtheta genuinely has to flow. This is the full nest p -> psi_stem -> ci.
+// ===========================================================================
+namespace {
+constexpr double BETA_STEM = 0.7;  // stem transpires a fixed fraction of collar supply
+}
+
+// The stem supply at stem tension psi_stem is the same Weibull water path read at
+// psi_stem instead of the collar -- i.e. uptake() evaluated at psi_stem. The stem
+// carries a fraction BETA_STEM of the collar supply, so the inversion
+//   uptake(psi_stem) = BETA_STEM * uptake(p)
+// always has a unique root in (psi_soil, p): monotone rising, f(psi_soil) < 0,
+// f(p) = (1-BETA)*uptake(p) > 0. Denominator d/dpsi_stem = kmax*cond(psi_stem) > 0.
+static double solve_psistem_double(double demand, const Traits<double>& t, double p_hi) {
+  auto f = [&](double ps) { return uptake<double>(ps, t) - demand; };
+  double lo = t.psi_soil, b = p_hi;
+  for (int i = 0; i < 200; ++i) {
+    double m = 0.5 * (lo + b);
+    if (f(m) < 0.0) lo = m; else b = m;
+    if (b - lo < 1e-13) break;
+  }
+  return 0.5 * (lo + b);
+}
+
+// Full 3-deep profit: p -> psi_stem (inversion node) -> ci (root node). The stem
+// is what cavitates, so the hydraulic cost is borne on psi_stem. Both inner solves
+// are implicit_value nodes (solved off-tape).
+template <class S>
+static S profit_stem(const S& p, const Traits<S>& t) {
+  const Traits<double> td{to_passive(t.kmax), to_passive(t.c),
+                          to_passive(t.psi_soil), to_passive(t.vcmax)};
+  S E = uptake<S>(p, t);                       // collar supply = transpiration
+  S demand = S(BETA_STEM) * E;                 // delivered through the stem
+  const double psi_stem_star =
+      solve_psistem_double(to_passive(demand), td, to_passive(p));
+  S psi_stem = odelia::implicit_value<S>(psi_stem_star, [&](S ps) {
+    return uptake<S>(ps, t) - demand;          // inversion residual
+  });
+
+  const double gc_d = to_passive(ALPHA * E);
+  const double ci_star = solve_ci_double(gc_d, td);
+  S gc = ALPHA * E;
+  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) {
+    return assim<S>(c_i, t) - gc * (CA - c_i);
+  });
+  return assim<S>(ci, t) - hydraulic_cost<S>(psi_stem, t);  // cost on stem tension
+}
+
+static double dWdp_stem_double(double p, const Traits<double>& t) {
+  const double e = 1e-4 * (std::abs(p) + 1.0);
+  return (profit_stem<double>(p + e, t) - profit_stem<double>(p - e, t)) / (2.0 * e);
+}
+
+// The stem profit W(p) has a flat high-p tail (cost and assimilation both
+// saturate), so a bare bisection on dW/dp can lock onto the tail instead of the
+// interior maximum. Grid-scan for the argmax cell first, then bisect dW/dp inside
+// it -- robust to the tail, and the same anchor the AD node differentiates.
+static double solve_pstar_stem_double(const Traits<double>& t, double lo, double hi) {
+  const int N = 400;
+  double best_p = lo, best_W = profit_stem<double>(lo, t);
+  for (int i = 1; i <= N; ++i) {
+    double p = lo + (hi - lo) * i / N;
+    double W = profit_stem<double>(p, t);
+    if (W > best_W) { best_W = W; best_p = p; }
+  }
+  double a = std::max(lo, best_p - (hi - lo) / N);
+  double b = std::min(hi, best_p + (hi - lo) / N);
+  double fa = dWdp_stem_double(a, t), fb = dWdp_stem_double(b, t);
+  if (fa * fb > 0.0) return best_p;
+  for (int i = 0; i < 200; ++i) {
+    double m = 0.5 * (a + b), fm = dWdp_stem_double(m, t);
+    if (fa * fm <= 0.0) { b = m; fb = fm; } else { a = m; fa = fm; }
+    if (b - a < 1e-13) break;
+  }
+  return 0.5 * (a + b);
+}
+
+template <class S>
+static S pstar_stem_node(double p_star, const Traits<S>& t) {
+  const double eps = 1e-3 * (std::abs(p_star) + 1.0);
+  return odelia::implicit_value<S>(p_star, [&](S p) {
+    return (profit_stem<S>(p + eps, t) - profit_stem<S>(p - eps, t)) / (S(2.0) * eps);
+  });
+}
+
+// which: 0 = p*, 1 = profit, 2 = psi_stem(p*).
+static std::vector<double> ad_grad_stem(int which, const Traits<double>& t0,
+                                        double p_star) {
+  xad::adj<double>::tape_type tape;
+  Traits<RevS> t{t0.kmax, t0.c, t0.psi_soil, t0.vcmax};
+  tape.registerInput(t.kmax); tape.registerInput(t.c);
+  tape.registerInput(t.psi_soil); tape.registerInput(t.vcmax);
+  tape.newRecording();
+  RevS ps = pstar_stem_node<RevS>(p_star, t);
+  RevS E = uptake<RevS>(ps, t);
+  RevS demand = RevS(BETA_STEM) * E;
+  const double pss = solve_psistem_double(to_passive(demand), t0, to_passive(ps));
+  RevS psi_stem = odelia::implicit_value<RevS>(pss, [&](RevS x) {
+    return uptake<RevS>(x, t) - demand;
+  });
+  RevS out = (which == 0) ? ps
+           : (which == 1) ? profit_stem<RevS>(ps, t)
+                          : psi_stem;
+  tape.registerOutput(out);
+  xad::derivative(out) = 1.0;
+  tape.computeAdjoints();
+  return {xad::derivative(t.kmax), xad::derivative(t.c),
+          xad::derivative(t.psi_soil), xad::derivative(t.vcmax)};
+}
+
+static std::vector<double> fd_grad_stem(int which, Traits<double> t0, double lo,
+                                        double hi) {
+  auto out_at = [&](const Traits<double>& t) {
+    double ps = solve_pstar_stem_double(t, lo, hi);
+    if (which == 0) return ps;
+    if (which == 1) return profit_stem<double>(ps, t);
+    return solve_psistem_double(BETA_STEM * uptake<double>(ps, t), t, ps);
+  };
+  double* fields[4] = {&t0.kmax, &t0.c, &t0.psi_soil, &t0.vcmax};
+  std::vector<double> g(4);
+  for (int k = 0; k < 4; ++k) {
+    const double v0 = *fields[k];
+    const double h = 1e-6 * (std::abs(v0) + 1.0);
+    *fields[k] = v0 + h; const double fp = out_at(t0);
+    *fields[k] = v0 - h; const double fm = out_at(t0);
+    *fields[k] = v0;
+    g[k] = (fp - fm) / (2 * h);
+  }
+  return g;
+}
+
+// ===========================================================================
+// (C) Tape-memory profile -- confirm the design bounds the tape (the TF24 OOM).
+//
+// The OOM came from recording the leaf's iterative solves on the run tape: every
+// bisection step's residual evaluation becomes tape nodes, so the footprint is
+// O(iterations x solves) and blows up over cohort-steps x soil-layers. The design
+// fix is that implicit_value solves OFF the tape and records only the residual at
+// the converged point plus one grafted IFT edge -- O(1) per solve, independent of
+// the iteration count.
+//
+// To measure the contrast we need the OOM path too: profit_recorded runs the SAME
+// leaf but with the ci bisection ARITHMETIC in the active type (recorded), and
+// pstar_recorded wraps the outer optimum bisection the same way -- the fully naive
+// nested record. Everything here is throwaway instrumentation; the leaf physics is
+// unchanged.
+// ===========================================================================
+
+// Inner ci solve with the bisection recorded on the tape (control flow via
+// to_passive stays off-tape; the arithmetic does not). O(iters) tape nodes.
+template <class S>
+static S profit_recorded(const S& p, const Traits<S>& t, int iters) {
+  S gc = ALPHA * uptake<S>(p, t);
+  auto resid = [&](const S& ci) { return assim<S>(ci, t) - gc * (CA - ci); };
+  S lo(0.0), hi(CA);
+  for (int i = 0; i < iters; ++i) {
+    S mid = S(0.5) * (lo + hi);
+    if (to_passive(resid(mid)) > 0.0) hi = mid; else lo = mid;
+  }
+  S ci = S(0.5) * (lo + hi);
+  return assim<S>(ci, t) - hydraulic_cost<S>(p, t);
+}
+
+// Outer p* optimum with BOTH bisections recorded: the fully naive nested solve,
+// O(iters^2) tape nodes -- the OOM path in miniature.
+template <class S>
+static S leaf_output_recorded(const Traits<S>& t, double lo, double hi, int iters) {
+  auto dWdp = [&](const S& p) {
+    const S e(1e-4);
+    return (profit_recorded<S>(p + e, t, iters) - profit_recorded<S>(p - e, t, iters)) / (S(2.0) * e);
+  };
+  S a(lo), b(hi);
+  for (int i = 0; i < iters; ++i) {
+    S m = S(0.5) * (a + b);
+    if (to_passive(dWdp(a)) * to_passive(dWdp(m)) <= 0.0) b = m; else a = m;
+  }
+  S p_star = S(0.5) * (a + b);
+  return profit_recorded<S>(p_star, t, iters);
+}
+
+// The design path: the leaf output through implicit_value nodes (solve off-tape).
+template <class S>
+static S leaf_output_node(const Traits<S>& t, double p_star) {
+  S ps = pstar_node<S>(p_star, t);
+  return profit<S>(ps, t);
+}
+
+// [[Rcpp::export]]
+Rcpp::List weibull_leaf_tape_profile(int n_solves = 1, int inner_iters = 60,
+                                     bool record_solver = false) {
+  const Traits<double> t0{2.0, 3.0, 0.4, 5.0};
+  const double lo = 0.401, hi = 6.0;
+  const double p_star = solve_pstar_double(t0, lo, hi);
+
+  xad::adj<double>::tape_type tape;
+  Traits<RevS> t{t0.kmax, t0.c, t0.psi_soil, t0.vcmax};
+  tape.registerInput(t.kmax); tape.registerInput(t.c);
+  tape.registerInput(t.psi_soil); tape.registerInput(t.vcmax);
+  tape.newRecording();
+
+  RevS acc(0.0);
+  for (int i = 0; i < n_solves; ++i) {
+    acc += record_solver ? leaf_output_recorded<RevS>(t, lo, hi, inner_iters)
+                         : leaf_output_node<RevS>(t, p_star);
+  }
+  tape.registerOutput(acc);
+  xad::derivative(acc) = 1.0;
+  tape.computeAdjoints();
+
+  return Rcpp::List::create(
+      Rcpp::Named("n_solves") = n_solves,
+      Rcpp::Named("inner_iters") = inner_iters,
+      Rcpp::Named("record_solver") = record_solver,
+      Rcpp::Named("mem_bytes") = static_cast<double>(tape.getMemory()),
+      Rcpp::Named("ops") = static_cast<double>(tape.getNumOperations()),
+      Rcpp::Named("stmts") = static_cast<double>(tape.getNumStatements()),
+      Rcpp::Named("grad_kmax") = xad::derivative(t.kmax));
+}
+
 // [[Rcpp::export]]
 Rcpp::List weibull_leaf_demo(double kmax = 2.0, double c = 3.0,
                              double psi_soil = 0.4, double vcmax = 5.0) {
@@ -468,6 +698,35 @@ Rcpp::List weibull_leaf_bound_demo(double kmax = 2.0, double c = 3.0,
       Rcpp::Named("dprofit_fd") = nv(fd_grad_bound(1, t0, lo, hi)),
       Rcpp::Named("duptake_ad") = nv(ad_grad_bound(2, t0, p_crit)),
       Rcpp::Named("duptake_fd") = nv(fd_grad_bound(2, t0, lo, hi)));
+}
+
+// The full 3-deep nest p -> psi_stem -> ci: the transpiration-inversion node
+// restored between the collar optimum and the ci root.
+// [[Rcpp::export]]
+Rcpp::List weibull_leaf_stem_demo(double kmax = 2.0, double c = 3.0,
+                                  double psi_soil = 0.4, double vcmax = 5.0) {
+  const Traits<double> t0{kmax, c, psi_soil, vcmax};
+  const double lo = psi_soil + 1e-3, hi = 6.0;
+  const double p_star = solve_pstar_stem_double(t0, lo, hi);
+  const double e = 1e-4;
+  const double dW = (profit_stem<double>(p_star + e, t0) - profit_stem<double>(p_star - e, t0)) / (2 * e);
+  const double psi_stem = solve_psistem_double(BETA_STEM * uptake<double>(p_star, t0), t0, p_star);
+
+  auto nv = [](const std::vector<double>& x) {
+    return Rcpp::NumericVector(x.begin(), x.end());
+  };
+  return Rcpp::List::create(
+      Rcpp::Named("traits") = Rcpp::CharacterVector::create("kmax", "c", "psi_soil", "vcmax"),
+      Rcpp::Named("p_star") = p_star,
+      Rcpp::Named("psi_stem") = psi_stem,
+      Rcpp::Named("psi_stem_below_collar") = (psi_stem < p_star),  // distinct root
+      Rcpp::Named("dW_dp_at_pstar") = dW,
+      Rcpp::Named("dpstar_ad") = nv(ad_grad_stem(0, t0, p_star)),
+      Rcpp::Named("dpstar_fd") = nv(fd_grad_stem(0, t0, lo, hi)),
+      Rcpp::Named("dprofit_ad") = nv(ad_grad_stem(1, t0, p_star)),
+      Rcpp::Named("dprofit_fd") = nv(fd_grad_stem(1, t0, lo, hi)),
+      Rcpp::Named("dpsistem_ad") = nv(ad_grad_stem(2, t0, p_star)),
+      Rcpp::Named("dpsistem_fd") = nv(fd_grad_stem(2, t0, lo, hi)));
 }
 
 // Two-layer soil feedback: per-layer uptake, both layers active, the spatial
