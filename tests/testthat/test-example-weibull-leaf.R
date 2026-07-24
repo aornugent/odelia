@@ -52,3 +52,63 @@ testthat::test_that("envelope asymmetry: dE_up/dtrait needs dp* and matches FD",
   reld <- channel_reld(weibull_leaf_demo(), "duptake")
   expect_true(all(reld < 1e-3), info = paste(names(reld), signif(reld, 3), collapse = "  "))
 })
+
+# --- The bound / fold regime (design 4.3, "the one genuinely new concept") ----
+testthat::test_that("bound regime: p* pins at p_crit, off the interior optimum", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  b <- weibull_leaf_bound_demo()
+  expect_true(b$bound_binds)                 # unconstrained optimum exceeds p_crit
+  expect_equal(b$p_star, b$p_crit)           # leaf pinned at the hydraulic bound
+  expect_gt(abs(b$dW_dp_at_pstar), 0.1)      # NOT stationary -- genuinely bound
+})
+
+testthat::test_that("bound regime: dp*/dtrait flows through the branch-death node", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  r <- weibull_leaf_bound_demo()
+  reld <- channel_reld(r, "dpstar")
+  expect_true(all(reld < 1e-4), info = paste(names(reld), signif(reld, 3), collapse = "  "))
+  # p_crit depends only on the shape c; the other channels are structurally zero.
+  expect_gt(abs(r$dpstar_ad[match("c", r$traits)]), 1e-6)
+  expect_equal(r$dpstar_ad[match("kmax", r$traits)], 0)
+})
+
+testthat::test_that("bound regime: dprofit carries dp* (no envelope cancellation)", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  r <- weibull_leaf_bound_demo()
+  # dW/dp != 0 at the bound, so unlike the interior case the profit gradient is
+  # NOT the direct partial alone -- it carries dp*/dtrait, on every channel.
+  reld <- channel_reld(r, "dprofit")
+  expect_true(all(reld < 1e-4), info = paste(names(reld), signif(reld, 3), collapse = "  "))
+  expect_true(all(channel_reld(r, "duptake") < 1e-4))
+})
+
+# --- Two-layer soil feedback (design 5, the spatial sign-error channel) --------
+testthat::test_that("soil: two active layers, p* out-tensions both", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  s <- weibull_leaf_soil_demo()
+  expect_true(s$both_active)
+  expect_lt(abs(s$dW_dp_at_pstar), 1e-4)     # interior optimum with two soil sinks
+})
+
+testthat::test_that("soil: p* and per-layer sinks match FD across all six traits", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  s <- weibull_leaf_soil_demo()
+  # dp* and the (non-stationary) uptake channels are limited by the re-optimising
+  # FD reference; the envelope profit gradient is exact.
+  expect_true(all(channel_reld(s, "dpstar") < 2e-4))
+  expect_true(all(channel_reld(s, "dprofit") < 1e-4))
+  expect_true(all(channel_reld(s, "dEup") < 2e-4))
+  # Per-layer sinks: the spatial psi0/psi1 channel is where a transposed sign
+  # historically flipped the gradient. Each layer's sink matches FD.
+  expect_true(all(channel_reld(s, "dE0") < 2e-4))
+  expect_true(all(channel_reld(s, "dE1") < 2e-4))
+})
+
+testthat::test_that("soil: the spatial psi channels are live and correctly signed", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  s <- weibull_leaf_soil_demo()
+  # A drier layer (higher psi_i) reduces that layer's uptake: dE_i/dpsi_i < 0.
+  i0 <- match("psi0", s$traits); i1 <- match("psi1", s$traits)
+  expect_lt(s$dE0_ad[i0], 0)
+  expect_lt(s$dE1_ad[i1], 0)
+})
