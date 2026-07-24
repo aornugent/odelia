@@ -1,11 +1,11 @@
-# register_implicit differentiates a scalar inner solve F(y; p) = 0 by the
+# implicit_value differentiates a scalar inner solve F(y; p) = 0 by the
 # implicit function theorem -- dy/dp = -(dF/dp)/(dF/dy) formed by
 # forward-differentiating the residual at the root -- without recording the
 # iteration. The reverse gradient must match the analytic derivative and a
 # re-solve finite difference, plain double returns just the root, and the
 # forward-vs-reverse dot-product oracle holds.
 
-test_that("register_implicit gives an exact IFT gradient across double, forward, and reverse", {
+test_that("implicit_value gives an exact IFT gradient across double, forward, and reverse", {
   testthat::skip_if(is_pkgload_dll(), "native-pointer lifecycle unstable under load_all")
   ensure_implicit_node_interface()
 
@@ -25,7 +25,7 @@ test_that("register_implicit gives an exact IFT gradient across double, forward,
   expect_equal(r$jvp, r$dot_v_grad, tolerance = 1e-11)
 })
 
-test_that("register_implicit handles a maximiser (negative denominator) and asserts the sign", {
+test_that("implicit_value handles a maximiser (negative denominator) and asserts the sign", {
   testthat::skip_if(is_pkgload_dll(), "native-pointer lifecycle unstable under load_all")
   ensure_implicit_node_interface()
 
