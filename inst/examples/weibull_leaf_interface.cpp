@@ -761,3 +761,302 @@ Rcpp::List weibull_leaf_soil_demo(double k0 = 1.2, double k1 = 0.8,
       Rcpp::Named("dE1_ad") = nv(ad_grad_soil(4, t0, p_star)),
       Rcpp::Named("dE1_fd") = nv(fd_grad_soil(4, t0, lo, hi)));
 }
+
+// ===========================================================================
+// (E) The resistance-network uptake -- the REAL leaf_output::soil_uptake.
+//
+// Demos (A)-(D) use the clean flux E_i = k_i (G(p) - G(psi_i)). TF24's actual
+// per-layer uptake is a Darcy flux through a resistance network:
+//   E_i = (psi_soil_i - P_x_r - z_i) / (area_leaf * r_R_i),
+// with r_R_i = rH_i * span / integral + rV_i, and the integral the MEAN fractional
+// conductivity over [P_src_min, P_src_max] via cumulative_vuln (an incomplete_gamma),
+// split at 0 (potentials above atmospheric conduct fully), plus two degenerate
+// guards (equal potentials -> gravity-only; gradient balances gravity -> zero).
+// This is the surface (A)-(D) never exercised, and it carries the ONE channel the
+// signature widening (v3 4.4) exists to restore: the root Weibull shape root_b/
+// root_c is SEEDED and reaches E_up only through the conductivity integral, so
+// d(E_up)/d(root_c) -- through incomplete_gamma's series d/da -- was structurally
+// zero until root_b/root_c crossed as S. Ported verbatim and FD-certified here.
+//
+// The two degenerate branches fire only at EXACT potential equality (measure-zero
+// guards against a 0/0), so they are not differentiable surfaces and are not
+// FD-checked; the general branch is the one that carries the operating gradient.
+// ===========================================================================
+namespace {
+constexpr int    NLAY        = 2;
+constexpr double NR_H[NLAY]  = {3.0, 5.0};   // r_R_H_min per layer (fixed geometry)
+constexpr double NR_V[NLAY]  = {0.5, 1.2};   // r_R_V_sum per layer
+constexpr double NGRAV[NLAY] = {0.05, 0.15}; // grav_head_z per layer
+constexpr double NAREA       = 4.0;          // area_leaf
+}
+
+// proportion_of_conductivity and cumulative_vuln with a SEEDED scale b (the (A)-(D)
+// helpers fix b = B_WEIBULL; soil_uptake needs d/d(root_b) too). Match leaf_output.
+template <class S>
+static S prop_cond_b(const S& m, const S& b, const S& c) {
+  using std::exp; using std::pow;
+  return exp(-pow(m / b, c));
+}
+template <class S>
+static S cumulative_vuln_b(const S& m, const S& b, const S& c) {
+  using std::exp; using std::log;
+  if (to_passive(m) <= 0.0) return S(0.0);
+  S Xc = exp(c * log(m / b));
+  return (b / c) * odelia::incomplete_gamma<S>(S(1.0) / c, Xc);
+}
+
+// Seeded hydraulic + soil traits for the network uptake.
+template <class S>
+struct NetTraits { S root_b, root_c, psi0, psi1; };
+
+// Verbatim port of leaf_output::soil_uptake. P_x_r is the SIGNED collar potential
+// (= -collar tension magnitude); psi_soil signed (negative). Fills per-layer cons.
+template <class S>
+static S soil_uptake_net(const S& P_x_r, const NetTraits<S>& t, std::vector<S>& cons) {
+  const S psi_soil[NLAY] = {t.psi0, t.psi1};
+  const S inv_area = S(1.0) / S(NAREA);
+  S E_up(0.0);
+  for (int i = 0; i < NLAY; ++i) {
+    const bool soil_lt_collar = to_passive(psi_soil[i]) < to_passive(P_x_r);
+    S P_src_min = soil_lt_collar ? psi_soil[i] : P_x_r;
+    S P_src_max = soil_lt_collar ? P_x_r : psi_soil[i];
+    S E_i(0.0);
+    if (std::abs(to_passive(P_x_r) - to_passive(psi_soil[i])) < 1e-8) {
+      // Equal potentials: uptake balances the gravitational head only.
+      S f_ri = prop_cond_b<S>(-P_src_min, t.root_b, t.root_c);
+      S r_R = S(NR_H[i]) / f_ri + S(NR_V[i]);
+      E_i = -S(NGRAV[i]) * inv_area / r_R;
+    } else if (std::abs((to_passive(psi_soil[i]) - to_passive(P_x_r)) - NGRAV[i]) < 1e-8) {
+      E_i = S(0.0);  // gradient exactly balances gravity: no uptake
+    } else {
+      // Mean fractional conductivity over [P_src_min, P_src_max], split at 0.
+      S hi_neg = (to_passive(P_src_max) < 0.0) ? P_src_max : S(0.0);
+      S lo_pos = (to_passive(P_src_min) > 0.0) ? P_src_min : S(0.0);
+      S integral(0.0);
+      if (to_passive(hi_neg) > to_passive(P_src_min))
+        integral += cumulative_vuln_b<S>(-P_src_min, t.root_b, t.root_c) -
+                    cumulative_vuln_b<S>(-hi_neg, t.root_b, t.root_c);
+      if (to_passive(P_src_max) > to_passive(lo_pos))
+        integral += (P_src_max - lo_pos);
+      S span = P_src_max - P_src_min;
+      S r_R = S(NR_H[i]) * span / integral + S(NR_V[i]);
+      E_i = (psi_soil[i] - P_x_r - S(NGRAV[i])) * inv_area / r_R;
+    }
+    cons[i] = E_i;
+    E_up += E_i;
+  }
+  return E_up;
+}
+
+// which: 0 = E_up, 1 = E_layer0, 2 = E_layer1. Collar tension p fixed (the uptake
+// function's own gradient w.r.t. the hydraulic/soil traits is what diverged).
+static std::vector<double> ad_grad_net(int which, const NetTraits<double>& t0, double p) {
+  xad::adj<double>::tape_type tape;
+  NetTraits<RevS> t{t0.root_b, t0.root_c, t0.psi0, t0.psi1};
+  tape.registerInput(t.root_b); tape.registerInput(t.root_c);
+  tape.registerInput(t.psi0); tape.registerInput(t.psi1);
+  tape.newRecording();
+  std::vector<RevS> cons(NLAY);
+  RevS eup = soil_uptake_net<RevS>(RevS(-p), t, cons);
+  RevS out = (which == 0) ? eup : (which == 1) ? cons[0] : cons[1];
+  tape.registerOutput(out);
+  xad::derivative(out) = 1.0;
+  tape.computeAdjoints();
+  return {xad::derivative(t.root_b), xad::derivative(t.root_c),
+          xad::derivative(t.psi0), xad::derivative(t.psi1)};
+}
+
+static std::vector<double> fd_grad_net(int which, NetTraits<double> t0, double p) {
+  auto out_at = [&](const NetTraits<double>& t) {
+    std::vector<double> cons(NLAY);
+    double eup = soil_uptake_net<double>(-p, t, cons);
+    return (which == 0) ? eup : (which == 1) ? cons[0] : cons[1];
+  };
+  double* fields[4] = {&t0.root_b, &t0.root_c, &t0.psi0, &t0.psi1};
+  std::vector<double> g(4);
+  for (int k = 0; k < 4; ++k) {
+    const double v0 = *fields[k];
+    const double h = 1e-6 * (std::abs(v0) + 1.0);
+    *fields[k] = v0 + h; const double fp = out_at(t0);
+    *fields[k] = v0 - h; const double fm = out_at(t0);
+    *fields[k] = v0;
+    g[k] = (fp - fm) / (2 * h);
+  }
+  return g;
+}
+
+// ===========================================================================
+// (F) The bound p* by a CONTINUITY residual -- TF24's actual bound node (4.3).
+//
+// The (A) bound solves cond(p) - k_crit = 0. TF24's bound instead pins p* where
+// the collar supply meets a fixed critical demand: E_up(p) - demand = 0 (the
+// E_column continuity), the network uptake INSIDE the residual. Denominator
+// dE_up/dp > 0 (regular, sign-definite -- an inversion, not a fold). Same
+// mechanism as the (D) stem inversion but with the real resistance-network uptake
+// and defining p* rather than psi_stem. dp*/dtheta = -r_theta/r_p by the IFT.
+// ===========================================================================
+static double solve_pbound_double(const NetTraits<double>& t, double demand,
+                                  double lo, double hi) {
+  auto r = [&](double p) { std::vector<double> c(NLAY);
+                           return soil_uptake_net<double>(-p, t, c) - demand; };
+  double a = lo, b = hi, fa = r(a), fb = r(b);
+  if (fa * fb > 0.0) return (std::abs(fa) < std::abs(fb)) ? a : b;
+  for (int i = 0; i < 200; ++i) {
+    double m = 0.5 * (a + b), fm = r(m);
+    if (fa * fm <= 0.0) { b = m; fb = fm; } else { a = m; fa = fm; }
+    if (b - a < 1e-13) break;
+  }
+  return 0.5 * (a + b);
+}
+
+template <class S>
+static S pbound_node(double p_star, const NetTraits<S>& t, double demand) {
+  return odelia::implicit_value<S>(p_star, [&](S p) {
+    std::vector<S> c(NLAY);
+    return soil_uptake_net<S>(-p, t, c) - S(demand);
+  });
+}
+
+static std::vector<double> ad_grad_pbound(const NetTraits<double>& t0, double p_star,
+                                          double demand) {
+  xad::adj<double>::tape_type tape;
+  NetTraits<RevS> t{t0.root_b, t0.root_c, t0.psi0, t0.psi1};
+  tape.registerInput(t.root_b); tape.registerInput(t.root_c);
+  tape.registerInput(t.psi0); tape.registerInput(t.psi1);
+  tape.newRecording();
+  RevS ps = pbound_node<RevS>(p_star, t, demand);
+  tape.registerOutput(ps);
+  xad::derivative(ps) = 1.0;
+  tape.computeAdjoints();
+  return {xad::derivative(t.root_b), xad::derivative(t.root_c),
+          xad::derivative(t.psi0), xad::derivative(t.psi1)};
+}
+
+static std::vector<double> fd_grad_pbound(NetTraits<double> t0, double demand,
+                                          double lo, double hi) {
+  double* fields[4] = {&t0.root_b, &t0.root_c, &t0.psi0, &t0.psi1};
+  std::vector<double> g(4);
+  for (int k = 0; k < 4; ++k) {
+    const double v0 = *fields[k];
+    const double h = 1e-6 * (std::abs(v0) + 1.0);
+    *fields[k] = v0 + h; const double fp = solve_pbound_double(t0, demand, lo, hi);
+    *fields[k] = v0 - h; const double fm = solve_pbound_double(t0, demand, lo, hi);
+    *fields[k] = v0;
+    g[k] = (fp - fm) / (2 * h);
+  }
+  return g;
+}
+
+// ===========================================================================
+// (G) The value-graft guard -- TF24 replaces the assembled S value with the
+// separately-converged double leaf value, keeping only the derivative
+// (anchor(leaf.profit_, profit_assembled)). That is safe ONLY if the raw assembled
+// value already equals the double truth; if a node is mis-anchored the graft would
+// discard the wrong value yet still emit a (wrong) derivative. So the wiring must
+// assert raw == truth BEFORE trusting the grafted gradient. This witnesses both
+// that the assembled value matches the truth at the correct anchor, and that a
+// wrong anchor makes them diverge (the guard discriminates).
+// ===========================================================================
+
+// Profit with an EXPLICIT inner ci anchor (mirrors TF24's ci_star_d from the double
+// solver). At the true ci* this reproduces profit<>(); at a wrong ci* the value
+// shifts (implicit_value returns S(ci_star) on the value pass).
+template <class S>
+static S profit_anchored(const S& p, const Traits<S>& t, double ci_star) {
+  S gc = ALPHA * uptake<S>(p, t);
+  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) {
+    return assim<S>(c_i, t) - gc * (CA - c_i);
+  });
+  return assim<S>(ci, t) - hydraulic_cost<S>(p, t);
+}
+
+// [[Rcpp::export]]
+Rcpp::List weibull_leaf_uptake_network_demo(double root_b = 2.5, double root_c = 2.0,
+                                            double psi0 = -0.5, double psi1 = -1.2,
+                                            double collar = 3.0) {
+  const NetTraits<double> t0{root_b, root_c, psi0, psi1};
+  // General branch for both layers: collar more tense (more negative) than soil.
+  std::vector<double> cons(NLAY);
+  const double eup = soil_uptake_net<double>(-collar, t0, cons);
+  auto nv = [](const std::vector<double>& x) {
+    return Rcpp::NumericVector(x.begin(), x.end());
+  };
+  return Rcpp::List::create(
+      Rcpp::Named("traits") = Rcpp::CharacterVector::create("root_b", "root_c", "psi0", "psi1"),
+      Rcpp::Named("E_up") = eup,
+      Rcpp::Named("E0") = cons[0],
+      Rcpp::Named("E1") = cons[1],
+      Rcpp::Named("dEup_ad") = nv(ad_grad_net(0, t0, collar)),
+      Rcpp::Named("dEup_fd") = nv(fd_grad_net(0, t0, collar)),
+      Rcpp::Named("dE0_ad") = nv(ad_grad_net(1, t0, collar)),
+      Rcpp::Named("dE0_fd") = nv(fd_grad_net(1, t0, collar)),
+      Rcpp::Named("dE1_ad") = nv(ad_grad_net(2, t0, collar)),
+      Rcpp::Named("dE1_fd") = nv(fd_grad_net(2, t0, collar)));
+}
+
+// [[Rcpp::export]]
+Rcpp::List weibull_leaf_bound_continuity_demo(double root_b = 2.5, double root_c = 2.0,
+                                              double psi0 = -0.5, double psi1 = -1.2,
+                                              double demand = 0.15) {
+  const NetTraits<double> t0{root_b, root_c, psi0, psi1};
+  const double lo = 0.001, hi = 12.0;
+  const double p_star = solve_pbound_double(t0, demand, lo, hi);
+  // Regularity of the denominator: dE_up/dp at p* (must be > 0).
+  std::vector<double> c(NLAY);
+  const double e = 1e-4;
+  const double drdp = (soil_uptake_net<double>(-(p_star + e), t0, c) -
+                       soil_uptake_net<double>(-(p_star - e), t0, c)) / (2 * e);
+  auto nv = [](const std::vector<double>& x) {
+    return Rcpp::NumericVector(x.begin(), x.end());
+  };
+  return Rcpp::List::create(
+      Rcpp::Named("traits") = Rcpp::CharacterVector::create("root_b", "root_c", "psi0", "psi1"),
+      Rcpp::Named("p_star") = p_star,
+      Rcpp::Named("dEup_dp_at_pstar") = drdp,
+      Rcpp::Named("dpstar_ad") = nv(ad_grad_pbound(t0, p_star, demand)),
+      Rcpp::Named("dpstar_fd") = nv(fd_grad_pbound(t0, demand, lo, hi)));
+}
+
+// [[Rcpp::export]]
+Rcpp::List weibull_leaf_graft_demo(double kmax = 2.0, double c = 3.0,
+                                   double psi_soil = 0.4, double vcmax = 5.0) {
+  const Traits<double> t0{kmax, c, psi_soil, vcmax};
+  const double lo = psi_soil + 1e-3, hi = 6.0;
+  const double p_star = solve_pstar_double(t0, lo, hi);
+  // The double truth: the leaf profit at the converged optimum.
+  const double truth = profit<double>(p_star, t0);
+  // The converged inner anchor (what TF24 reads from the double solver).
+  const double gc_d = ALPHA * uptake<double>(p_star, t0);
+  const double ci_star = solve_ci_double(gc_d, t0);
+  // Raw assembled value at the CORRECT anchor: must equal truth.
+  const double raw_ok = profit_anchored<double>(p_star, t0, ci_star);
+  // Raw assembled value at a WRONG anchor: diverges from truth (guard fires).
+  const double raw_bad = profit_anchored<double>(p_star, t0, ci_star * 1.25);
+  // Grafted derivative == the ungrafted (FD) derivative: grafting keeps the deriv.
+  auto ad_grafted = [&](void) {
+    xad::adj<double>::tape_type tape;
+    Traits<RevS> t{t0.kmax, t0.c, t0.psi_soil, t0.vcmax};
+    tape.registerInput(t.kmax); tape.registerInput(t.c);
+    tape.registerInput(t.psi_soil); tape.registerInput(t.vcmax);
+    tape.newRecording();
+    RevS ps = pstar_node<RevS>(p_star, t);
+    RevS assembled = profit<RevS>(ps, t);
+    // The graft idiom: value <- truth, derivative <- assembled.
+    RevS grafted = RevS(truth) + (assembled - to_passive(assembled));
+    tape.registerOutput(grafted);
+    xad::derivative(grafted) = 1.0;
+    tape.computeAdjoints();
+    return std::vector<double>{xad::derivative(t.kmax), xad::derivative(t.c),
+                               xad::derivative(t.psi_soil), xad::derivative(t.vcmax)};
+  };
+  auto nv = [](const std::vector<double>& x) {
+    return Rcpp::NumericVector(x.begin(), x.end());
+  };
+  return Rcpp::List::create(
+      Rcpp::Named("traits") = Rcpp::CharacterVector::create("kmax", "c", "psi_soil", "vcmax"),
+      Rcpp::Named("truth") = truth,
+      Rcpp::Named("raw_ok") = raw_ok,
+      Rcpp::Named("raw_bad") = raw_bad,
+      Rcpp::Named("dprofit_grafted_ad") = nv(ad_grafted()),
+      Rcpp::Named("dprofit_fd") = nv(fd_grad(1, t0, lo, hi)));
+}

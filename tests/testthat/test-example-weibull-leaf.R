@@ -164,3 +164,57 @@ testthat::test_that("per-solve tape cost stays small vs the recorded (OOM) path"
   expect_gt(abs(node1$grad_kmax), 1e-3)
   expect_equal(rec1$grad_kmax, 0)
 })
+
+# ---------------------------------------------------------------------------
+# The three surfaces the clean (A)-(D) toy under-witnessed but TF24 relies on:
+# the real resistance-network uptake (with root_b/root_c seeded), the bound as a
+# continuity residual, and the value-graft guard. Making the toy composition
+# IDENTICAL to assemble_leaf_from so the seam deletion inherits a full proof.
+# ---------------------------------------------------------------------------
+
+testthat::test_that("resistance-network uptake gradient matches FD (incl. seeded root_b/root_c)", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  r <- weibull_leaf_uptake_network_demo()
+  # Both layers draw water in the general (Darcy through mean-conductivity) branch.
+  expect_gt(r$E_up, 0)
+  expect_gt(r$E0, 0)
+  expect_gt(r$E1, 0)
+  for (nm in c("dEup", "dE0", "dE1")) {
+    rel <- channel_reld(r, nm)
+    expect_lt(max(rel), 1e-4)
+  }
+  # The load-bearing channel: root_c reaches E_up ONLY through incomplete_gamma's
+  # series d/da -- it was structurally zero before the S signature widening.
+  eup <- channel_reld(r, "dEup")
+  ad  <- r$dEup_ad
+  expect_gt(abs(ad[[2]]), 1e-6)   # root_c channel is live (nonzero)
+  expect_lt(eup[["root_c"]], 1e-4)
+  expect_gt(abs(ad[[1]]), 1e-6)   # root_b channel is live
+})
+
+testthat::test_that("bound p* from the continuity residual matches FD (regular denominator)", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  r <- weibull_leaf_bound_continuity_demo()
+  expect_gt(r$p_star, 0)
+  expect_lt(r$p_star, 11)            # an interior root, not a clamped bracket endpoint
+  expect_gt(r$dEup_dp_at_pstar, 0)   # sign-definite -> a well-posed inversion, not a fold
+  rel <- channel_reld(r, "dpstar")
+  expect_lt(max(rel), 1e-4)
+  # p* moves with the hydraulic/soil traits (the bound is not trait-independent).
+  expect_gt(max(abs(r$dpstar_ad)), 1e-6)
+})
+
+testthat::test_that("value-graft keeps the derivative and the guard discriminates", {
+  ensure_weibull_leaf_interface(rebuild = FALSE)
+  r <- weibull_leaf_graft_demo()
+  # At the correct inner anchor the raw assembled value equals the double truth --
+  # the precondition that makes grafting the double value onto it safe.
+  expect_equal(r$raw_ok, r$truth, tolerance = 1e-10)
+  # A wrong anchor makes them diverge: the raw==truth guard would fire (catches a
+  # mis-anchored node before its derivative is trusted).
+  expect_gt(abs(r$raw_bad - r$truth), 1e-3)
+  # Grafting the truth value onto the assembled derivative leaves the gradient
+  # equal to the ungrafted (FD) gradient -- the derivative survives the value swap.
+  rel <- abs(r$dprofit_grafted_ad - r$dprofit_fd) / (abs(r$dprofit_fd) + 1e-30)
+  expect_lt(max(rel), 1e-4)
+})
