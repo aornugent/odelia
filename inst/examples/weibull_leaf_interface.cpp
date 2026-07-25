@@ -112,7 +112,7 @@ static S profit(const S& p, const Traits<S>& t) {
                           to_passive(t.psi_soil), to_passive(t.vcmax)};
   const double ci_star = solve_ci_double(gc_d, td);
   S gc = ALPHA * uptake<S>(p, t);
-  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) {
+  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) -> S {
     return assim<S>(c_i, t) - gc * (CA - c_i);
   });
   return assim<S>(ci, t) - hydraulic_cost<S>(p, t);
@@ -146,7 +146,7 @@ static double solve_pstar_double(const Traits<double>& t, double lo, double hi) 
 template <class S>
 static S pstar_node(double p_star, const Traits<S>& t) {
   const double eps = 1e-3 * (std::abs(p_star) + 1.0);
-  return odelia::implicit_value<S>(p_star, [&](S p) {
+  return odelia::implicit_value<S>(p_star, [&](S p) -> S {
     return (profit<S>(p + eps, t) - profit<S>(p - eps, t)) / (2.0 * eps);
   });
 }
@@ -240,7 +240,7 @@ static double solve_pcrit_double(const Traits<double>& t) {
 // dF/dci -> 0 of a naive fold optimum. dp_crit/dtheta = -C_theta/C_p by the IFT.
 template <class S>
 static S pcrit_node(double p_crit, const Traits<S>& t) {
-  return odelia::implicit_value<S>(p_crit, [&](S p) {
+  return odelia::implicit_value<S>(p_crit, [&](S p) -> S {
     return conductivity<S>(p, t.c) - S(K_CRIT);
   });
 }
@@ -336,7 +336,7 @@ static S profit_soil(const S& p, const SoilTraits<S>& t) {
   const double ci_star = solve_ci_soil_double(gc_d, td);
   const Traits<S> tc{t.k0, t.c, t.psi0, t.vcmax};  // assim(ci) reads c/vcmax
   S gc = ALPHA * uptake_soil<S>(p, t);
-  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) {
+  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) -> S {
     return assim<S>(c_i, tc) - gc * (CA - c_i);
   });
   return assim<S>(ci, tc) - hydraulic_cost<S>(p, tc);
@@ -361,7 +361,7 @@ static double solve_pstar_soil_double(const SoilTraits<double>& t, double lo, do
 template <class S>
 static S pstar_soil_node(double p_star, const SoilTraits<S>& t) {
   const double eps = 1e-3 * (std::abs(p_star) + 1.0);
-  return odelia::implicit_value<S>(p_star, [&](S p) {
+  return odelia::implicit_value<S>(p_star, [&](S p) -> S {
     return (profit_soil<S>(p + eps, t) - profit_soil<S>(p - eps, t)) / (2.0 * eps);
   });
 }
@@ -458,14 +458,14 @@ static S profit_stem(const S& p, const Traits<S>& t) {
   S demand = S(BETA_STEM) * E;                 // delivered through the stem
   const double psi_stem_star =
       solve_psistem_double(to_passive(demand), td, to_passive(p));
-  S psi_stem = odelia::implicit_value<S>(psi_stem_star, [&](S ps) {
+  S psi_stem = odelia::implicit_value<S>(psi_stem_star, [&](S ps) -> S {
     return uptake<S>(ps, t) - demand;          // inversion residual
   });
 
   const double gc_d = to_passive(ALPHA * E);
   const double ci_star = solve_ci_double(gc_d, td);
   S gc = ALPHA * E;
-  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) {
+  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) -> S {
     return assim<S>(c_i, t) - gc * (CA - c_i);
   });
   return assim<S>(ci, t) - hydraulic_cost<S>(psi_stem, t);  // cost on stem tension
@@ -503,7 +503,7 @@ static double solve_pstar_stem_double(const Traits<double>& t, double lo, double
 template <class S>
 static S pstar_stem_node(double p_star, const Traits<S>& t) {
   const double eps = 1e-3 * (std::abs(p_star) + 1.0);
-  return odelia::implicit_value<S>(p_star, [&](S p) {
+  return odelia::implicit_value<S>(p_star, [&](S p) -> S {
     return (profit_stem<S>(p + eps, t) - profit_stem<S>(p - eps, t)) / (S(2.0) * eps);
   });
 }
@@ -520,7 +520,7 @@ static std::vector<double> ad_grad_stem(int which, const Traits<double>& t0,
   RevS E = uptake<RevS>(ps, t);
   RevS demand = RevS(BETA_STEM) * E;
   const double pss = solve_psistem_double(to_passive(demand), t0, to_passive(ps));
-  RevS psi_stem = odelia::implicit_value<RevS>(pss, [&](RevS x) {
+  RevS psi_stem = odelia::implicit_value<RevS>(pss, [&](RevS x) -> RevS {
     return uptake<RevS>(x, t) - demand;
   });
   RevS out = (which == 0) ? ps
@@ -911,7 +911,7 @@ static double solve_pbound_double(const NetTraits<double>& t, double demand,
 
 template <class S>
 static S pbound_node(double p_star, const NetTraits<S>& t, double demand) {
-  return odelia::implicit_value<S>(p_star, [&](S p) {
+  return odelia::implicit_value<S>(p_star, [&](S p) -> S {
     std::vector<S> c(NLAY);
     return soil_uptake_net<S>(-p, t, c) - S(demand);
   });
@@ -964,7 +964,7 @@ static std::vector<double> fd_grad_pbound(NetTraits<double> t0, double demand,
 template <class S>
 static S profit_anchored(const S& p, const Traits<S>& t, double ci_star) {
   S gc = ALPHA * uptake<S>(p, t);
-  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) {
+  S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) -> S {
     return assim<S>(c_i, t) - gc * (CA - c_i);
   });
   return assim<S>(ci, t) - hydraulic_cost<S>(p, t);

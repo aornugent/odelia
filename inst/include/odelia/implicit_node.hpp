@@ -36,6 +36,18 @@ enum class denom_sign { positive, negative, any };
 // not in doubt.
 template <class S, class Equation>
 S implicit_value(double y_star, Equation&& F, denom_sign expect = denom_sign::any) {
+  // The residual must return S *exactly*. A lambda written `[&](S y) { return ...; }`
+  // deduces an XAD expression-template return type, which holds references to the
+  // temporaries created in its return statement; those die when the lambda returns,
+  // so evaluating F here would materialise a dangling expression and read a
+  // destroyed tape slot (an uninitialised-slot segfault, not a wrong number).
+  // Declaring `-> S` on the lambda materialises the value while they are alive.
+  // Asserting it here makes the mistake a compile error rather than a crash.
+  static_assert(std::is_same_v<std::invoke_result_t<Equation&, S>, S>,
+                "implicit_value: the residual callable must return S exactly -- "
+                "declare the lambda's return type (e.g. [&](S y) -> S { ... }). "
+                "A deduced return type is an expression template referencing "
+                "temporaries that are dead by the time this evaluates it.");
   if constexpr (std::is_same_v<S, double>) {
     return y_star;
   } else {

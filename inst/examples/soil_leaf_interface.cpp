@@ -141,7 +141,7 @@ class SoilLeaf {
     S gc = S(ALPHA) * E_total;
     const double ci_star = solve_ci_double(to_passive(gc), vcmax);
     const double vc = vcmax;
-    S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) {
+    S ci = odelia::implicit_value<S>(ci_star, [&](S c_i) -> S {
       return assim<S>(c_i, vc) - gc * (CA - c_i);
     });
     S growth = S(GROW) * assim<S>(ci, vcmax);

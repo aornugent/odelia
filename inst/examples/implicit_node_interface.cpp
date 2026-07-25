@@ -64,7 +64,7 @@ Rcpp::List implicit_node_optimum_demo(double a = 2.0) {
   const double qstar_d = golden_argmax(a);
   // Stationarity residual G(q) = a - q^2, reading the active A from scope; dG/dq < 0
   // (a maximiser), so we declare the negative branch and it verifies.
-  AD q = odelia::implicit_value<AD>(qstar_d, [&](AD qq) { return A - qq * qq; },
+  AD q = odelia::implicit_value<AD>(qstar_d, [&](AD qq) -> AD { return A - qq * qq; },
                                     odelia::denom_sign::negative);
   tape.registerOutput(q);
   xad::derivative(q) = 1.0;
@@ -77,7 +77,7 @@ Rcpp::List implicit_node_optimum_demo(double a = 2.0) {
   // any recording, so reusing the (already-swept) active tape is fine.
   bool sign_assert_fired = false;
   try {
-    odelia::implicit_value<AD>(qstar_d, [&](AD qq) { return A - qq * qq; },
+    odelia::implicit_value<AD>(qstar_d, [&](AD qq) -> AD { return A - qq * qq; },
                                odelia::denom_sign::positive);
   } catch (...) {
     sign_assert_fired = true;
@@ -108,7 +108,7 @@ Rcpp::List implicit_node_demo(double a = 0.5, double b = 1.0,
   tape.registerInput(B);
   tape.newRecording();
   AD y = odelia::implicit_value<AD>(
-      y_star, [&](AD yy) { return yy - A * cos(yy) - B; }, odelia::denom_sign::positive);
+      y_star, [&](AD yy) -> AD { return yy - A * cos(yy) - B; }, odelia::denom_sign::positive);
   AD g = y * y;
   tape.registerOutput(g);
   xad::derivative(g) = 1.0;
@@ -120,13 +120,13 @@ Rcpp::List implicit_node_demo(double a = 0.5, double b = 1.0,
   xad::derivative(Af) = va;
   xad::derivative(Bf) = vb;
   FAD yf = odelia::implicit_value<FAD>(
-      y_star, [&](FAD yy) { return yy - Af * cos(yy) - Bf; });
+      y_star, [&](FAD yy) -> FAD { return yy - Af * cos(yy) - Bf; });
   FAD gf = yf * yf;
   const double jvp = xad::derivative(gf);
 
   // Plain double: no derivatives, just the root passed straight through.
   double yd = odelia::implicit_value<double>(
-      y_star, [&](double yy) { return yy - a * std::cos(yy) - b; });
+      y_star, [&](double yy) -> double { return yy - a * std::cos(yy) - b; });
 
   // Analytic IFT partials, and a re-solve finite difference of y*(a).
   const double dyda = std::cos(y_star) / (1.0 + a * std::sin(y_star));
