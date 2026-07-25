@@ -82,6 +82,31 @@ inline void check_length(size_t received, size_t expected)
   }
 }
 
+// Value-graft: take the VALUE from a separately-converged double `v` and the
+// DERIVATIVE from an active expression `x`. Used where a quantity's value is
+// known to better accuracy than the differentiable re-expression of it (e.g. a
+// solver's converged output vs an assembled closed form evaluated at its anchor),
+// so the tape carries the right sensitivity without shifting the trajectory.
+//
+// This exists as a named primitive rather than a hand-written idiom because
+// writing it inline is a memory-safety trap. Spelled as a lambda with a deduced
+// return type --
+//     auto anchor = [](double v, S x) { return S(v) + (x - to_passive(x)); };
+// -- it returns an XAD *expression template* holding references to the temporary
+// S(v) and to the by-value parameter x, both of which die when the lambda
+// returns. The caller then materialises a dangling expression and records
+// whatever the reused stack holds as an operand slot, which the reverse sweep
+// later dereferences (a segfault far from the cause; invisible to valgrind,
+// because the dangling storage is stack, not heap). Returning S by value
+// materialises the graft while its operands are alive, so callers cannot get it
+// wrong. See plant TF24 assemble_leaf_from.
+template <typename S>
+inline S graft_value(double v, const S& x) {
+  return S(v) + (x - to_passive(x));
+}
+
+inline double graft_value(double v, const double&) { return v; }
+
 // Use this to be explicit when a potentially unsafe floating point
 // equality test is being made.
 inline

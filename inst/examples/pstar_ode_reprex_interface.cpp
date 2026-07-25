@@ -7,8 +7,9 @@
  * which `implicit_value` receives as a CENTRAL DIFFERENCE of a reduced profit --
  * and that reduced profit itself contains nested `implicit_value` nodes (the
  * psi_stem inversion and the ci root), each preceded by an off-tape double solve.
- * Replayed over an ODE schedule through `compute_gradient`, the reverse sweep
- * reads a garbage operand slot and segfaults.
+ * Replayed over an ODE schedule through `compute_gradient`, the reverse sweep read
+ * a garbage operand slot and segfaulted. The cause is recorded below -- it was the
+ * value-graft, not this composition, and this harness is what established that.
  *
  * The existing `weibull_leaf` toy nests implicit_value the same way but evaluates
  * it ONCE on a fresh tape, and passes -- so the single-shot composition is not
@@ -31,16 +32,37 @@
  *   nfields   : count of persistent UNSEEDED member actives (INVALID_SLOT) mixed
  *               into the same expressions as seeded ones (plant's pars fields).
  *   graft     : 1 = replace each output value with a separately-known double,
- *               keeping only the derivative (plant's `anchor(leaf.profit_, .)`).
+ *               keeping only the derivative, via a lambda that DECLARES `-> S`
+ *               (the safe form, and what odelia::util::graft_value does).
+ *               2 = the same graft written with a DEDUCED return type. This is
+ *               the root-cause bug, reproduced on demand: expect a segfault in
+ *               the reverse sweep or a silently wrong gradient. See below.
  *
  * Returns the reverse gradient plus a re-integrating finite difference, so a run
  * that does NOT crash is still checked for correctness rather than just survival.
  *
- * STATUS: DOES NOT REPRODUCE THE PLANT CRASH (a load-bearing negative result)
- * -------------------------------------------------------------------------
- * Every configuration tried -- including all knobs on at once -- runs clean and
- * FD-matches. This rules out the following as sufficient causes, individually
- * AND combined (each verified here, plant-free):
+ * ROOT CAUSE (found; reproduced here on demand with graft=2)
+ * ---------------------------------------------------------
+ * plant's value-graft was written as a lambda with a DEDUCED return type:
+ *
+ *     auto anchor = [](double v, S x) { return S(v) + (x - to_passive(x)); };
+ *
+ * XAD operators return expression templates holding references to their operands,
+ * so this returns references to the temporary S(v) and to the by-value parameter
+ * x -- both dead when the lambda returns. The caller materialises a dangling
+ * expression and records whatever the reused stack now holds as an operand slot;
+ * the reverse sweep dereferences it (derivatives_[~1e9]) and segfaults. The
+ * dangling storage is STACK, so valgrind cannot see it, and the bogus slot varies
+ * run to run. Declaring `-> S` fixes it; odelia::util::graft_value now owns the
+ * idiom so it need not be hand-written, and AGENTS.md carries the rule.
+ *
+ * Why this took so long, and what the knobs below are still good for: because the
+ * corruption depended on stack layout, switching almost anything off made the
+ * crash "disappear" without being the cause. Freezing p*, dropping the nested
+ * nodes, removing the soil uptake, and de-statefulling the double solvers each
+ * looked like a fix. Every one of those was a false lead, and this harness is what
+ * proved it -- each axis below runs clean with graft=1 (the safe graft), so none of
+ * them was ever sufficient to cause the failure:
  *   - an interior-optimum implicit_value whose residual is a central difference;
  *   - nested implicit_value inside that residual, re-anchored by off-tape double
  *     solves at each perturbed p;
@@ -49,20 +71,12 @@
  *   - expression depth via per-layer incomplete_gamma hydraulics (nlayer to 8);
  *   - persistent member actives reused across recordings (persist=1);
  *   - unseeded INVALID_SLOT member actives on the same expressions (nfields=40);
- *   - the value-graft S(v) + (x - to_passive(x)) on the outputs (graft=1), whose
- *     two AD leaves match the 2-operand statement plant crashes on.
+ *   - stateful vs pure double anchor solves (checked directly in plant).
  *
- * Ruled out on the plant side by direct experiment, so also not the trigger:
- *   - the Leaf's STATEFUL solvers. Replacing plant's scratch-mutating
- *     find_psi_stem_from_psi_root / psi_stem_to_ci (boost TOMS748 behind
- *     std::function) with pure closed-form bisections that touch no shared state
- *     leaves the crash unchanged.
- *
- * Remaining untested axes, in the order worth trying: the Interpolator spline
- * reads still on plant's double path; the Environment's active soil-state vector
- * crossing into the leaf by reference; the full resistance-network soil_uptake
- * expression (gravity terms, degenerate guards, rH/rVsum built by a pow loop);
- * and plant registering ~40 AD input fields while seeding one.
+ * Keep this file as the regression witness for the bug class: graft=1 must stay
+ * clean, and graft=2 documents (and, run under a debugger, demonstrates) what the
+ * deduced return type does. The test file exercises graft=1 only, since graft=2
+ * is undefined behaviour and would take the test process down with it.
  *
  * Note the expected accuracy signature: use_pstar=0 matches FD to ~1e-9, while
  * use_pstar=1 sits at ~7e-3 -- that is the eps=1e-2 central-difference error in
@@ -76,6 +90,7 @@
 #include <odelia/implicit_node.hpp>
 #include <odelia/ode_solver.hpp>
 #include <odelia/gradient.hpp>
+#include <odelia/ode_util.hpp>
 
 #include <cmath>
 #include <memory>
@@ -264,10 +279,22 @@ class PstarOde {
     // keeping only the derivative -- plant's `anchor(leaf.profit_, assembled)`.
     // Two AD leaves per grafted output, matching the 2-operand statement plant
     // crashes on.
-    if (graft) {
-      auto anchor = [](double v, S x) -> S { return S(v) + (x - to_passive(x)); };
+    if (graft == 1) {
+      // SAFE: `-> S` materialises the graft while its operands are alive.
+      auto anchor = [](double v, const S& x) -> S { return odelia::util::graft_value<S>(v, x); };
       profit = anchor(to_passive(profit), profit);
       for (int i = 0; i < nlayer; ++i) per_layer[i] = anchor(to_passive(per_layer[i]), per_layer[i]);
+    } else if (graft == 2) {
+      // UNSAFE, ON PURPOSE -- this is the bug this reprex exists to pin down.
+      // No declared return type, so the lambda hands back an expression template
+      // referencing the temporary S(v) and the by-value parameter x, both dead by
+      // the time the caller materialises it. Expect a garbage operand slot and a
+      // segfault in the reverse sweep (or, being undefined behaviour, a silently
+      // wrong gradient). Only reachable by explicitly asking for graft=2.
+      auto anchor_bad = [](double v, S x) { return S(v) + (x - to_passive(x)); };
+      profit = anchor_bad(to_passive(profit), profit);
+      for (int i = 0; i < nlayer; ++i)
+        per_layer[i] = anchor_bad(to_passive(per_layer[i]), per_layer[i]);
     }
 
     // Mix in the unseeded member fields (INVALID_SLOT actives on the same
