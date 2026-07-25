@@ -30,30 +30,39 @@
  *               member actives carry slots across recordings.
  *   nfields   : count of persistent UNSEEDED member actives (INVALID_SLOT) mixed
  *               into the same expressions as seeded ones (plant's pars fields).
+ *   graft     : 1 = replace each output value with a separately-known double,
+ *               keeping only the derivative (plant's `anchor(leaf.profit_, .)`).
  *
  * Returns the reverse gradient plus a re-integrating finite difference, so a run
  * that does NOT crash is still checked for correctness rather than just survival.
  *
- * STATUS: DOES NOT YET REPRODUCE THE PLANT CRASH
- * ----------------------------------------------
- * Every configuration tried runs clean and FD-matches. That is a real negative
- * result -- it rules out the following as sufficient causes, individually or
- * combined (each verified here, plant-free):
+ * STATUS: DOES NOT REPRODUCE THE PLANT CRASH (a load-bearing negative result)
+ * -------------------------------------------------------------------------
+ * Every configuration tried -- including all knobs on at once -- runs clean and
+ * FD-matches. This rules out the following as sufficient causes, individually
+ * AND combined (each verified here, plant-free):
  *   - an interior-optimum implicit_value whose residual is a central difference;
  *   - nested implicit_value inside that residual, re-anchored by off-tape double
  *     solves at each perturbed p;
  *   - the node living inside ode_rates, re-recorded over a schedule replayed by
- *     compute_gradient (n_steps up to 300);
+ *     compute_gradient (n_steps to 300);
  *   - expression depth via per-layer incomplete_gamma hydraulics (nlayer to 8);
  *   - persistent member actives reused across recordings (persist=1);
- *   - unseeded INVALID_SLOT member actives on the same expressions (nfields=40).
+ *   - unseeded INVALID_SLOT member actives on the same expressions (nfields=40);
+ *   - the value-graft S(v) + (x - to_passive(x)) on the outputs (graft=1), whose
+ *     two AD leaves match the 2-operand statement plant crashes on.
  *
- * So the trigger is something plant has beyond this composition. Untested axes,
- * in the order worth trying: the Leaf's STATEFUL double solvers (boost TOMS748
- * behind std::function, mutating leaf scratch that the assembly saves/restores)
- * in place of the pure bisections here; the Interpolator spline reads; the
- * Environment's active soil-state vector crossing into the leaf; and the far
- * larger per-step expression of the real resistance-network soil_uptake.
+ * Ruled out on the plant side by direct experiment, so also not the trigger:
+ *   - the Leaf's STATEFUL solvers. Replacing plant's scratch-mutating
+ *     find_psi_stem_from_psi_root / psi_stem_to_ci (boost TOMS748 behind
+ *     std::function) with pure closed-form bisections that touch no shared state
+ *     leaves the crash unchanged.
+ *
+ * Remaining untested axes, in the order worth trying: the Interpolator spline
+ * reads still on plant's double path; the Environment's active soil-state vector
+ * crossing into the leaf by reference; the full resistance-network soil_uptake
+ * expression (gravity terms, degenerate guards, rH/rVsum built by a pow loop);
+ * and plant registering ~40 AD input fields while seeding one.
  *
  * Note the expected accuracy signature: use_pstar=0 matches FD to ~1e-9, while
  * use_pstar=1 sits at ~7e-3 -- that is the eps=1e-2 central-difference error in
@@ -144,7 +153,7 @@ class PstarOde {
   double time = 0.0, t0 = 0.0;
   double vcmax = 5.0;
   // knobs
-  int use_pstar = 1, nest = 1, nlayer = 2, persist = 0, nfields = 0;
+  int use_pstar = 1, nest = 1, nlayer = 2, persist = 0, nfields = 0, graft = 0;
 
   // Persistent member actives, mirroring plant's TF24_Strategy_ members that
   // outlive a recording: soil_consumption_active_ (written by the leaf assembly,
@@ -153,9 +162,10 @@ class PstarOde {
   mutable std::vector<S> cons_cache;
   mutable std::vector<S> fields;
 
-  PstarOde(S k, S c, int use_pstar_, int nest_, int nlayer_, int persist_, int nfields_)
+  PstarOde(S k, S c, int use_pstar_, int nest_, int nlayer_, int persist_, int nfields_,
+           int graft_)
       : kmax(k), cshape(c), use_pstar(use_pstar_), nest(nest_), nlayer(nlayer_),
-        persist(persist_), nfields(nfields_) {
+        persist(persist_), nfields(nfields_), graft(graft_) {
     fields.assign(nfields > 0 ? nfields : 0, S(1.0));
     reset();
   }
@@ -250,6 +260,16 @@ class PstarOde {
     S E = uptake(p, &per_layer);
     S profit = profit_reduced(p);
 
+    // Value-graft: replace the assembled value with a separately-known double,
+    // keeping only the derivative -- plant's `anchor(leaf.profit_, assembled)`.
+    // Two AD leaves per grafted output, matching the 2-operand statement plant
+    // crashes on.
+    if (graft) {
+      auto anchor = [](double v, S x) -> S { return S(v) + (x - to_passive(x)); };
+      profit = anchor(to_passive(profit), profit);
+      for (int i = 0; i < nlayer; ++i) per_layer[i] = anchor(to_passive(per_layer[i]), per_layer[i]);
+    }
+
     // Mix in the unseeded member fields (INVALID_SLOT actives on the same
     // expressions as seeded ones), as plant's pars fields are.
     for (int f = 0; f < nfields; ++f) profit = profit + fields[f] * S(1e-12);
@@ -295,8 +315,8 @@ S final_biomass(PstarOde<S>& sys) {
 }
 
 double run_double(double kmax, double c, int use_pstar, int nest, int nlayer, int n_steps,
-                  int persist, int nfields) {
-  Runner<double> r{PstarOde<double>(kmax, c, use_pstar, nest, nlayer, persist, nfields), n_steps};
+                  int persist, int nfields, int graft) {
+  Runner<double> r{PstarOde<double>(kmax, c, use_pstar, nest, nlayer, persist, nfields, graft), n_steps};
   r.reset();
   r.run();
   return final_biomass(r.get_system_ref());
@@ -307,28 +327,28 @@ double run_double(double kmax, double c, int use_pstar, int nest, int nlayer, in
 // [[Rcpp::export]]
 Rcpp::List pstar_ode_reprex(double kmax = 0.05, double c = 3.0, int use_pstar = 1,
                             int nest = 1, int nlayer = 2, int n_steps = 20,
-                            int persist = 0, int nfields = 0) {
+                            int persist = 0, int nfields = 0, int graft = 0) {
   using adS = xad::adj<double>::active_type;
 
   odelia::ode::DifferentiationTargets targets;
   targets.params = {0, 1};
   targets.values = {kmax, c};
 
-  Runner<adS> r_rev{PstarOde<adS>(adS(kmax), adS(c), use_pstar, nest, nlayer, persist, nfields),
+  Runner<adS> r_rev{PstarOde<adS>(adS(kmax), adS(c), use_pstar, nest, nlayer, persist, nfields, graft),
                     n_steps};
   auto [value_rev, g] = odelia::ode::compute_gradient(
       r_rev, targets, [](Runner<adS>& r) -> adS { return final_biomass(r.get_system_ref()); });
 
   const double hk = 1e-6 * (std::abs(kmax) + 1.0);
   const double hc = 1e-6 * (std::abs(c) + 1.0);
-  const double gk_fd = (run_double(kmax + hk, c, use_pstar, nest, nlayer, n_steps, persist, nfields) -
-                        run_double(kmax - hk, c, use_pstar, nest, nlayer, n_steps, persist, nfields)) / (2 * hk);
-  const double gc_fd = (run_double(kmax, c + hc, use_pstar, nest, nlayer, n_steps, persist, nfields) -
-                        run_double(kmax, c - hc, use_pstar, nest, nlayer, n_steps, persist, nfields)) / (2 * hc);
+  const double gk_fd = (run_double(kmax + hk, c, use_pstar, nest, nlayer, n_steps, persist, nfields, graft) -
+                        run_double(kmax - hk, c, use_pstar, nest, nlayer, n_steps, persist, nfields, graft)) / (2 * hk);
+  const double gc_fd = (run_double(kmax, c + hc, use_pstar, nest, nlayer, n_steps, persist, nfields, graft) -
+                        run_double(kmax, c - hc, use_pstar, nest, nlayer, n_steps, persist, nfields, graft)) / (2 * hc);
 
   return Rcpp::List::create(
       Rcpp::Named("value") = value_rev,
-      Rcpp::Named("value_double") = run_double(kmax, c, use_pstar, nest, nlayer, n_steps, persist, nfields),
+      Rcpp::Named("value_double") = run_double(kmax, c, use_pstar, nest, nlayer, n_steps, persist, nfields, graft),
       Rcpp::Named("grad_kmax") = g[0],
       Rcpp::Named("grad_c") = g[1],
       Rcpp::Named("grad_kmax_fd") = gk_fd,
@@ -338,5 +358,6 @@ Rcpp::List pstar_ode_reprex(double kmax = 0.05, double c = 3.0, int use_pstar = 
       Rcpp::Named("nlayer") = nlayer,
       Rcpp::Named("n_steps") = n_steps,
       Rcpp::Named("persist") = persist,
-      Rcpp::Named("nfields") = nfields);
+      Rcpp::Named("nfields") = nfields,
+      Rcpp::Named("graft") = graft);
 }

@@ -59,12 +59,12 @@ test_that("nested interior-optimum p* node inside ode_rates gives a sane gradien
   expect_true(is.finite(r$grad_c))
 })
 
-test_that("the composition survives scale, persistent members and unseeded fields", {
+test_that("the composition survives scale, persistent members, unseeded fields, graft", {
   ensure_pstar_ode_reprex()
   # Each argument here is one of the axes suspected of triggering plant's crash;
-  # all on at once must still complete and FD-match.
+  # all on at once (including the value-graft) must still complete and FD-match.
   r <- pstar_ode_reprex(use_pstar = 1L, nest = 1L, nlayer = 5L, n_steps = 100L,
-                        persist = 1L, nfields = 40L)
+                        persist = 1L, nfields = 40L, graft = 1L)
   expect_equal(r$value, r$value_double, tolerance = 1e-12)
   expect_equal(r$grad_kmax, r$grad_kmax_fd, tolerance = 0.05)
 })
