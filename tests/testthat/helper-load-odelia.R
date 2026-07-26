@@ -718,6 +718,59 @@ ensure_soil_leaf_interface <- function(rebuild = FALSE) {
   invisible(TRUE)
 }
 
+# Compile and source the step-local adjoint SPIKE on demand. Same sourceCpp mechanics.
+# The spike keeps its backward loop in the example file rather than in odelia, so it
+# commits no interface: it exists to settle by execution whether a step-local reverse
+# sweep over a stored trajectory reproduces the whole-run gradient on a growing System.
+ensure_step_local_interface <- function(rebuild = FALSE) {
+  if (!rebuild && isTRUE(.odelia_test_cache$step_local_loaded)) {
+    return(invisible(TRUE))
+  }
+
+  ensure_ode_interface_loaded(rebuild = rebuild)
+
+  include_dir <- dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  slk_cpp <- resolve_test_path(
+    "examples/step_local_adjoint_interface.cpp",
+    "inst/examples/step_local_adjoint_interface.cpp"
+  )
+
+  odelia_so <- .odelia_test_cache$odelia_so
+  pkg_libs <- if (is.character(odelia_so) &&
+                  length(odelia_so) == 1 &&
+                  !is.na(odelia_so) &&
+                  nzchar(odelia_so) &&
+                  file.exists(odelia_so)) {
+    shQuote(normalizePath(odelia_so, winslash = "/", mustWork = FALSE))
+  } else {
+    Sys.getenv("PKG_LIBS", unset = "")
+  }
+  withr::local_envvar(
+    PKG_CPPFLAGS = paste0("-I", include_dir),
+    PKG_LIBS = pkg_libs
+  )
+
+  source_cpp_result <- tryCatch(
+    {
+      Rcpp::sourceCpp(slk_cpp, rebuild = rebuild, verbose = FALSE)
+      NULL
+    },
+    error = function(e) e
+  )
+
+  if (inherits(source_cpp_result, "error")) {
+    msg <- conditionMessage(source_cpp_result)
+    if (grepl("active_tape_", msg, fixed = TRUE)) {
+      testthat::skip("soil_leaf sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
+    }
+    stop(source_cpp_result)
+  }
+
+  .odelia_test_cache$step_local_loaded <- TRUE
+  invisible(TRUE)
+}
+
 # Compile and source the decide / diagnostic interface on demand. Same sourceCpp
 # mechanics as the incomplete_gamma demo (link against the odelia library for the
 # XAD Tape symbols; skip gracefully in a load_all session).
