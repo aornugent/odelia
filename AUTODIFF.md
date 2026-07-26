@@ -25,9 +25,9 @@ around it, never a second AD engine.
 
 Everything else follows: the System is templated on its scalar so the same code simulates
 (`double`) and differentiates (`active`); the thing differentiated is a caller's
-functional, not a built-in loss; adaptive numerics are recorded once and replayed on fixed
-nodes so the tape carries no adaptive branching; and the active machinery is born, used,
-and destroyed inside one C++ call.
+functional, not a built-in loss; the step schedule is discovered once and replayed fixed, and
+any adaptive structure is rebuilt from plain values, so the tape carries no adaptive
+branching; and the active machinery is born, used, and destroyed inside one C++ call.
 
 ---
 
@@ -36,11 +36,19 @@ and destroyed inside one C++ call.
 Most of the apparent complexity dissolves once you see that a gradient workflow is a choice
 on **two independent axes**:
 
-- **Replay** — which adaptive constructions the *system* must record on the double pass and
-  replay *fixed* on the active pass. A property of the system, not the question. A plain
-  ODE needs only the step schedule (L1). A system whose rates read an adaptively-built
-  background also records that background's node positions (L2), and optionally its values
-  (L3) for a variant that holds the background fixed.
+- **Replay** — what the *system* must reproduce on the active pass. A property of the system,
+  not the question. A plain ODE needs only the step schedule (**L1**), which the Solver
+  records. A system whose rates read an adaptively-built background reproduces that
+  background's structure (**L2**) and may optionally read back recorded values (**L3**) for a
+  variant that holds the background fixed.
+
+  **L2 is not a recording.** An adaptive structure is chosen by comparing *plain* values, and
+  node positions are `double` by type, so an active pass picks the same structure as a plain
+  one — bit-identically, with nothing stored. Measured: 149 nodes, 0 mismatches, `max_abs_diff`
+  exactly 0 (`test-ad-adaptive-structure.R`). So the rule for any adaptive background is
+  **build the structure on plain values, evaluate the values at the active scalar**, and there
+  is nothing to carry between passes. Refining *at* the active scalar instead re-solves and
+  records the coefficient fit once per refinement pass, for 5.9x the tape and the same answer.
 - **Functional** — what scalar you reduce the replayed run to: an emergent summary of the
   state, or a likelihood over measured data. Orthogonal to replay.
 
@@ -49,7 +57,7 @@ Three representative points:
 | Application | What you differentiate | Replay | Functional |
 |---|---|---|---|
 | **Sensitivity** | d(output)/d(param or IC) of a plain ODE | L1 | any reduction |
-| **Adaptive-component gradient** | the same, when a rate reads an adaptively-built background | L1·L2 (+L3 to freeze it) | any reduction |
+| **Adaptive-component gradient** | the same, when a rate reads an adaptively-built background | L1 (structure rebuilt; +L3 to freeze it) | any reduction |
 | **Calibration / inference** | fit params to measured data | whatever the system needs | a likelihood |
 
 The first two differ only on the replay axis (how complex the system is); the third differs
@@ -69,8 +77,9 @@ R  ── holds ──▶  d : Solver<System<double>>          the double solver
                  ├─ System<double>                    immutable after the adaptive pass
                  ├─ recording                          produced once, read per call:
                  │    ├─ L1  recorded_steps()          the discovered schedule   (Solver state)
-                 │    ├─ L2  positions_history[step]   adaptive node positions   (System state)
                  │    └─ L3  values_history[step][stage] recorded background values (System state)
+                 │       (L2 is not here: an adaptive structure is rebuilt from plain
+                 │        values on either pass and comes out identical)
                  └─ active_solver : Solver<System<active>>
                       built once, reused; owns its tape; re-seeded and re-fed the
                       recording every call; holds no semantics between calls
@@ -78,10 +87,10 @@ R  ── holds ──▶  d : Solver<System<double>>          the double solver
 
 Three ownership rules carry the whole design:
 
-- **The Solver owns the schedule (L1); the System owns its background (L2/L3).** The stepper
-  steps any system either adaptively (discovering node positions) or on a fixed grid
-  (replaying them). What a rate reads is the System's own business; the stepper only signals
-  cadence through the hooks.
+- **The Solver owns the schedule (L1); the System owns its background.** The stepper steps any
+  system either adaptively or on a fixed grid. What a rate reads is the System's own business;
+  the stepper only signals cadence through the hooks. A background's *structure* (L2) needs no
+  ownership at all — it is rebuilt from plain values wherever it is needed.
 - **The double solver owns the recording, and it is immutable after the adaptive pass.** Its
   only remaining job is to feed replays. The recording is keyed to that run's ICs and
   params; change those and you must re-record. The active solver never records — it is
@@ -94,7 +103,8 @@ Three ownership rules carry the whole design:
 ## Control flow of a gradient
 
 ```
-1. d.advance_adaptive({0, T})          discover the schedule, record L1/L2/L3.
+1. d.advance_adaptive({0, T})          discover the schedule (L1); record L3 only if a
+                                        later replay is to hold a background fixed.
                                         d is immutable hereafter.
 2. compute_gradient(d, targets, schedule, functional):
      active = d.active_solver()         lift-or-reuse
@@ -245,10 +255,11 @@ machinery chose; odelia never learns a node is a knot. A System opts in with the
 
 Two cadences, and they are the whole model:
 
-- **Positions are recorded per step** (L2). The only job is to keep the adaptive branching
-  off the tape; one representative position set per accepted step does it, and it is
-  representative by construction — the step controller only accepts a step whose state (hence
-  the background's structure) varies within tolerance across it.
+- **Positions are not recorded** (L2). Keeping adaptive branching off the tape is achieved by
+  *deciding on plain values*, which is what the refiner does and what node positions being
+  `double` enforces — so the structure comes out identical on either pass with nothing stored.
+  There is no `positions_history` and there should not be one: storing what can be derived is
+  the thing to avoid, and a rebuild is exact.
 - **Values are recorded per stage** (L3). A background held fixed must read back the *exact*
   value each RK stage consumed — a per-step value would be wrong, not merely coarse.
 
