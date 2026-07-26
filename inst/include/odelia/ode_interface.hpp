@@ -39,11 +39,18 @@ public:
 // active scalar on the fixed positions (its derivative flows). With field values
 // also recorded, they are reused as fixed doubles (the derivative through the field
 // is then zero). has_recorded_field() reports which of the two applies.
+//
+// replay_step takes the step index rather than inferring it. The Solver already knows
+// where it is in the schedule -- the recording is indexed by accepted step, and so is
+// the schedule -- so handing the index over is what keeps the two from going
+// inconsistent. A System that instead kept its own cursor would be correct only while
+// the pass runs forward, which is a silent constraint on the driver rather than a
+// property of the recording.
 template <typename System>
-concept Replayable = requires(System s, int stage) {
+concept Replayable = requires(System s, int stage, std::size_t step) {
   s.record_stage(stage);     // per RK stage: record a field value, when values are kept
   s.record_ode_step();       // per accepted ODE step: commit the node positions
-  s.replay_step();           // per step on the replay pass: restore this step's record
+  s.replay_step(step);       // restore the record for step `step` (see below)
   { s.has_recorded_field() } -> std::convertible_to<bool>;  // are field values recorded?
 };
 

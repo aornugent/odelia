@@ -109,7 +109,6 @@ public:
   void reset() {
     y = T(y0_init);
     time = t0;
-    step = 0;
     if (has_recorded_field()) {
       // light_history[step][stage]: take this first step's row of per-RK-stage values,
       stage_light = light_history.front();
@@ -145,14 +144,14 @@ public:
     light_history.push_back(stage_light);
   }
 
-  // Load this step's recorded positions (and light, if recorded), then advance the
-  // cursor. A no-op on the recording pass. Replay runs on the recorded schedule, so
-  // the cursor walks [0, size) without clamping.
-  void replay_step() {
+  // Load step `k`'s recorded positions (and light, if recorded). A no-op on the
+  // recording pass. The index comes from the Solver, which owns the schedule the
+  // recording is indexed by, so this holds no cursor of its own and is correct
+  // whatever order the driver visits steps in.
+  void replay_step(std::size_t k) {
     if (!replaying()) return;
-    node_positions = positions_history.at(step);
-    if (has_recorded_field()) stage_light = light_history.at(step);
-    ++step;
+    node_positions = positions_history.at(k);
+    if (has_recorded_field()) stage_light = light_history.at(k);
   }
 
   // ---- Record / replay channel (System -> System) -------------------------
@@ -176,7 +175,6 @@ public:
     positions_history = std::move(positions);
     light_history = reuse_light ? std::move(values) : std::vector<std::vector<double>>{};
     recording = false;
-    step = 0;
   }
   bool has_recording() const { return !positions_history.empty(); }
 
@@ -228,10 +226,18 @@ private:
   std::vector<std::vector<double>> positions_history;  // node positions per ODE step
   std::vector<std::vector<double>> light_history;      // light per [ODE step][RK stage]
 
-  std::size_t step = 0;
   std::vector<double> node_positions;   // positions built (recording) or loaded (replay)
   std::vector<double> stage_light;      // this step's light at each of the six RK stages
   std::vector<double> pending_positions;
 };
+
+// Replayable is detected, not declared, so a hook whose signature drifts does not fail
+// to compile -- the System quietly stops being Replayable and the whole record/replay
+// channel becomes a no-op, giving a plausible gradient with the adaptive construction
+// silently frozen. Assert it here, where the hooks are written.
+static_assert(odelia::ode::Replayable<CanopySystem<double>>,
+              "CanopySystem must satisfy Replayable: check the hook signatures");
+static_assert(odelia::ode::Replayable<CanopySystem<xad::adj<double>::active_type>>,
+              "the active CanopySystem must satisfy Replayable too");
 
 #endif

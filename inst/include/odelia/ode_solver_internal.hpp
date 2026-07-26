@@ -150,9 +150,9 @@ void record_ode_step(System& system) {
 // values, or nothing so the field is recomputed with the active scalar -- is the
 // System's own choice.
 template <typename System>
-void replay_step(System& system) {
+void replay_step(System& system, std::size_t step) {
   if constexpr (Replayable<System>) {
-    system.replay_step();
+    system.replay_step(step);
   }
 }
 
@@ -334,7 +334,10 @@ void SolverInternal<System>::step(System& system) {
 template <class System>
 void SolverInternal<System>::step_to(System& system, double time_max_) {
   set_time_max(time_max_);
-  replay_step(system); // restore this step's recorded state on a replay pass
+  // Restore this step's recorded state on a replay pass. The index is the count of
+  // steps already accepted: prev_times holds t_0..t_k, and the step about to be taken
+  // is the k-th, which is the same k the recording was committed under.
+  replay_step(system, prev_times.size() - 1);
   setup_dydt_in(system);
   stepper_step(system, time, time_max - time, y, yerr, dydt_in, dydt_out);
   save_dydt_out_as_in();
