@@ -243,6 +243,58 @@ ensure_jvp_oracle_interface <- function(rebuild = FALSE) {
   invisible(TRUE)
 }
 
+# Compile and source the adaptive-structure interface on demand. Same sourceCpp
+# mechanics as the jvp_oracle demo (link against the odelia library for the XAD
+# Tape symbols; skip gracefully in a load_all session).
+ensure_adaptive_structure_interface <- function(rebuild = FALSE) {
+  if (!rebuild && isTRUE(.odelia_test_cache$adaptive_structure_loaded)) {
+    return(invisible(TRUE))
+  }
+
+  ensure_ode_interface_loaded(rebuild = rebuild)
+
+  include_dir <- dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  as_cpp <- resolve_test_path(
+    "examples/adaptive_structure_interface.cpp",
+    "inst/examples/adaptive_structure_interface.cpp"
+  )
+
+  odelia_so <- .odelia_test_cache$odelia_so
+  pkg_libs <- if (is.character(odelia_so) &&
+                  length(odelia_so) == 1 &&
+                  !is.na(odelia_so) &&
+                  nzchar(odelia_so) &&
+                  file.exists(odelia_so)) {
+    shQuote(normalizePath(odelia_so, winslash = "/", mustWork = FALSE))
+  } else {
+    Sys.getenv("PKG_LIBS", unset = "")
+  }
+  withr::local_envvar(
+    PKG_CPPFLAGS = paste0("-I", include_dir),
+    PKG_LIBS = pkg_libs
+  )
+
+  source_cpp_result <- tryCatch(
+    {
+      Rcpp::sourceCpp(as_cpp, rebuild = rebuild, verbose = FALSE)
+      NULL
+    },
+    error = function(e) e
+  )
+
+  if (inherits(source_cpp_result, "error")) {
+    msg <- conditionMessage(source_cpp_result)
+    if (grepl("active_tape_", msg, fixed = TRUE)) {
+      testthat::skip("adaptive_structure sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
+    }
+    stop(source_cpp_result)
+  }
+
+  .odelia_test_cache$adaptive_structure_loaded <- TRUE
+  invisible(TRUE)
+}
+
 # Compile and source the separable-field interface on demand. Same
 # sourceCpp mechanics as the jvp_oracle demo (link against the odelia library for
 # the XAD Tape symbols; skip gracefully in a load_all session).
