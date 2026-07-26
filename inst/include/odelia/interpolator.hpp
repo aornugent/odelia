@@ -53,6 +53,15 @@ public:
     std::list<S>      ys;
     std::list<bool>   refine_here;   // is the interval ending at this node still open?
 
+    // The midpoint prediction that drives refinement is compared in plain double
+    // (see within_tol), so it is made by a plain-valued copy of the interpolant.
+    // Predicting at S instead would re-solve the coefficient band on an active
+    // scalar once per refinement pass and record every one of those solves,
+    // costing several times the tape for the same nodes and the same values. The
+    // interpolant proper is built once, at S, after refinement settles.
+    std::list<double>                  ys_value;
+    basic_interpolator<double>         predictor;
+
     double dx = (b - a) / static_cast<double>(nbase - 1);
     const double dxmin = dx / std::pow(2.0, static_cast<double>(max_depth));
     // Seed the base grid by accumulation (x += dx) with an exact top endpoint,
@@ -62,16 +71,17 @@ public:
     for (std::size_t i = 0; i < nbase; ++i, x += dx) {
       const double xi = (i + 1 == nbase) ? b : x;
       xs.push_back(xi);
-      ys.push_back(target(xi));
+      const S yi = target(xi);
+      ys.push_back(yi);
+      ys_value.push_back(util::to_passive(yi));
       refine_here.push_back(i > 0);
     }
-    rebuild(xs, ys);
+    predictor.rebuild(xs, ys_value);
 
-    auto within_tol = [&](S y_true, S y_pred) {
-      // Refinement is a value-only decision; strip ALL AD layers (util::to_passive,
-      // not xad::value) so it is plain double even for a nested type such as
-      // FReal<AReal<double>> (odelia#35).
-      const double t = util::to_passive(y_true), p = util::to_passive(y_pred);
+    auto within_tol = [&](double t, double p) {
+      // Refinement is a value-only decision, so both sides arrive already
+      // stripped of every AD layer (util::to_passive, not xad::value -- it must
+      // also flatten a nested type such as FReal<AReal<double>>).
       return std::fabs(t - p) < atol || std::fabs(1.0 - p / t) < rtol;
     };
 
@@ -84,22 +94,26 @@ public:
       open = false;
       auto xi = xs.begin();
       auto yi = ys.begin();
+      auto vi = ys_value.begin();
       auto zi = refine_here.begin();
-      for (; xi != xs.end(); ++xi, ++yi, ++zi) {
+      for (; xi != xs.end(); ++xi, ++yi, ++vi, ++zi) {
         if (*zi) {
           const double x_mid = *xi - dx;
           const S      y_mid = target(x_mid);
-          const S      p_mid = eval(x_mid);
+          const double v_mid = util::to_passive(y_mid);
+          const double p_mid = predictor.eval(x_mid);
           xs.insert(xi, x_mid);
           ys.insert(yi, y_mid);
-          const bool still_open = !within_tol(y_mid, p_mid);
+          ys_value.insert(vi, v_mid);
+          const bool still_open = !within_tol(v_mid, p_mid);
           *zi = still_open;                 // the interval [x_mid, *xi]
           refine_here.insert(zi, still_open); // the interval ending at x_mid
           open = open || still_open;
         }
       }
-      rebuild(xs, ys);
+      predictor.rebuild(xs, ys_value);
     }
+    rebuild(xs, ys);
   }
 
   // Build an interpolator out of the vectors 'x' and 'y'.
@@ -306,6 +320,10 @@ public:
   }
 
 private:
+  // construct() drives a plain-valued interpolator to predict midpoints, so the
+  // two instantiations reach each other's rebuild.
+  template <typename> friend class basic_interpolator;
+
   void check_active() const {
     if (!active)
     {
