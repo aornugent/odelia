@@ -31,6 +31,7 @@
 
 #include <Rcpp.h>
 #include <XAD/XAD.hpp>
+#include <odelia/implicit_node.hpp>
 #include <odelia/ode_solver.hpp>
 
 #include <vector>
@@ -51,10 +52,16 @@ public:
   using value_type = S;
   S k;
   double couple = 0.0;  // 0 => newborn IC is 1.0; else IC = couple * sum(y)
+  // When set, each cohort's rate is throttled by a quantity defined implicitly
+  // rather than in closed form -- the shape a leaf solve inside the rates has. The
+  // node is re-entered on every rate evaluation, so a unit that is re-recorded on
+  // the backward pass must rebuild it and get the same adjoint.
+  bool implicit_rate = false;
   std::vector<S> y;
   double time = 0.0;
 
-  explicit Toy(S k_, double couple_ = 0.0) : k(k_), couple(couple_) { reset(); }
+  Toy(S k_, double couple_ = 0.0, bool implicit_rate_ = false)
+      : k(k_), couple(couple_), implicit_rate(implicit_rate_) { reset(); }
 
   std::size_t ode_size() const { return y.size(); }
   double ode_time() const { return time; }
@@ -81,8 +88,31 @@ public:
     for (auto const& yi : y) *it++ = yi;
     return it;
   }
+  // u(y) solves u (1 + u) = k y, so u = (sqrt(1 + 4 k y) - 1) / 2. Solved in plain
+  // arithmetic and returned on the tape by the implicit function theorem, which is
+  // how a leaf operating point enters a rate. Rising in u, so the denominator sign
+  // is declared.
+  S throttle(const S& yi) const {
+    const double ky = odelia::util::to_passive(k) * odelia::util::to_passive(yi);
+    const double u_star = 0.5 * (std::sqrt(1.0 + 4.0 * ky) - 1.0);
+    return odelia::implicit_value<S>(
+        u_star, [&](S u) -> S { return u * (S(1.0) + u) - k * yi; },
+        odelia::denom_sign::positive);
+  }
+
   template <class It> It ode_rates(It it) const {
-    for (auto const& yi : y) *it++ = -k * yi;
+    // Each branch is materialised into an S before it is stored: the two arms of a
+    // conditional are different XAD expression types, and an expression outliving
+    // its operands is the dangling-slot bug.
+    for (auto const& yi : y) {
+      if (implicit_rate) {
+        const S rate = -throttle(yi);
+        *it++ = rate;
+      } else {
+        const S rate = -k * yi;
+        *it++ = rate;
+      }
+    }
     return it;
   }
 };
@@ -129,8 +159,8 @@ struct trajectory {
 };
 
 trajectory forward(double k, double couple, const std::vector<unit>& units,
-                   bool intro_inside = true) {
-  Toy<double> toy(k, couple);
+                   bool intro_inside = true, bool implicit_rate = false) {
+  Toy<double> toy(k, couple, implicit_rate);
   odelia::ode::Solver<Toy<double>> solver(toy, odelia::ode::OdeControl());
   solver.reset();
   trajectory tr;
@@ -161,7 +191,7 @@ trajectory forward(double k, double couple, const std::vector<unit>& units,
 
 // ---- whole-run reverse: the AD oracle ------------------------------------------
 double whole_run_gradient(double k, double couple, const std::vector<unit>& units,
-                          std::size_t* peak_bytes) {
+                          std::size_t* peak_bytes, bool implicit_rate = false) {
   using ad = xad::adj<double>;
   using S = ad::active_type;
   ad::tape_type tape;
@@ -169,7 +199,7 @@ double whole_run_gradient(double k, double couple, const std::vector<unit>& unit
   tape.registerInput(kk);
   tape.newRecording();
 
-  Toy<S> toy(kk, couple);
+  Toy<S> toy(kk, couple, implicit_rate);
   odelia::ode::Solver<Toy<S>> solver(toy, odelia::ode::OdeControl());
   solver.reset();
   solver.get_system_ref().k = kk;
@@ -196,7 +226,7 @@ double whole_run_gradient(double k, double couple, const std::vector<unit>& unit
 // reusing one tape with resetTo is an optimisation to try once this is proven.
 double step_local_gradient(double k, double couple, const std::vector<unit>& units,
                            const trajectory& tr, std::size_t* peak_bytes,
-                           bool intro_inside = true) {
+                           bool intro_inside = true, bool implicit_rate = false) {
   using ad = xad::adj<double>;
   using S = ad::active_type;
 
@@ -205,7 +235,7 @@ double step_local_gradient(double k, double couple, const std::vector<unit>& uni
   // direct dJ/dk term.
   std::vector<double> lambda;
   {
-    Toy<double> probe(k, couple);
+    Toy<double> probe(k, couple, implicit_rate);
     odelia::ode::Solver<Toy<double>> s(probe, odelia::ode::OdeControl());
     s.reset();
     for (auto const& u : units) {
@@ -233,7 +263,7 @@ double step_local_gradient(double k, double couple, const std::vector<unit>& uni
 
     // Re-record exactly this unit from the stored state: the structural change first,
     // ON TAPE, then the integration.
-    Toy<S> toy(kk, couple);
+    Toy<S> toy(kk, couple, implicit_rate);
     toy.y.assign(y_in.begin(), y_in.end());
     toy.time = units[u].times.front();
     odelia::ode::Solver<Toy<S>> solver(toy, odelia::ode::OdeControl());
@@ -289,25 +319,32 @@ Rcpp::List step_local_demo(double k = 0.3, int nstep = 10,
                            std::string unit_kind = "step",
                            std::string ic_kind = "constant",
                            std::string intro_placement = "inside",
+                           std::string rate_kind = "closed_form",
                            double delta = 1e-5) {
   const bool by_step = (unit_kind == "step");
+  // "implicit": each rate reads a quantity defined by an equation solved off tape,
+  // so every unit that is re-recorded rebuilds that node.
+  const bool implicit_rate = (rate_kind == "implicit");
   const double couple = (ic_kind == "coupled") ? 0.25 : 0.0;
   const std::vector<unit> units = plan(nstep, by_step);
 
   const bool inside = (intro_placement == "inside");
-  const trajectory tr = forward(k, couple, units, inside);
+  const trajectory tr = forward(k, couple, units, inside, implicit_rate);
 
   std::size_t whole_bytes = 0, local_bytes = 0;
-  const double g_whole = whole_run_gradient(k, couple, units, &whole_bytes);
+  const double g_whole =
+      whole_run_gradient(k, couple, units, &whole_bytes, implicit_rate);
   const double g_local =
-      step_local_gradient(k, couple, units, tr, &local_bytes, inside);
+      step_local_gradient(k, couple, units, tr, &local_bytes, inside, implicit_rate);
 
-  const double fd = (forward(k + delta, couple, units).value -
-                     forward(k - delta, couple, units).value) / (2.0 * delta);
+  const double fd =
+      (forward(k + delta, couple, units, inside, implicit_rate).value -
+       forward(k - delta, couple, units, inside, implicit_rate).value) /
+      (2.0 * delta);
 
   // Closed form, constant IC only: cohorts born at t=0,1,2 with y=1, summed at t=3.
   const double analytic =
-      (couple == 0.0)
+      (couple == 0.0 && !implicit_rate)
           ? -(3 * std::exp(-3 * k) + 2 * std::exp(-2 * k) + std::exp(-k))
           : NA_REAL;
 
@@ -319,6 +356,7 @@ Rcpp::List step_local_demo(double k = 0.3, int nstep = 10,
       Rcpp::Named("unit_kind") = unit_kind,
       Rcpp::Named("ic_kind") = ic_kind,
       Rcpp::Named("intro_placement") = intro_placement,
+      Rcpp::Named("rate_kind") = rate_kind,
       Rcpp::Named("units") = static_cast<int>(units.size()),
       Rcpp::Named("value") = tr.value,
       Rcpp::Named("grad_whole_run") = g_whole,

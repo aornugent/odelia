@@ -80,3 +80,36 @@ testthat::test_that("a structural change placed BETWEEN units silently loses its
   expect_true(is.finite(bad$grad_step_local))            # no error, just wrong
   expect_equal(sign(bad$grad_step_local), sign(ok$grad_step_local))  # plausible, too
 })
+
+# A quantity defined by an equation solved off tape, read inside the rates, is the
+# shape a leaf operating point has in the real model. The node is rebuilt every time
+# a unit is re-recorded, so it is the case most likely to break: an implicit lift
+# grafts a correction whose value is discarded, and doing that once per unit rather
+# than once per run must give the same adjoint.
+testthat::test_that("an implicitly defined rate re-records exactly, per unit", {
+  ensure_step_local_interface(rebuild = FALSE)
+  reld <- function(a, b) abs(a - b) / (abs(b) + 1e-30)
+  for (ic in c("constant", "coupled")) {
+    r <- step_local_demo(k = 0.3, nstep = 10, unit_kind = "step", ic_kind = ic,
+                         intro_placement = "inside", rate_kind = "implicit")
+    expect_lt(reld(r$grad_step_local, r$grad_whole_run), 1e-12)
+    expect_lt(reld(r$grad_step_local, r$grad_fd), 1e-6)
+  }
+})
+
+testthat::test_that("peak tape stays flat with an implicit node in the rates", {
+  ensure_step_local_interface(rebuild = FALSE)
+  peaks <- whole <- numeric(0)
+  for (n in c(10, 20, 40, 80)) {
+    r <- step_local_demo(k = 0.3, nstep = n, unit_kind = "step", ic_kind = "coupled",
+                         intro_placement = "inside", rate_kind = "implicit")
+    peaks <- c(peaks, r$peak_bytes_step_local)
+    whole <- c(whole, r$peak_bytes_whole_run)
+    expect_lt(abs(r$grad_step_local / r$grad_whole_run - 1), 1e-12)
+  }
+  # Flat in run length, while the whole-run tape is linear in it -- so the ratio
+  # keeps widening rather than settling at some constant factor.
+  expect_equal(peaks, rep(peaks[1], length(peaks)))
+  expect_gt(whole[4] / whole[1], 6)
+  expect_gt(whole[4] / peaks[4], 100)
+})
