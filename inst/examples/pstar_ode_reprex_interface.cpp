@@ -373,9 +373,20 @@ Rcpp::List pstar_ode_reprex(double kmax = 0.05, double c = 3.0, int use_pstar = 
   const double gc_fd = (run_double(kmax, c + hc, use_pstar, nest, nlayer, n_steps, persist, nfields, graft) -
                         run_double(kmax, c - hc, use_pstar, nest, nlayer, n_steps, persist, nfields, graft)) / (2 * hc);
 
+  // The tape is still populated here, so the recorded size per ODE step is a
+  // measurement off the same run that produced the gradient. Recording this
+  // composition (a central-difference stationarity residual whose evaluations each
+  // rebuild the nested nodes) costs far more per step than a single node does.
+  const double mem = r_rev.tape ? static_cast<double>(r_rev.tape->getMemory()) : 0.0;
+  const double ops = r_rev.tape ? static_cast<double>(r_rev.tape->getNumOperations()) : 0.0;
+  const double stmts = r_rev.tape ? static_cast<double>(r_rev.tape->getNumStatements()) : 0.0;
+
   return Rcpp::List::create(
       Rcpp::Named("value") = value_rev,
       Rcpp::Named("value_double") = run_double(kmax, c, use_pstar, nest, nlayer, n_steps, persist, nfields, graft),
+      Rcpp::Named("mem_bytes") = mem,
+      Rcpp::Named("ops") = ops,
+      Rcpp::Named("stmts") = stmts,
       Rcpp::Named("grad_kmax") = g[0],
       Rcpp::Named("grad_c") = g[1],
       Rcpp::Named("grad_kmax_fd") = gk_fd,
