@@ -36,6 +36,7 @@
 #include <XAD/XAD.hpp>
 #include <odelia/incomplete_gamma.hpp>
 #include <odelia/implicit_node.hpp>
+#include <odelia/preaccumulate.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -608,6 +609,76 @@ template <class S>
 static S leaf_output_node(const Traits<S>& t, double p_star) {
   S ps = pstar_node<S>(p_star, t);
   return profit<S>(ps, t);
+}
+
+// A crown-shaped integral: a fixed-rule quadrature of the leaf profit over crown
+// depth. The integrand is evaluated at every node and reduced to ONE number, which is
+// the shape odelia::preaccumulate is for -- the run tape can only ever extract one
+// partial per input from it, however many nodes the rule has.
+//
+// Trapezoid rather than Gauss-Kronrod: the point being witnessed is the node count
+// against the input count, and the weights play no part in that.
+template <class S>
+static S crown_integral_block(const std::vector<S>& x, int nnode) {
+  const Traits<S> t{x[0], x[1], x[2], x[3]};
+  const S lo = x[2] + 1e-3;
+  const double frac = 6.0;
+  S acc(0.0);
+  for (int j = 0; j <= nnode; ++j) {
+    const double u = static_cast<double>(j) / nnode;
+    const S z = lo + (frac - lo) * u;
+    const S w = S((j == 0 || j == nnode) ? 0.5 : 1.0);
+    acc = acc + w * profit<S>(z, t);
+  }
+  return acc / static_cast<double>(nnode);
+}
+
+// [[Rcpp::export]]
+Rcpp::List weibull_leaf_preaccum_demo(int nnode = 21, int preaccum = 1,
+                                      double kmax = 2.0, double c = 3.0,
+                                      double psi_soil = 0.4, double vcmax = 5.0) {
+  xad::adj<double>::tape_type tape;
+  std::vector<RevS> in{RevS(kmax), RevS(c), RevS(psi_soil), RevS(vcmax)};
+  for (auto& v : in) tape.registerInput(v);
+  tape.newRecording();
+
+  RevS out(0.0);
+  if (preaccum) {
+    out = odelia::preaccumulate<RevS>(in, [&](const std::vector<RevS>& x) -> RevS {
+      return crown_integral_block<RevS>(x, nnode);
+    });
+  } else {
+    out = crown_integral_block<RevS>(in, nnode);
+  }
+
+  tape.registerOutput(out);
+  xad::derivative(out) = 1.0;
+  tape.computeAdjoints();
+
+  std::vector<double> g(in.size());
+  for (size_t i = 0; i < in.size(); ++i) g[i] = xad::derivative(in[i]);
+
+  // Re-evaluating finite difference in double, so the gradient is checked rather
+  // than merely reproduced between the two recording strategies.
+  std::vector<double> gfd(4);
+  std::vector<double> base{kmax, c, psi_soil, vcmax};
+  for (int k = 0; k < 4; ++k) {
+    const double h = 1e-6 * (std::abs(base[k]) + 1.0);
+    auto at = [&](double d) {
+      std::vector<double> b = base;
+      b[k] += d;
+      return crown_integral_block<double>(b, nnode);
+    };
+    gfd[k] = (at(h) - at(-h)) / (2 * h);
+  }
+
+  return Rcpp::List::create(
+      Rcpp::Named("nnode") = nnode, Rcpp::Named("preaccum") = preaccum,
+      Rcpp::Named("value") = xad::value(out),
+      Rcpp::Named("grad") = Rcpp::NumericVector(g.begin(), g.end()),
+      Rcpp::Named("grad_fd") = Rcpp::NumericVector(gfd.begin(), gfd.end()),
+      Rcpp::Named("mem_bytes") = static_cast<double>(tape.getMemory()),
+      Rcpp::Named("ops") = static_cast<double>(tape.getNumOperations()));
 }
 
 // [[Rcpp::export]]

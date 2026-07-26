@@ -218,3 +218,35 @@ testthat::test_that("value-graft keeps the derivative and the guard discriminate
   rel <- abs(r$dprofit_grafted_ad - r$dprofit_fd) / (abs(r$dprofit_fd) + 1e-30)
   expect_lt(max(rel), 1e-4)
 })
+
+test_that("preaccumulate: a quadrature block costs its inputs, not its nodes", {
+  ensure_weibull_leaf_interface()
+
+  # The block's own gradient is right: FD over a re-evaluating double integral.
+  for (n in c(5L, 21L, 81L)) {
+    r <- weibull_leaf_preaccum_demo(nnode = n, preaccum = 1L)
+    expect_equal(r$grad, r$grad_fd, tolerance = 1e-6)
+  }
+
+  # Preaccumulation is a tape-size transform, so it must not move the gradient at
+  # all -- not "within tolerance", identically.
+  for (n in c(5L, 21L, 81L)) {
+    full <- weibull_leaf_preaccum_demo(nnode = n, preaccum = 0L)
+    pre  <- weibull_leaf_preaccum_demo(nnode = n, preaccum = 1L)
+    expect_identical(pre$grad, full$grad)
+    expect_equal(pre$value, full$value)
+  }
+
+  # The point of it: recorded cost is set by the input count (4 here) and is flat in
+  # the node count, while recording the internals grows with it.
+  ops <- vapply(c(5L, 21L, 81L),
+                function(n) weibull_leaf_preaccum_demo(nnode = n, preaccum = 1L)$ops,
+                numeric(1))
+  expect_equal(ops, rep(ops[1], 3))
+
+  full_ops <- vapply(c(5L, 21L, 81L),
+                     function(n) weibull_leaf_preaccum_demo(nnode = n, preaccum = 0L)$ops,
+                     numeric(1))
+  expect_gt(full_ops[3], 10 * full_ops[1])   # the untransformed block does grow
+  expect_gt(full_ops[2] / ops[2], 50)        # at the crown's 21 nodes, >50x
+})
