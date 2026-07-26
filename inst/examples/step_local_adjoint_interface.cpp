@@ -34,6 +34,8 @@
 #include <odelia/implicit_node.hpp>
 #include <odelia/ode_solver.hpp>
 
+#include <chrono>
+#include <array>
 #include <vector>
 #include <cmath>
 #include <string>
@@ -312,6 +314,216 @@ double step_local_gradient(double k, double couple, const std::vector<unit>& uni
   return grad;
 }
 
+
+// ---- two outputs, one re-recording per unit -------------------------------------
+// The real reduction is a census vector, not a scalar, so a unit has to serve several
+// adjoint rows. Recording it once and sweeping it once per row is what XAD's own
+// computeJacobian does over a whole run; here the same thing happens per unit, with
+// clearDerivatives between rows so the sweeps stay independent. Rows: sum(y) and
+// sum(y^2), the second one seeded from the final state so it is not a constant seed.
+struct jac2 {
+  std::array<double, 2> d_k{0.0, 0.0};
+  std::array<double, 2> value{0.0, 0.0};
+};
+
+static std::array<double, 2> outputs_of(const std::vector<double>& y) {
+  double s1 = 0.0, s2 = 0.0;
+  for (double v : y) { s1 += v; s2 += v * v; }
+  return {s1, s2};
+}
+
+jac2 whole_run_jacobian(double k, double couple, const std::vector<unit>& units,
+                        bool implicit_rate) {
+  using ad = xad::adj<double>;
+  using S = ad::active_type;
+  ad::tape_type tape;
+  S kk(k);
+  tape.registerInput(kk);
+  tape.newRecording();
+
+  Toy<S> toy(kk, couple, implicit_rate);
+  odelia::ode::Solver<Toy<S>> solver(toy, odelia::ode::OdeControl());
+  solver.reset();
+  solver.get_system_ref().k = kk;
+  for (auto const& u : units) {
+    auto& sys = solver.get_system_ref();
+    if (u.introduce_at_start) { sys.introduce(); solver.set_state_from_system(); }
+    solver.advance_fixed(u.times);
+  }
+  auto& sys = solver.get_system_ref();
+  std::vector<S> st(sys.ode_size());
+  sys.ode_state(st.begin());
+
+  S j0(0.0), j1(0.0);
+  for (auto const& v : st) { j0 += v; j1 += v * v; }
+  tape.registerOutput(j0);
+  tape.registerOutput(j1);
+
+  jac2 out;
+  out.value = {xad::value(j0), xad::value(j1)};
+  for (int row = 0; row < 2; ++row) {
+    tape.clearDerivatives();
+    xad::derivative(row == 0 ? j0 : j1) = 1.0;
+    tape.computeAdjoints();
+    out.d_k[row] = xad::derivative(kk);
+  }
+  return out;
+}
+
+jac2 step_local_jacobian(double k, double couple, const std::vector<unit>& units,
+                         const trajectory& tr, bool implicit_rate,
+                         std::size_t* peak_bytes) {
+  using ad = xad::adj<double>;
+  using S = ad::active_type;
+  const std::size_t U = units.size();
+
+  // Seed both rows from the final state: dJ0/dy = 1, dJ1/dy = 2 y.
+  std::vector<double> y_final;
+  {
+    Toy<double> probe(k, couple, implicit_rate);
+    odelia::ode::Solver<Toy<double>> s(probe, odelia::ode::OdeControl());
+    s.reset();
+    for (auto const& u : units) {
+      auto& sys = s.get_system_ref();
+      if (u.introduce_at_start) { sys.introduce(); s.set_state_from_system(); }
+      s.advance_fixed(u.times);
+    }
+    y_final.resize(s.get_system_ref().ode_size());
+    s.get_system_ref().ode_state(y_final.begin());
+  }
+  std::array<std::vector<double>, 2> lambda;
+  lambda[0].assign(y_final.size(), 1.0);
+  lambda[1].resize(y_final.size());
+  for (std::size_t i = 0; i < y_final.size(); ++i) lambda[1][i] = 2.0 * y_final[i];
+
+  jac2 out;
+  out.value = outputs_of(y_final);
+  std::size_t peak = 0;
+
+  for (std::size_t u = U; u-- > 0;) {
+    ad::tape_type tape;
+    const std::vector<double>& y0 = tr.y_at[u];
+    std::vector<S> y_in(y0.size());
+    for (std::size_t i = 0; i < y0.size(); ++i) y_in[i] = S(y0[i]);
+    S kk(k);
+    for (auto& yi : y_in) tape.registerInput(yi);
+    tape.registerInput(kk);
+    tape.newRecording();
+
+    Toy<S> toy(kk, couple, implicit_rate);
+    toy.time = units[u].times.front();
+    odelia::ode::Solver<Toy<S>> solver(toy, odelia::ode::OdeControl());
+    solver.get_system_ref().k = kk;
+    solver.get_system_ref().y.assign(y_in.begin(), y_in.end());
+    solver.set_state_from_system();
+    {
+      auto& sys = solver.get_system_ref();
+      if (units[u].introduce_at_start) { sys.introduce(); solver.set_state_from_system(); }
+    }
+    solver.advance_fixed(units[u].times);
+
+    auto& sys = solver.get_system_ref();
+    std::vector<S> st(sys.ode_size());
+    sys.ode_state(st.begin());
+    if (st.size() != lambda[0].size()) Rcpp::stop("unit output width != incoming lambda");
+    for (auto& v : st) tape.registerOutput(v);
+    if (tape.getMemory() > peak) peak = tape.getMemory();
+
+    // One recording, one sweep per row.
+    std::array<std::vector<double>, 2> lambda_prev;
+    for (int row = 0; row < 2; ++row) {
+      tape.clearDerivatives();
+      for (std::size_t i = 0; i < st.size(); ++i)
+        xad::derivative(st[i]) = lambda[row][i];
+      tape.computeAdjoints();
+      lambda_prev[row].resize(y_in.size());
+      for (std::size_t i = 0; i < y_in.size(); ++i)
+        lambda_prev[row][i] = xad::derivative(y_in[i]);
+      out.d_k[row] += xad::derivative(kk);
+    }
+    lambda = lambda_prev;
+  }
+  if (peak_bytes) *peak_bytes = peak;
+  return out;
+}
+
+
+// ---- the same sweep, reusing one tape -------------------------------------------
+// A fresh tape per unit is what makes the peak claim unarguable, but it pays a tape
+// construction per unit. One tape rewound to a marked position between units should
+// hold the same peak -- the rewind has to actually release, which is the thing being
+// measured -- while dropping that per-unit cost.
+double step_local_gradient_reused_tape(double k, double couple,
+                                       const std::vector<unit>& units,
+                                       const trajectory& tr,
+                                       std::size_t* peak_bytes,
+                                       bool implicit_rate) {
+  using ad = xad::adj<double>;
+  using S = ad::active_type;
+  const std::size_t U = units.size();
+
+  std::vector<double> lambda;
+  {
+    Toy<double> probe(k, couple, implicit_rate);
+    odelia::ode::Solver<Toy<double>> s(probe, odelia::ode::OdeControl());
+    s.reset();
+    for (auto const& u : units) {
+      auto& sys = s.get_system_ref();
+      if (u.introduce_at_start) { sys.introduce(); s.set_state_from_system(); }
+      s.advance_fixed(u.times);
+    }
+    lambda.assign(s.get_system_ref().ode_size(), 1.0);
+  }
+
+  double grad = 0.0;
+  std::size_t peak = 0;
+  ad::tape_type tape;                       // one tape for the whole backward walk
+  const auto mark = tape.getPosition();
+
+  for (std::size_t u = U; u-- > 0;) {
+    tape.resetTo(mark);
+    tape.clearDerivatives();
+
+    const std::vector<double>& y0 = tr.y_at[u];
+    std::vector<S> y_in(y0.size());
+    for (std::size_t i = 0; i < y0.size(); ++i) y_in[i] = S(y0[i]);
+    S kk(k);
+    for (auto& yi : y_in) tape.registerInput(yi);
+    tape.registerInput(kk);
+    tape.newRecording();
+
+    Toy<S> toy(kk, couple, implicit_rate);
+    toy.time = units[u].times.front();
+    odelia::ode::Solver<Toy<S>> solver(toy, odelia::ode::OdeControl());
+    solver.get_system_ref().k = kk;
+    solver.get_system_ref().y.assign(y_in.begin(), y_in.end());
+    solver.set_state_from_system();
+    {
+      auto& sys = solver.get_system_ref();
+      if (units[u].introduce_at_start) { sys.introduce(); solver.set_state_from_system(); }
+    }
+    solver.advance_fixed(units[u].times);
+
+    auto& sys = solver.get_system_ref();
+    std::vector<S> out(sys.ode_size());
+    sys.ode_state(out.begin());
+    if (out.size() != lambda.size()) Rcpp::stop("unit output width != incoming lambda");
+    for (auto& v : out) tape.registerOutput(v);
+    for (std::size_t i = 0; i < out.size(); ++i) xad::derivative(out[i]) = lambda[i];
+
+    if (tape.getMemory() > peak) peak = tape.getMemory();
+    tape.computeAdjoints();
+
+    std::vector<double> lambda_prev(y_in.size());
+    for (std::size_t i = 0; i < y_in.size(); ++i)
+      lambda_prev[i] = xad::derivative(y_in[i]);
+    grad += xad::derivative(kk);
+    lambda = lambda_prev;
+  }
+  if (peak_bytes) *peak_bytes = peak;
+  return grad;
+}
+
 }  // namespace
 
 // [[Rcpp::export]]
@@ -332,10 +544,26 @@ Rcpp::List step_local_demo(double k = 0.3, int nstep = 10,
   const trajectory tr = forward(k, couple, units, inside, implicit_rate);
 
   std::size_t whole_bytes = 0, local_bytes = 0;
+  using clock = std::chrono::steady_clock;
+  const auto t0 = clock::now();
   const double g_whole =
       whole_run_gradient(k, couple, units, &whole_bytes, implicit_rate);
+  const auto t1 = clock::now();
   const double g_local =
       step_local_gradient(k, couple, units, tr, &local_bytes, inside, implicit_rate);
+  const auto t2 = clock::now();
+  const double us_whole =
+      std::chrono::duration<double, std::micro>(t1 - t0).count();
+  const double us_local =
+      std::chrono::duration<double, std::micro>(t2 - t1).count();
+  std::size_t reuse_bytes = 0;
+  const auto t3 = clock::now();
+  const double g_reuse = inside
+      ? step_local_gradient_reused_tape(k, couple, units, tr, &reuse_bytes, implicit_rate)
+      : g_local;
+  const auto t4 = clock::now();
+  const double us_reuse =
+      std::chrono::duration<double, std::micro>(t4 - t3).count();
 
   const double fd =
       (forward(k + delta, couple, units, inside, implicit_rate).value -
@@ -357,6 +585,11 @@ Rcpp::List step_local_demo(double k = 0.3, int nstep = 10,
       Rcpp::Named("ic_kind") = ic_kind,
       Rcpp::Named("intro_placement") = intro_placement,
       Rcpp::Named("rate_kind") = rate_kind,
+      Rcpp::Named("us_whole_run") = us_whole,
+      Rcpp::Named("us_step_local") = us_local,
+      Rcpp::Named("us_reused_tape") = us_reuse,
+      Rcpp::Named("grad_reused_tape") = g_reuse,
+      Rcpp::Named("peak_bytes_reused_tape") = static_cast<double>(reuse_bytes),
       Rcpp::Named("units") = static_cast<int>(units.size()),
       Rcpp::Named("value") = tr.value,
       Rcpp::Named("grad_whole_run") = g_whole,
@@ -366,4 +599,49 @@ Rcpp::List step_local_demo(double k = 0.3, int nstep = 10,
       Rcpp::Named("peak_bytes_whole_run") = static_cast<double>(whole_bytes),
       Rcpp::Named("peak_bytes_step_local") = static_cast<double>(local_bytes),
       Rcpp::Named("trajectory_bytes") = static_cast<double>(8 * traj_doubles));
+}
+
+// [[Rcpp::export]]
+Rcpp::List step_local_jacobian_demo(double k = 0.3, int nstep = 10,
+                                    std::string ic_kind = "coupled",
+                                    std::string rate_kind = "closed_form",
+                                    double delta = 1e-5) {
+  const double couple = (ic_kind == "coupled") ? 0.25 : 0.0;
+  const bool implicit_rate = (rate_kind == "implicit");
+  const std::vector<unit> units = plan(nstep, true);
+
+  const trajectory tr = forward(k, couple, units, true, implicit_rate);
+  const jac2 whole = whole_run_jacobian(k, couple, units, implicit_rate);
+  std::size_t peak = 0;
+  const jac2 local = step_local_jacobian(k, couple, units, tr, implicit_rate, &peak);
+
+  // Re-integrating central difference on both rows.
+  auto rows_at = [&](double kk) {
+    const trajectory t = forward(kk, couple, units, true, implicit_rate);
+    Toy<double> probe(kk, couple, implicit_rate);
+    odelia::ode::Solver<Toy<double>> s(probe, odelia::ode::OdeControl());
+    s.reset();
+    for (auto const& u : units) {
+      auto& sys = s.get_system_ref();
+      if (u.introduce_at_start) { sys.introduce(); s.set_state_from_system(); }
+      s.advance_fixed(u.times);
+    }
+    std::vector<double> y(s.get_system_ref().ode_size());
+    s.get_system_ref().ode_state(y.begin());
+    return outputs_of(y);
+  };
+  const std::array<double, 2> hi = rows_at(k + delta), lo = rows_at(k - delta);
+
+  return Rcpp::List::create(
+      Rcpp::Named("rate_kind") = rate_kind,
+      Rcpp::Named("ic_kind") = ic_kind,
+      Rcpp::Named("units") = static_cast<int>(units.size()),
+      Rcpp::Named("value") = Rcpp::NumericVector::create(local.value[0], local.value[1]),
+      Rcpp::Named("d_k_step_local") =
+          Rcpp::NumericVector::create(local.d_k[0], local.d_k[1]),
+      Rcpp::Named("d_k_whole_run") =
+          Rcpp::NumericVector::create(whole.d_k[0], whole.d_k[1]),
+      Rcpp::Named("d_k_fd") = Rcpp::NumericVector::create(
+          (hi[0] - lo[0]) / (2 * delta), (hi[1] - lo[1]) / (2 * delta)),
+      Rcpp::Named("peak_bytes_step_local") = static_cast<double>(peak));
 }

@@ -113,3 +113,56 @@ testthat::test_that("peak tape stays flat with an implicit node in the rates", {
   expect_gt(whole[4] / whole[1], 6)
   expect_gt(whole[4] / peaks[4], 100)
 })
+
+# The real reduction is a census vector, so a unit has to serve several adjoint rows.
+# Recording once and sweeping once per row is what matters for cost: if it works, a
+# three-output census Jacobian costs the same tape as a scalar and only more sweeps.
+testthat::test_that("several Jacobian rows come off one re-recording per unit", {
+  ensure_step_local_interface(rebuild = FALSE)
+  reld <- function(a, b) abs(a - b) / (abs(b) + 1e-30)
+  for (rk in c("closed_form", "implicit")) {
+    r <- step_local_jacobian_demo(k = 0.3, nstep = 10, ic_kind = "coupled",
+                                  rate_kind = rk)
+    expect_length(r$d_k_step_local, 2)
+    # Both rows against the whole-run tape, and against a re-integrating difference.
+    for (i in 1:2) {
+      expect_lt(reld(r$d_k_step_local[i], r$d_k_whole_run[i]), 1e-12)
+      expect_lt(reld(r$d_k_step_local[i], r$d_k_fd[i]), 1e-6)
+    }
+    # The rows are genuinely different reductions, so this is not one row twice.
+    expect_gt(abs(r$d_k_step_local[1] - r$d_k_step_local[2]), 1e-3)
+  }
+})
+
+testthat::test_that("a second output row costs no extra tape", {
+  ensure_step_local_interface(rebuild = FALSE)
+  one <- step_local_demo(k = 0.3, nstep = 10, unit_kind = "step", ic_kind = "coupled",
+                         intro_placement = "inside", rate_kind = "implicit")
+  two <- step_local_jacobian_demo(k = 0.3, nstep = 10, ic_kind = "coupled",
+                                  rate_kind = "implicit")
+  # Two rows sweep the same recording twice rather than recording twice, so peak
+  # tape is set by the unit, not by the number of outputs.
+  expect_lt(two$peak_bytes_step_local, 1.2 * one$peak_bytes_step_local)
+})
+
+# Reusing one tape rewound between units was the obvious optimisation over building a
+# fresh one each time. It does not work, and this records why so it is not retried:
+# rewinding to a marked position keeps the gradient exact but does NOT release the
+# tape, so peak memory grows with the run -- which is the one thing the whole design
+# exists to prevent. The per-unit tape construction is a real cost and it is the price
+# of the bound, not an oversight.
+testthat::test_that("rewinding one tape does not bound peak memory; a fresh tape does", {
+  ensure_step_local_interface(rebuild = FALSE)
+  fresh <- reused <- numeric(0)
+  for (n in c(20, 40, 80, 160)) {
+    r <- step_local_demo(k = 0.3, nstep = n, unit_kind = "step", ic_kind = "coupled",
+                         intro_placement = "inside", rate_kind = "implicit")
+    fresh <- c(fresh, r$peak_bytes_step_local)
+    reused <- c(reused, r$peak_bytes_reused_tape)
+    # Both are exact -- this is a memory result, not a correctness one.
+    expect_lt(abs(r$grad_reused_tape / r$grad_whole_run - 1), 1e-12)
+  }
+  expect_equal(fresh, rep(fresh[1], length(fresh)))   # flat
+  expect_gt(reused[4] / reused[1], 4)                  # grows with the run
+  expect_gt(reused[4] / fresh[4], 20)
+})
