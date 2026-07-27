@@ -9,7 +9,7 @@
 .odelia_test_cache$incomplete_gamma_loaded <- FALSE
 .odelia_test_cache$weibull_leaf_loaded <- FALSE
 .odelia_test_cache$soil_leaf_loaded <- FALSE
-.odelia_test_cache$decide_loaded <- FALSE
+.odelia_test_cache$field_over_implicit_loaded <- FALSE
 .odelia_test_cache$odelia_so <- NA_character_
 
 resolve_test_path <- function(installed_rel, source_rel) {
@@ -715,11 +715,13 @@ ensure_step_local_interface <- function(rebuild = FALSE) {
   invisible(TRUE)
 }
 
-# Compile and source the decide / diagnostic interface on demand. Same sourceCpp
-# mechanics as the incomplete_gamma demo (link against the odelia library for the
-# XAD Tape symbols; skip gracefully in a load_all session).
-ensure_decide_interface <- function(rebuild = FALSE) {
-  if (!rebuild && isTRUE(.odelia_test_cache$decide_loaded)) {
+# Compile and source the field-over-implicit witness on demand. Same sourceCpp
+# mechanics as the separable_field demo (link against the odelia library for the XAD
+# Tape symbols; skip gracefully in a load_all session). This is the witness for a
+# separable_field assembled over implicit_value source weights -- TF24's shape, which
+# K93's and FF16's closed-form sources never exercise.
+ensure_field_over_implicit_interface <- function(rebuild = FALSE) {
+  if (!rebuild && isTRUE(.odelia_test_cache$field_over_implicit_loaded)) {
     return(invisible(TRUE))
   }
 
@@ -728,8 +730,8 @@ ensure_decide_interface <- function(rebuild = FALSE) {
   include_dir <- dirname(dirname(resolve_test_path(
     "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
   dc_cpp <- resolve_test_path(
-    "examples/decide_interface.cpp",
-    "inst/examples/decide_interface.cpp"
+    "examples/field_over_implicit_interface.cpp",
+    "inst/examples/field_over_implicit_interface.cpp"
   )
 
   odelia_so <- .odelia_test_cache$odelia_so
@@ -758,11 +760,11 @@ ensure_decide_interface <- function(rebuild = FALSE) {
   if (inherits(source_cpp_result, "error")) {
     msg <- conditionMessage(source_cpp_result)
     if (grepl("active_tape_", msg, fixed = TRUE)) {
-      testthat::skip("decide sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
+      testthat::skip("field_over_implicit sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
     }
     stop(source_cpp_result)
   }
 
-  .odelia_test_cache$decide_loaded <- TRUE
+  .odelia_test_cache$field_over_implicit_loaded <- TRUE
   invisible(TRUE)
 }
