@@ -12,37 +12,37 @@
 namespace odelia {
 namespace interpolator {
 
-// A C1 piecewise-cubic interpolant built from a value AND a slope at each node.
+// A C1 piecewise-cubic interpolant built from a value AND a slope at each knot.
 //
 // The value and the slope come from one polynomial, so a caller that needs both
-// gets a consistent pair: deriv(u) is the exact derivative of what eval(u)
-// returns. A spline fitted to values alone offers no such guarantee -- its
+// gets a consistent pair: slope(u) is the exact derivative of what eval(u)
+// returns. An interpolant fitted to values alone offers no such guarantee -- its
 // analytic tangent is whatever the fit happened to produce, and where the target
-// has a curvature break between nodes that tangent is wrong by an amount the
+// has a curvature break between knots that tangent is wrong by an amount the
 // value error does not reveal.
 //
-// Each span reads only its own two nodes. That locality is what makes an adjoint
-// cheap: a query reaches back to two nodes rather than to the whole node set, as
-// a C2 fit does through its band solve. It also means moving a node changes the
+// Each span reads only its own two knots. That locality is what makes an adjoint
+// cheap: a query reaches back to two knots rather than to the whole knot set, as
+// a C2 fit does through its band solve. It also means moving a knot changes the
 // interpolant only in the two spans that touch it, and that value and slope stay
-// continuous across the change, since both are pinned at the shared node.
+// continuous across the change, since both are pinned at the shared knot.
 //
-// Node positions are double; values and slopes carry the working scalar S. A
+// Knot positions are double; values and slopes carry the working scalar S. A
 // query is indexed at the passive position, so d(value)/d(u) is not recorded --
-// deriv(u) returns it explicitly to a caller that wants it.
+// slope(u) returns it explicitly to a caller that wants it.
 template <typename S>
 class hermite_interpolator {
 public:
-  // Nodes, their values, and dy/dx at each. Positions must be strictly
+  // Knots, their values, and dy/dx at each. Positions must be strictly
   // ascending; at least two are needed (one span).
   void init(const std::vector<double>& x_, const std::vector<S>& y_,
             const std::vector<S>& dydx_) {
     util::check_length(y_.size(), x_.size());
     util::check_length(dydx_.size(), x_.size());
-    if (x_.size() < 2) util::stop("hermite_interpolator: need at least 2 nodes");
+    if (x_.size() < 2) util::stop("hermite_interpolator: need at least 2 knots");
     for (std::size_t i = 1; i < x_.size(); ++i) {
       if (!(x_[i] > x_[i - 1]))
-        util::stop("hermite_interpolator: nodes must be strictly ascending");
+        util::stop("hermite_interpolator: knots must be strictly ascending");
     }
     x = x_;
     y = y_;
@@ -60,9 +60,9 @@ public:
   std::size_t size() const { return x.size(); }
   double min() const { return x.front(); }
   double max() const { return x.back(); }
-  const std::vector<double>& nodes() const { return x; }
+  const std::vector<double>& knots() const { return x; }
 
-  // Value at u. Outside the node range the end span's line is extended (value
+  // Value at u. Outside the knot range the end span's line is extended (value
   // and slope of the nearest end), which keeps the read C1 across the boundary
   // instead of letting a cubic run away.
   S eval(double u) const {
@@ -76,8 +76,9 @@ public:
 
   S operator()(double u) const { return eval(u); }
 
-  // dy/du at u -- the exact derivative of the polynomial eval() uses.
-  S deriv(double u) const {
+  // dy/du at u -- the exact derivative of the polynomial eval() uses. (odelia's
+  // older value-fitted Interpolator spells the same operation `deriv`.)
+  S slope(double u) const {
     check_active();
     if (u <= x.front()) return m.front();
     if (u >= x.back())  return m.back();
@@ -86,16 +87,16 @@ public:
     return (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
   }
 
-  // Both from one node lookup and one span load. The crown integral wants the
-  // pair at every quadrature point, so this halves that work.
-  void eval_and_deriv(double u, S& value, S& slope) const {
+  // Both from one knot lookup and one span load. A crown integral wants the pair
+  // at every quadrature point, so this halves that work.
+  void value_and_slope(double u, S& value, S& dydu) const {
     check_active();
-    if (u <= x.front()) { value = y.front() + m.front() * (u - x.front()); slope = m.front(); return; }
-    if (u >= x.back())  { value = y.back()  + m.back()  * (u - x.back());  slope = m.back();  return; }
+    if (u <= x.front()) { value = y.front() + m.front() * (u - x.front()); dydu = m.front(); return; }
+    if (u >= x.back())  { value = y.back()  + m.back()  * (u - x.back());  dydu = m.back();  return; }
     const Span& s = spans[span_of(u)];
     const double t = (u - s.x0) * s.inv_h;
     value = s.y0 + t * (s.c1 + t * (s.c2 + t * s.c3));
-    slope = (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
+    dydu  = (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
   }
 
 private:
@@ -121,7 +122,7 @@ private:
       s.c2 = 3.0 * (b - a) - 2.0 * sa - sb;
       s.c3 = 2.0 * (a - b) + sa + sb;
     }
-    // An equally spaced node set indexes by arithmetic instead of a search.
+    // An equally spaced knot set indexes by arithmetic instead of a search.
     // Cohort heights are not equally spaced; a fixed environment's are.
     uniform = false;
     if (ns > 1) {
@@ -152,8 +153,8 @@ private:
     if (!active) util::stop("hermite_interpolator: not initialised");
   }
 
-  std::vector<double> x;      // node positions, contiguous for the search
-  std::vector<S> y, m;        // node values and slopes, as supplied
+  std::vector<double> x;      // knot positions, contiguous for the search
+  std::vector<S> y, m;        // knot values and slopes, as supplied
   std::vector<Span> spans;
   double inv_h0 = 0.0;
   bool uniform = false;
