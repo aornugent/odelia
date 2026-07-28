@@ -7,6 +7,7 @@
 #include <cmath>
 #include <stddef.h> // size_t
 #include <RcppCommon.h> // as/wrap/SEXP
+#include <XAD/XAD.hpp>  // xad::value, reached by to_passive below
 
 namespace odelia {
 namespace util {

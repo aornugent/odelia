@@ -72,6 +72,7 @@ struct OdeControl {
                           const state_type &dydt)
   {
     double rmax = std::numeric_limits<double>::min();
+    bool err_non_finite = false;
     const double S = 0.9;
 
     for (size_t i = 0; i < dim; i++)
@@ -79,13 +80,25 @@ struct OdeControl {
       const double D0 = errlevel(y[i], dydt[i], step_size);
       using std::abs;
       const double r = abs(yerr[i]) / abs(D0);
+      // A non-finite ratio must not reach std::max: with a finite component
+      // after it the NaN is dropped and the step is accepted -- and grown, if
+      // the surviving components are small -- on an error nobody measured. With
+      // no finite component after it, rmax is NaN, both tests below are false,
+      // and the step is accepted unchanged. Either way a non-finite state
+      // enters the trajectory, which a replay pinned to this grid then
+      // differentiates.
+      if (!util::is_finite(r))
+      {
+        err_non_finite = true;
+        break;
+      }
       rmax = std::max(r, rmax);
     }
 
-    if (rmax > 1.1)
+    if (err_non_finite || rmax > 1.1)
     {
       // decrease step, no more than factor of 5
-      double r = S / pow(rmax, 1.0 / ord);
+      double r = err_non_finite ? 0.2 : S / pow(rmax, 1.0 / ord);
       if (r < 0.2)
       {
         r = 0.2;

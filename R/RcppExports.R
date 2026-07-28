@@ -177,6 +177,10 @@ OdeControl_set_step_size_initial <- function(control_xp, step_size_initial) {
     invisible(.Call(`_odelia_OdeControl_set_step_size_initial`, control_xp, step_size_initial))
 }
 
+OdeControl_adjust_step_size <- function(control_xp, ord, step_size, y, yerr, dydt) {
+    .Call(`_odelia_OdeControl_adjust_step_size`, control_xp, ord, step_size, y, yerr, dydt)
+}
+
 Drivers_new <- function() {
     .Call(`_odelia_Drivers_new`)
 }

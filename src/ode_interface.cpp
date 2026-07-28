@@ -109,6 +109,26 @@ void OdeControl_set_step_size_initial(SEXP control_xp, double step_size_initial)
   get_OdeControl(control_xp)->step_size_initial = step_size_initial;
 }
 
+// The step-size decision for one attempted step, so a caller can put an error
+// estimate in and read out both halves of the answer: the size to use next, and
+// whether the attempt is rejected. `shrank` is what the solver's step loop
+// branches on.
+// [[Rcpp::export]]
+Rcpp::List OdeControl_adjust_step_size(SEXP control_xp, size_t ord,
+                                       double step_size,
+                                       std::vector<double> y,
+                                       std::vector<double> yerr,
+                                       std::vector<double> dydt) {
+  auto ctrl = get_OdeControl(control_xp);
+  if (yerr.size() != y.size() || dydt.size() != y.size()) {
+    Rcpp::stop("y, yerr and dydt must be the same length");
+  }
+  const double next =
+      ctrl->adjust_step_size(y.size(), ord, step_size, y, yerr, dydt);
+  return Rcpp::List::create(Rcpp::Named("step_size_next") = next,
+                            Rcpp::Named("shrank") = ctrl->step_size_shrank());
+}
+
 //-------------------------------------------------------------------------
 // Drivers interface
 

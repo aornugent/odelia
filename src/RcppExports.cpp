@@ -524,6 +524,22 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// OdeControl_adjust_step_size
+Rcpp::List OdeControl_adjust_step_size(SEXP control_xp, size_t ord, double step_size, std::vector<double> y, std::vector<double> yerr, std::vector<double> dydt);
+RcppExport SEXP _odelia_OdeControl_adjust_step_size(SEXP control_xpSEXP, SEXP ordSEXP, SEXP step_sizeSEXP, SEXP ySEXP, SEXP yerrSEXP, SEXP dydtSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
+    Rcpp::traits::input_parameter< size_t >::type ord(ordSEXP);
+    Rcpp::traits::input_parameter< double >::type step_size(step_sizeSEXP);
+    Rcpp::traits::input_parameter< std::vector<double> >::type y(ySEXP);
+    Rcpp::traits::input_parameter< std::vector<double> >::type yerr(yerrSEXP);
+    Rcpp::traits::input_parameter< std::vector<double> >::type dydt(dydtSEXP);
+    rcpp_result_gen = Rcpp::wrap(OdeControl_adjust_step_size(control_xp, ord, step_size, y, yerr, dydt));
+    return rcpp_result_gen;
+END_RCPP
+}
 // Drivers_new
 SEXP Drivers_new();
 RcppExport SEXP _odelia_Drivers_new() {
@@ -664,6 +680,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_OdeControl_set_step_size_min", (DL_FUNC) &_odelia_OdeControl_set_step_size_min, 2},
     {"_odelia_OdeControl_set_step_size_max", (DL_FUNC) &_odelia_OdeControl_set_step_size_max, 2},
     {"_odelia_OdeControl_set_step_size_initial", (DL_FUNC) &_odelia_OdeControl_set_step_size_initial, 2},
+    {"_odelia_OdeControl_adjust_step_size", (DL_FUNC) &_odelia_OdeControl_adjust_step_size, 6},
     {"_odelia_Drivers_new", (DL_FUNC) &_odelia_Drivers_new, 0},
     {"_odelia_Drivers_set_constant", (DL_FUNC) &_odelia_Drivers_set_constant, 3},
     {"_odelia_Drivers_set_variable", (DL_FUNC) &_odelia_Drivers_set_variable, 4},
