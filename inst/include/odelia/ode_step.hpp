@@ -214,9 +214,17 @@ void Step<System>::step_adjoint(System& system,
     // registers as a variable with no dependencies, and its adjoint sweeps to zero.
     std::vector<active_type> stage(size), rates(size);
     for (size_t i = 0; i < size; ++i) {
+      // step()'s own arithmetic, so the stage state is bit-identical to the one it
+      // stepped through: the rate combination summed in ascending m, then one h.
       value_type s = y[i];
-      for (int m = 1; m < j; ++m) {
-        s += h * b[j - 2][m - 1] * (*k[m - 1])[i];
+      if (j == 2) {
+        s = y[i] + b21 * h * k1[i];
+      } else if (j > 2) {
+        value_type combination = b[j - 2][0] * k1[i];
+        for (int m = 2; m < j; ++m) {
+          combination += b[j - 2][m - 1] * (*k[m - 1])[i];
+        }
+        s = y[i] + h * combination;
       }
       stage[i] = active_type(s);
     }
