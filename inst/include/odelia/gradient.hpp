@@ -11,6 +11,26 @@
 namespace odelia {
 namespace ode {
 
+// Forward-mode derivative of a one-input scalar function at a point. `f` is
+// instantiated at the active scalar inside, so only doubles cross in and out.
+//
+// `f` must declare its return type. XAD's operators return expression templates
+// holding references to their operands, so a deduced return type hands back
+// references to temporaries that die on return, and reading the derivative then
+// picks up reused stack memory. The static_assert rejects that shape.
+template <typename F>
+double forward_derivative(double x, F&& f) {
+  using active_type = xad::fwd<double>::active_type;
+  static_assert(
+      std::is_same_v<std::invoke_result_t<F&, active_type&>, active_type>,
+      "f must return the active scalar itself, not a deduced expression template");
+
+  active_type x_active = x;
+  xad::derivative(x_active) = 1.0;
+  active_type y = f(x_active);
+  return xad::derivative(y);
+}
+
 // The inputs a gradient is taken with respect to: which parameters and which
 // initial-state entries to seed active, and their values. `values` is ordered
 // params-then-ics, matching the Jacobian columns.
