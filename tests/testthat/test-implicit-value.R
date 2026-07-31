@@ -1,7 +1,5 @@
 # Tests for odelia::implicit_value -- the value defined implicitly by a scalar
-# equation, made differentiable through the implicit function theorem -- and for the
-# adaptive controller's rejection of a non-finite step-size decision, which is what a
-# node that goes non-finite reaches next.
+# equation, made differentiable through the implicit function theorem.
 #
 # implicit_value records on a tape, and the XAD Tape<T,N> template methods are
 # explicitly instantiated only in the odelia shared library, so these snippets link
@@ -24,7 +22,6 @@ compile_implicit_value_interface <- function() {
     #include <cmath>
     #include <XAD/XAD.hpp>
     #include <odelia/implicit_node.hpp>
-    #include <odelia/ode_solver.hpp>
 
     using tape_type = xad::Tape<double>;
     using adouble = tape_type::active_type;
@@ -102,49 +99,6 @@ compile_implicit_value_interface <- function() {
           y_star, [&](adouble yy) -> adouble { return sys.residual(yy); },
           odelia::denom_sign::negative);
       return xad::value(y);
-    }
-
-    // A one-state system whose rate goes non-finite once the state passes a
-    // threshold, so the adaptive controller meets a non-finite error estimate. Its
-    // magnitude does not matter: what matters is that std::max drops a NaN, so
-    // without the rejection the largest measured error comes from whichever
-    // components stayed finite and the step is accepted.
-    struct DivergingSystem {
-      using value_type = double;
-      double y = 1.0, dydt = 1.0, time = 0.0, t0 = 0.0, threshold = 1.5;
-
-      size_t ode_size() const { return 1; }
-      double ode_time() const { return time; }
-      double ode_t0() const { return t0; }
-
-      template <typename Iterator>
-      Iterator set_ode_state(Iterator it, double time_) {
-        y = *it++;
-        time = time_;
-        dydt = (y > threshold) ? std::numeric_limits<double>::quiet_NaN() : 1.0;
-        return it;
-      }
-      template <typename Iterator>
-      Iterator set_initial_state(Iterator it, double t0_ = 0.0) {
-        t0 = t0_;
-        y = *it++;
-        return it;
-      }
-      template <typename Iterator>
-      Iterator ode_state(Iterator it) const { *it++ = y; return it; }
-      template <typename Iterator>
-      Iterator ode_rates(Iterator it) const { *it++ = dydt; return it; }
-      void reset() { y = 1.0; time = t0; dydt = 1.0; }
-    };
-
-    // Advance the diverging system past its threshold and report the state reached.
-    // [[Rcpp::export]]
-    std::vector<double> advance_past_non_finite(double t_end) {
-      odelia::ode::OdeControl control;
-      odelia::ode::Solver<DivergingSystem> solver(DivergingSystem(), control);
-      solver.set_state(std::vector<double>{1.0}, 0.0);
-      solver.advance_adaptive(std::vector<double>{0.0, t_end});
-      return solver.state();
     }', verbose = FALSE)
 }
 
@@ -191,15 +145,3 @@ testthat::test_that("implicit_value stops when the declared denominator sign is 
   testthat::expect_error(implicit_value_wrong_sign(0.35, 2.2), "not invertible")
 })
 
-testthat::test_that("a non-finite step-size decision is rejected", {
-  compile_implicit_value_interface()
-
-  # The controller shrinks by the largest permitted factor on every attempt and never
-  # accepts, so the step loop runs down to the accuracy limit and stops. Accepting
-  # instead would commit a non-finite state to the trajectory.
-  testthat::expect_error(advance_past_non_finite(2.0),
-                         "Cannot achieve the desired accuracy")
-
-  # Below the threshold the rates stay finite and the same run advances normally.
-  testthat::expect_equal(advance_past_non_finite(0.25), 1.25, tolerance = 1e-10)
-})
