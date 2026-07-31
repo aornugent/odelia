@@ -68,7 +68,7 @@ R  ── holds ──▶  d : Solver<System<double>>          the double solver
                  │
                  ├─ System<double>                    immutable after the adaptive pass
                  ├─ recording                          produced once, read per call:
-                 │    ├─ L1  recorded_steps()          the discovered schedule   (Solver state)
+                 │    ├─ L1  times() / step_sizes()    reached times and step sizes (Solver state)
                  │    ├─ L2  positions_history[step]   adaptive node positions   (System state)
                  │    └─ L3  values_history[step][stage] recorded background values (System state)
                  └─ active_solver : Solver<System<active>>
@@ -111,6 +111,27 @@ Three ownership rules carry the whole design:
 The functional never drives the solver and never carries the schedule. `recorded_steps()`
 is the single source of the replay grid, so it can't go inconsistent, and the "forgot to
 record" guard is one check at the single place the replay happens (`schedule.empty()`).
+
+### What a recording holds, and what a replay may drive from
+
+An adaptive pass records `(t, h, y)` at every accepted step: the time it reached
+(`times()`), the size of the step that reached it (`step_sizes()`), and the state there.
+Both `t` and `h` are recorded because neither determines the other in floating point.
+`fl(fl(t + h) - t) != h` -- the addition rounds away at `ulp(t)` and the subtraction cannot
+recover the discarded low bits of `h`. So a replay that recovers each step by differencing
+recorded times integrates a slightly different trajectory than the one recorded, silently.
+`advance_fixed_steps` exists for the replay that must be faithful to the recorded run: it
+steps by the recorded `h` and reproduces that run bitwise.
+
+The schedule the gradient driver replays is a caller-supplied time grid, and
+`advance_fixed` drives it by times. That is correct for that operation -- the grid *is* the
+specification, and there is no adaptive run for it to be faithful to.
+
+**Two operations sit behind one `set_schedule()` / `run()`.** One is *replay this recorded
+adaptive trajectory*, whose grid is the recorded step sizes; the other is *differentiate a
+solve over this time grid*, whose grid is the caller's times. They are not the same
+schedule and they are not driven the same way, and only the caller knows which it means.
+Two explicit entry points are owed here, one per operation.
 
 ---
 

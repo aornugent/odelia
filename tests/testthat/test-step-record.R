@@ -40,6 +40,13 @@ compile_step_record_interface <- function() {
       return solver;
     }
 
+    // A solver that never took an adaptive pass has no schedule to replay.
+    // [[Rcpp::export]]
+    void unrecorded_run(Rcpp::NumericVector y0, double t0) {
+      ode::Solver<LorenzD> solver = make_solver(y0, t0);
+      solver.run();
+    }
+
     // Adaptive run over [t0, t1], then the same trajectory replayed twice: once
     // over the recorded step sizes, once over the recorded times.
     // [[Rcpp::export]]
@@ -62,6 +69,7 @@ compile_step_record_interface <- function() {
         Rcpp::Named("y_adaptive") = Rcpp::wrap(y_adaptive),
         Rcpp::Named("y_by_steps") = Rcpp::wrap(by_steps.state()),
         Rcpp::Named("y_by_times") = Rcpp::wrap(by_times.state()),
+        Rcpp::Named("has_recording") = solver.has_recording(),
         Rcpp::Named("time_by_steps") = by_steps.time(),
         Rcpp::Named("time_adaptive") = solver.time());
     }
@@ -102,4 +110,15 @@ test_that("a replay over the recorded step sizes reproduces the adaptive run bit
   cat(sprintf("time-driven replay: %d of %d components differ, worst |diff|=%.6g\n",
               differing, length(res$y_adaptive), worst))
   expect_gt(differing, 0)
+})
+
+test_that("a replay-driven solver reports having a recording", {
+  compile_step_record_interface()
+  res <- step_record_replays(c(1, 1, 1), 100, 101)
+  expect_true(res$has_recording)
+})
+
+test_that("the replay guard fires when nothing was recorded", {
+  compile_step_record_interface()
+  expect_error(unrecorded_run(c(1, 1, 1), 100), "no recorded schedule")
 })
