@@ -117,8 +117,23 @@ record" guard is one check at the single place the replay happens (`schedule.emp
 ## The System contract
 
 A System is an ODE right-hand side plus the state it integrates. To simulate, it provides
-the ODE interface (`ode_size`, `set_ode_state`, `ode_rates`, `ode_state`). To be
-**differentiable**, it adds:
+the ODE interface (`ode_size`, `set_ode_state`, `ode_rates`, `ode_state`).
+
+A System built from a **range of elements** hands that range to the helpers in
+`ode_interface.hpp`, which walk it and thread one iterator through. Those helpers require
+`OdeElement`: an element names its own `value_type` and moves its state through an iterator
+over that type, not over `double`. The requirement is on the iterator rather than on the
+members, because a missing member reports itself while a wrong iterator type reports a page
+of instantiation errors far from the cause.
+
+The aux family is five, not four: `aux_size`, `ode_aux` and `set_ode_aux` alongside
+`ode_size`, `ode_state`, `ode_rates` and `set_ode_state`. `set_ode_aux` is an ordinary
+member rather than an opt-in, so the solver can assert of it what it asserts of the others —
+that the iterator advanced by `aux_size()`. It exists so a System can hand back a quantity
+that is expensive to recompute and cheap to carry, per step or per stage, with a width the
+solver checks. A System that publishes nothing to aux pays nothing.
+
+To be **differentiable**, a System adds:
 
 ```cpp
 using value_type = S;                                  // the scalar it carries
