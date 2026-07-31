@@ -7,7 +7,9 @@
 #include <odelia/ode_step.hpp>
 #include <odelia/ode_step_rodas.hpp>
 
+#include <cmath>
 #include <limits>
+#include <utility>
 #include <vector>
 #include <cstddef>
 
@@ -32,14 +34,18 @@ public:
 
   state_type get_state() const {return y;}
   double get_time() const {return time;}
-  std::vector<double> get_times() const {return prev_times;}
+  std::vector<double> get_times() const;
+  std::vector<double> get_step_sizes() const;
 
   void advance_adaptive(System &system, double time_max_);
   void advance_fixed(System& system, const std::vector<double>& times);
+  void advance_fixed_steps(System& system,
+                           const std::vector<double>& step_sizes);
   void advance_euler(System& system, const std::vector<double>& times);
 
   void step(System& system);
   void step_to(System& system, double time_max_);
+  void step_by(System& system, double step_size);
   void step_euler(System& system, double time_max_);
 
   void set_time_max(double time_max_);
@@ -94,7 +100,12 @@ private:
 
   double time;     // Current time
   double time_max; // Time we will not go past
-  std::vector<double> prev_times; // Vector of previous times.
+  // Each accepted step: the time it reached and the size it took. The size is
+  // recorded rather than recovered from successive times because
+  // fl(fl(t + h) - t) != h -- the addition rounds away bits of h that the
+  // subtraction cannot return, so a replay that differences the times takes
+  // different steps from the run it replays.
+  std::vector<std::pair<double, double> > prev_steps;
 
   state_type y;        // Vector of current system state
   state_type yerr;     // Vector of error estimates
@@ -116,7 +127,7 @@ SolverInternal<System>::SolverInternal(const System &system, OdeControl control_
 // NOTE: This resets *everything* to basically a recreated object.
 template <class System>
 void SolverInternal<System>::reset(const System& system) {
-  prev_times.clear();
+  prev_steps.clear();
   step_size_last = control.step_size_initial;
   time_max = std::numeric_limits<double>::infinity();
   set_state_from_system(system);
@@ -152,6 +163,28 @@ void SolverInternal<System>::set_state_from_system(const System& system) {
 }
 
 template <class System>
+std::vector<double> SolverInternal<System>::get_times() const {
+  std::vector<double> ret;
+  ret.reserve(prev_steps.size());
+  for (const std::pair<double, double>& s : prev_steps) {
+    ret.push_back(s.first);
+  }
+  return ret;
+}
+
+// The size of the step that reached each recorded time; NaN for the initial
+// time, which no step reached.
+template <class System>
+std::vector<double> SolverInternal<System>::get_step_sizes() const {
+  std::vector<double> ret;
+  ret.reserve(prev_steps.size());
+  for (const std::pair<double, double>& s : prev_steps) {
+    ret.push_back(s.second);
+  }
+  return ret;
+}
+
+template <class System>
 void SolverInternal<System>::advance_adaptive(System &system, double time_max_)
 {
   set_time_max(time_max_);
@@ -182,6 +215,25 @@ void SolverInternal<System>::advance_fixed(System& system,
   }
   while (t != times.end()) {
     step_to(system, *t++);
+  }
+}
+
+// Step over a recorded run's step sizes {NaN, h_1, h_2, ...}, one step each, in
+// place of differencing its times. The leading NaN is the recorded start, which
+// no step reached; requiring it here is what checks that the caller handed over a
+// whole recording rather than a sequence offset by one step.
+template <class System>
+void SolverInternal<System>::advance_fixed_steps(System& system,
+                                   const std::vector<double>& step_sizes) {
+  if (step_sizes.empty()) {
+    util::stop("'step_sizes' must be vector of at least length 1");
+  }
+  std::vector<double>::const_iterator h = step_sizes.begin();
+  if (!std::isnan(*h++)) {
+    util::stop("First element in 'step_sizes' must be NaN, the recorded start");
+  }
+  while (h != step_sizes.end()) {
+    step_by(system, *h++);
   }
 }
 
@@ -224,7 +276,7 @@ void SolverInternal<System>::step_euler(System& system, double time_max_) {
   time = time_max;
   // Settle the system onto the new state at the new time.
   ode::internal::set_ode_state(system, y, time);
-  prev_times.push_back(time);
+  prev_steps.push_back(std::make_pair(time, h));
   dydt_in_is_clean = false;
 }
 
@@ -307,7 +359,7 @@ void SolverInternal<System>::step(System& system) {
 	      time += step_size;
 	      step_size_last = step_size_next;
       }
-      prev_times.push_back(time);
+      prev_steps.push_back(std::make_pair(time, step_size));
       save_dydt_out_as_in();
       record_ode_step(system);
       return; // This exits the infinite loop.
@@ -320,14 +372,36 @@ void SolverInternal<System>::step(System& system) {
 template <class System>
 void SolverInternal<System>::step_to(System& system, double time_max_) {
   set_time_max(time_max_);
+  const double step_size = time_max - time;
   replay_step(system); // restore this step's recorded state on a replay pass
   setup_dydt_in(system);
-  stepper_step(system, time, time_max - time, y, yerr, dydt_in, dydt_out);
+  stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
   save_dydt_out_as_in();
   record_ode_step(system);
 
   time = time_max;
-  prev_times.push_back(time);
+  prev_steps.push_back(std::make_pair(time, step_size));
+}
+
+// This takes a step of the given size, regardless of what the integration error
+// says.  This is used by advance_fixed_steps.
+template <class System>
+void SolverInternal<System>::step_by(System& system, double step_size) {
+  if (!util::is_finite(step_size)) {
+    util::stop("step_size must be finite!");
+  }
+  if (step_size < 0.0) {
+    util::stop("step_size must be greater than (or equal to) zero");
+  }
+  replay_step(system); // restore this step's recorded state on a replay pass
+  setup_dydt_in(system);
+  stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
+  save_dydt_out_as_in();
+  record_ode_step(system);
+
+  time += step_size;
+  time_max = time;
+  prev_steps.push_back(std::make_pair(time, step_size));
 }
 
 template <class System>
@@ -364,16 +438,18 @@ void SolverInternal<System>::save_dydt_out_as_in() {
 template <typename System>
 void SolverInternal<System>::set_time(double t) {
   const int ulp = 2; // units in the last place (accuracy)
-  if (prev_times.size() > 0 &&
-      !util::almost_equal(prev_times.back(), t, ulp))
+  if (prev_steps.size() > 0 &&
+      !util::almost_equal(prev_steps.back().first, t, ulp))
   {
     util::stop("Time does not match previous (delta = " +
-               util::to_string(prev_times.back() - t) +
+               util::to_string(prev_steps.back().first - t) +
                "). Reset solver first.");
   }
   time = t;
-  if (prev_times.empty()) { // only if first time (avoids duplicate times)
-    prev_times.push_back(time);
+  if (prev_steps.empty()) { // only if first time (avoids duplicate times)
+    // No step reached the initial time, so it records no size.
+    prev_steps.push_back(
+      std::make_pair(time, std::numeric_limits<double>::quiet_NaN()));
   }
 }
 
