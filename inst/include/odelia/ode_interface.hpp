@@ -15,10 +15,6 @@ namespace ode {
 template<typename System>
 using state_type = std::vector<typename System::value_type>;
 
-// Legacy typedefs for R interface (always double)
-typedef std::vector<double>::const_iterator const_iterator;
-typedef std::vector<double>::iterator       iterator;
-
 // By default, we assume that systems are time homogeneous
 template <typename T>
 class needs_time {
