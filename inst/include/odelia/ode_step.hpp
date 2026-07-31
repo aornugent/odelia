@@ -4,7 +4,9 @@
 
 #include <vector>
 #include <cstddef>
+#include <XAD/XAD.hpp>
 #include <odelia/ode_interface.hpp>
+#include <odelia/ode_jacobian.hpp>
 
 namespace odelia {
 namespace ode {
@@ -24,7 +26,13 @@ public:
 	    state_type &yerr,
 	    const state_type &dydt_in,
 	    state_type &dydt_out);
-      
+
+  void step_adjoint(System& system,
+                    double time, double step_size,
+                    const state_type &y,
+                    const state_type &lambda_out,
+                    state_type &lambda_in);
+
   void derivs(System& system, const state_type& y, state_type& dydt, double t, int index) {
     return ode::derivs(system, y, dydt, t, index);
   }
@@ -151,6 +159,99 @@ void Step<System>::step(System& system,
   for (size_t i = 0; i < size; ++i) {
     yerr[i] = h * (ec[1] * k1[i] + ec[3] * k3[i] + ec[4] * k4[i] +
 		   ec[5] * k5[i] + ec[6] * k6[i]);
+  }
+}
+
+// lambda_in = (d y_end / d y)^T lambda_out for the one step step() takes from y. The
+// step's own stage rates go back into k1..k6, since the stage states are y plus the
+// RKCK combination of those rates and the caller keeps only y.
+//
+// Each stage contributes J_f(stage state)^T times that stage's rate adjoint. Those
+// vector-Jacobian products are recorded on a tape of this function's own, on the System
+// lifted to the adjoint scalar, so the caller's reverse pass stays in value_type.
+template <class System>
+void Step<System>::step_adjoint(System& system,
+                                double time, double step_size,
+                                const state_type &y,
+                                const state_type &lambda_out,
+                                state_type &lambda_in) {
+  static_assert(has_rebind_from<System>::value,
+                "step_adjoint needs the System's rebind_from() hook to lift it to the "
+                "adjoint scalar");
+  using ad = xad::adj<value_type>;
+  using active_type = typename ad::active_type;
+
+  const double h = step_size;
+
+  // Retake the step to refill k1..k6; step() overwrites the state it is given, so the
+  // start state is read from y throughout below.
+  state_type dydt_in(size), dydt_out(size), yerr(size), y_end(y);
+  ode::derivs(system, y, dydt_in, time);
+  step(system, time, h, y_end, yerr, dydt_in, dydt_out);
+
+  const state_type* const k[] = {&k1, &k2, &k3, &k4, &k5, &k6};
+  const double* const b[] = {&b21, b3, b4, b5, b6};  // stage j reads row b[j - 2]
+
+  // The direct term of y_end = y + h * (c1 k1 + c3 k3 + c4 k4 + c6 k6), then the rate
+  // adjoints it seeds. k2 and k5 enter y_end only through later stages.
+  lambda_in.assign(lambda_out.begin(), lambda_out.end());
+  std::vector<state_type> lambda_k(6, state_type(size, value_type(0.0)));
+  for (size_t i = 0; i < size; ++i) {
+    lambda_k[0][i] = h * c1 * lambda_out[i];
+    lambda_k[2][i] = h * c3 * lambda_out[i];
+    lambda_k[3][i] = h * c4 * lambda_out[i];
+    lambda_k[5][i] = h * c6 * lambda_out[i];
+  }
+
+  auto twin = system.template rebind_from<active_type>();
+  typename ad::tape_type tape;  // Activates here; deactivates when it goes out of scope.
+  state_type lambda_stage(size);
+
+  // Descending, so a stage's rate adjoint is complete before it is swept: stage j reads
+  // only the rates of stages before it.
+  for (int j = 6; j >= 1; --j) {
+    // Fresh values each stage: an input carrying a slot from the previous recording
+    // registers as a variable with no dependencies, and its adjoint sweeps to zero.
+    std::vector<active_type> stage(size), rates(size);
+    for (size_t i = 0; i < size; ++i) {
+      // step()'s own arithmetic, so the stage state is bit-identical to the one it
+      // stepped through: the rate combination summed in ascending m, then one h.
+      value_type s = y[i];
+      if (j == 2) {
+        s = y[i] + b21 * h * k1[i];
+      } else if (j > 2) {
+        value_type combination = b[j - 2][0] * k1[i];
+        for (int m = 2; m < j; ++m) {
+          combination += b[j - 2][m - 1] * (*k[m - 1])[i];
+        }
+        s = y[i] + h * combination;
+      }
+      stage[i] = active_type(s);
+    }
+    tape.registerInputs(stage);
+    tape.newRecording();
+
+    if (j == 1) {
+      ode::derivs(twin, stage, rates, time);
+    } else {
+      ode::derivs(twin, stage, rates, time + ah[j - 2] * h, j - 2);
+    }
+    tape.registerOutputs(rates);
+    for (size_t i = 0; i < size; ++i) {
+      xad::derivative(rates[i]) = lambda_k[j - 1][i];
+    }
+    tape.computeAdjoints();
+    for (size_t i = 0; i < size; ++i) {
+      lambda_stage[i] = xad::derivative(stage[i]);
+    }
+
+    // The stage state is y plus the earlier rates, so its adjoint splits over both.
+    for (size_t i = 0; i < size; ++i) {
+      lambda_in[i] += lambda_stage[i];
+      for (int m = 1; m < j; ++m) {
+        lambda_k[m - 1][i] += h * b[j - 2][m - 1] * lambda_stage[i];
+      }
+    }
   }
 }
 
