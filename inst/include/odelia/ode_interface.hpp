@@ -5,6 +5,8 @@
 #include <odelia/ode_util.hpp>
 
 #include <concepts>
+#include <iterator>
+#include <vector>
 
 namespace odelia {
 namespace ode {
@@ -47,6 +49,20 @@ concept Replayable = requires(System s, int stage) {
   { s.has_recorded_field() } -> std::convertible_to<bool>;  // are field values recorded?
 };
 
+// An element the range helpers below walk a container of. Pinning the iterator to the
+// element's own value_type is the whole requirement: a missing member already reports
+// itself, while a wrong iterator type is what produces a page of instantiation errors.
+template <typename E>
+concept OdeElement = requires(E e,
+    typename std::vector<typename E::value_type>::iterator it,
+    typename std::vector<typename E::value_type>::const_iterator cit) {
+  typename E::value_type;
+  { e.ode_state(it) }      -> std::same_as<decltype(it)>;
+  { e.ode_rates(it) }      -> std::same_as<decltype(it)>;
+  { e.ode_aux(it) }        -> std::same_as<decltype(it)>;
+  { e.set_ode_state(cit) } -> std::same_as<decltype(cit)>;
+};
+
 // The recursive interface
 template <typename ForwardIterator>
 size_t ode_size(ForwardIterator first, ForwardIterator last) {
@@ -68,9 +84,9 @@ size_t aux_size(ForwardIterator first, ForwardIterator last) {
   return ret;
 }
 
-template <typename ForwardIterator>
-const_iterator set_ode_state(ForwardIterator first, ForwardIterator last,
-                             const_iterator it) {
+template <typename ForwardIterator, typename It>
+  requires OdeElement<std::iter_value_t<ForwardIterator>>
+It set_ode_state(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->set_ode_state(it);
     ++first;
@@ -78,9 +94,9 @@ const_iterator set_ode_state(ForwardIterator first, ForwardIterator last,
   return it;
 }
 
-template <typename ForwardIterator>
-iterator ode_state(ForwardIterator first, ForwardIterator last,
-                   iterator it) {
+template <typename ForwardIterator, typename It>
+  requires OdeElement<std::iter_value_t<ForwardIterator>>
+It ode_state(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_state(it);
     ++first;
@@ -88,9 +104,9 @@ iterator ode_state(ForwardIterator first, ForwardIterator last,
   return it;
 }
 
-template <typename ForwardIterator>
-iterator ode_rates(ForwardIterator first, ForwardIterator last,
-                   iterator it) {
+template <typename ForwardIterator, typename It>
+  requires OdeElement<std::iter_value_t<ForwardIterator>>
+It ode_rates(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_rates(it);
     ++first;
@@ -98,11 +114,21 @@ iterator ode_rates(ForwardIterator first, ForwardIterator last,
   return it;
 }
 
-template <typename ForwardIterator>
-iterator ode_aux(ForwardIterator first, ForwardIterator last,
-                   iterator it) {
+template <typename ForwardIterator, typename It>
+  requires OdeElement<std::iter_value_t<ForwardIterator>>
+It ode_aux(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_aux(it);
+    ++first;
+  }
+  return it;
+}
+
+template <typename ForwardIterator, typename It>
+  requires OdeElement<std::iter_value_t<ForwardIterator>>
+It set_ode_aux(ForwardIterator first, ForwardIterator last, It it) {
+  while (first != last) {
+    it = first->set_ode_aux(it);
     ++first;
   }
   return it;
