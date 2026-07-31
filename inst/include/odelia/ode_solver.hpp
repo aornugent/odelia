@@ -4,6 +4,7 @@
 #include <odelia/ode_solver_internal.hpp>
 #include <XAD/XAD.hpp>
 #include <XAD/Tape.hpp>
+#include <cmath>
 #include <memory>
 #include <type_traits>
 
@@ -83,6 +84,10 @@ public:
   ode::state_type<System> state() const { return solver.get_state(); }
   std::vector<double> times() const { return solver.get_times(); }
 
+  // The size of the step that reached each time in times(); NaN for the first,
+  // which no step reached.
+  std::vector<double> step_sizes() const { return solver.get_step_sizes(); }
+
   System get_system() const { return system; }
   System& get_system_ref() { return system; }
 
@@ -154,6 +159,35 @@ public:
     while (t != times.end())
     {
       solver.step_to(system, *t++);
+      if (collect)
+      {
+        history.push_back(system);
+      }
+    }
+  }
+
+  // Take a series of steps of the recorded sizes {NaN, h_1, h_2, ...}, in place of
+  // differencing recorded times (cf. advance_fixed).
+  void advance_fixed_steps(std::vector<double> step_sizes)
+  {
+    if (step_sizes.empty())
+    {
+      util::stop("'step_sizes' must be vector of at least length 1");
+    }
+    std::vector<double>::const_iterator h = step_sizes.begin();
+    if (!std::isnan(*h++))
+    {
+      util::stop("First element in 'step_sizes' must be NaN, the recorded start");
+    }
+
+    if (collect)
+    {
+      history.push_back(system);
+    }
+
+    while (h != step_sizes.end())
+    {
+      solver.step_by(system, *h++);
       if (collect)
       {
         history.push_back(system);
