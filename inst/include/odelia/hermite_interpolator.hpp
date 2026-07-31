@@ -15,15 +15,10 @@ namespace interpolator {
 // A C1 piecewise-cubic interpolant built from a value AND a slope at each knot.
 //
 // The value and the slope come from one polynomial, so a caller that needs both
-// gets a consistent pair: slope(u) is the exact derivative of what eval(u)
-// returns. An interpolant fitted to values alone offers no such guarantee -- its
-// analytic tangent is whatever the fit happened to produce, and where the target
-// has a curvature break between knots that tangent is wrong by an amount the value
-// error does not reveal.
+// gets a consistent pair: slope(u) is the exact derivative of what eval(u) returns.
 //
-// Each span reads only its own two knots, so a query reaches back to two knots
-// rather than to the whole knot set as a C2 band solve does, and moving one knot
-// changes the interpolant only in the two spans that touch it.
+// Each span reads only its own two knots, so moving one knot changes the
+// interpolant only in the two spans that touch it.
 //
 // Knot positions are double; values and slopes carry the working scalar S. The two
 // halves of a build are separate: set_nodes lays out the spans from the positions,
@@ -122,16 +117,15 @@ public:
   template <typename U>
   S operator()(const U& u) const { return eval(u); }
 
-  // dy/du at u -- the exact derivative of the polynomial eval() uses. (odelia's
-  // value-fitted interpolator spells the same operation `deriv`.)
+  // dy/du at u -- the exact derivative of the polynomial eval() uses.
   template <typename U>
   S slope(const U& u) const {
     check_initialised();
     return slope_at(util::to_passive(u));
   }
 
-  // Both from one knot lookup and one span load. A crown integral wants the pair at
-  // every quadrature point, so this halves that work.
+  // Both from one knot lookup and one span load, so a caller wanting the pair at
+  // many positions pays one lookup each rather than two.
   template <typename U>
   void value_and_slope(const U& u, S& value, S& dydu) const {
     check_initialised();

@@ -45,9 +45,8 @@ concept Replayable = requires(System s, int stage) {
   { s.has_recorded_field() } -> std::convertible_to<bool>;  // are field values recorded?
 };
 
-// An element the range helpers below walk a container of. Pinning the iterator to the
-// element's own value_type is the whole requirement: a missing member already reports
-// itself, while a wrong iterator type is what produces a page of instantiation errors.
+// An element the range helpers below walk a container of, with its state moving
+// through an iterator over the element's own value_type.
 template <typename E>
 concept OdeElement = requires(E e,
     typename std::vector<typename E::value_type>::iterator it,

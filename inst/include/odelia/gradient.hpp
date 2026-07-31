@@ -145,8 +145,7 @@ std::pair<double, std::vector<double>> compute_gradient(
 
 // One block of `f`, recorded and swept once: `input_adjoints` receives
 // transpose(jacobian) * output_adjoints, and the return value is the recording's size.
-// `f` is instantiated at the active scalar here and called as f(x_active, y_active), so
-// only doubles cross in and out.
+// `f` is instantiated at the active scalar here, so only doubles cross in and out.
 //
 // Stops if a tape is already active: this block would otherwise be recorded onto the
 // caller's tape as well, and its adjoints would be swept twice.
