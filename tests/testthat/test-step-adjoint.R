@@ -1,0 +1,90 @@
+# Tests for Step::step_adjoint against a finite difference of the same step. The
+# adjoint records a tape, so the snippet must link against the odelia shared library
+# for the XAD Tape symbols (as the leaf/supplied-derivative interfaces do).
+
+compile_step_adjoint_interface <- function() {
+  ensure_ode_interface_loaded()
+
+  include_dir <- dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  odelia_so <- .odelia_test_cache$odelia_so
+  pkg_libs <- if (is.character(odelia_so) &&
+                  length(odelia_so) == 1 &&
+                  !is.na(odelia_so) &&
+                  nzchar(odelia_so) &&
+                  file.exists(odelia_so)) {
+    shQuote(normalizePath(odelia_so, winslash = "/", mustWork = FALSE))
+  } else {
+    Sys.getenv("PKG_LIBS", unset = "")
+  }
+  withr::local_envvar(
+    PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)),
+    PKG_LIBS = pkg_libs
+  )
+  Rcpp::sourceCpp(code = '
+    #include <Rcpp.h>
+    #include <vector>
+    #include <odelia/ode_step.hpp>
+    #include <examples/lorenz_system.hpp>
+
+    // One RKCK step of the Lorenz system from y, plus the adjoint of that step.
+    // [[Rcpp::export]]
+    Rcpp::List lorenz_step_and_adjoint(std::vector<double> pars, double time,
+                                       double step_size, std::vector<double> y,
+                                       std::vector<double> lambda_out) {
+      LorenzSystem<double> system(pars[0], pars[1], pars[2]);
+      odelia::ode::Step<LorenzSystem<double>> stepper;
+      stepper.resize(y.size());
+
+      std::vector<double> dydt_in(y.size()), dydt_out(y.size()), yerr(y.size());
+      std::vector<double> y_end(y);
+      odelia::ode::derivs(system, y, dydt_in, time);
+      stepper.step(system, time, step_size, y_end, yerr, dydt_in, dydt_out);
+
+      std::vector<double> lambda_in;
+      stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in);
+
+      return Rcpp::List::create(Rcpp::_["y_end"] = y_end,
+                                Rcpp::_["lambda_in"] = lambda_in);
+    }', verbose = FALSE)
+}
+
+testthat::test_that("step_adjoint reproduces a finite difference of one Lorenz step", {
+  compile_step_adjoint_interface()
+
+  pars <- c(10.0, 28.0, 8.0 / 3.0)
+  time <- 0.0
+  step_size <- 0.01
+  y <- c(1.5, -0.7, 20.0)
+  # Non-trivial and non-symmetric, so a dropped transpose would show up.
+  lambda_out <- c(0.3, -1.7, 2.1)
+  eps <- 1e-6
+
+  step_end <- function(y) {
+    lorenz_step_and_adjoint(pars, time, step_size, y, lambda_out)$y_end
+  }
+
+  # J[i, j] = d y_end[i] / d y[j], by central difference of the same step.
+  jacobian <- sapply(seq_along(y), function(j) {
+    up <- y; up[j] <- up[j] + eps
+    down <- y; down[j] <- down[j] - eps
+    (step_end(up) - step_end(down)) / (2 * eps)
+  })
+
+  expected <- as.vector(t(jacobian) %*% lambda_out)
+  got <- lorenz_step_and_adjoint(pars, time, step_size, y, lambda_out)$lambda_in
+
+  expect_equal(length(got), length(y))
+  expect_equal(got, expected, tolerance = 1e-7)
+  # The transpose is load-bearing: J is not symmetric here.
+  expect_false(isTRUE(all.equal(expected, as.vector(jacobian %*% lambda_out),
+                                tolerance = 1e-3)))
+})
+
+testthat::test_that("step_adjoint of a zero end adjoint is zero", {
+  compile_step_adjoint_interface()
+
+  r <- lorenz_step_and_adjoint(c(10.0, 28.0, 8.0 / 3.0), 0.0, 0.01,
+                              c(1.5, -0.7, 20.0), c(0.0, 0.0, 0.0))
+  expect_equal(r$lambda_in, c(0.0, 0.0, 0.0))
+})
