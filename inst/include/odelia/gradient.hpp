@@ -123,6 +123,60 @@ std::pair<double, std::vector<double>> compute_gradient(
     return {values[0], jacobian[0]};
 }
 
+// One block of `f`, recorded and swept once: `input_adjoints` receives
+// transpose(jacobian) * output_adjoints, and the return value is the recording's size.
+// `f` is instantiated at the active scalar here and called as f(x_active, y_active), so
+// only doubles cross in and out.
+//
+// Stops if a tape is already active: this block would otherwise be recorded onto the
+// caller's tape as well, and its adjoints would be swept twice.
+template <class F>
+std::size_t vector_jacobian_product(const std::vector<double>& x,
+                                    const std::vector<double>& output_adjoints, F&& f,
+                                    std::vector<double>& input_adjoints) {
+    using ad = xad::adj<double>;
+    using ad_type = ad::active_type;
+
+    if (ad::tape_type::getActive() != nullptr) {
+        util::stop("vector_jacobian_product: a tape is already active");
+    }
+    if (x.empty()) {
+        util::stop("vector_jacobian_product: 'x' must have at least one entry");
+    }
+    if (output_adjoints.empty()) {
+        util::stop("vector_jacobian_product: 'output_adjoints' must have at least one entry");
+    }
+
+    ad::tape_type tape;
+    tape_guard<ad::tape_type> guard{&tape};
+
+    std::vector<ad_type> x_active(x.begin(), x.end());
+    tape.registerInputs(x_active);
+    tape.newRecording();
+
+    std::vector<ad_type> y_active(output_adjoints.size());
+    f(x_active, y_active);
+    if (y_active.size() != output_adjoints.size()) {
+        util::stop("vector_jacobian_product: 'f' wrote a different number of outputs "
+                   "than 'output_adjoints' has entries");
+    }
+    tape.registerOutputs(y_active);
+
+    for (std::size_t i = 0; i < y_active.size(); ++i) {
+        xad::derivative(y_active[i]) = output_adjoints[i];
+    }
+    tape.computeAdjoints();
+
+    // The caller owns the buffer and reuses it across calls, so this resize is a no-op
+    // after the first call and the product never allocates its own result.
+    input_adjoints.resize(x.size());
+    for (std::size_t i = 0; i < x_active.size(); ++i) {
+        input_adjoints[i] = xad::derivative(x_active[i]);
+    }
+
+    return tape.getMemory();
+}
+
 // Sum of squared residuals between predicted and measured observations.
 template<typename T>
 T sum_of_squares(const std::vector<std::vector<T>>& predicted,
