@@ -253,6 +253,11 @@ void Step<System>::step_adjoint(System& system,
       }
     }
   }
+
+  // Retaking the step walked the System through the stage states and left it at the
+  // last of them, so put it back where the step started. A caller sweeping steps
+  // backwards reads the System between calls.
+  ode::internal::set_ode_state(system, y, time);
 }
 
 // RKCK coefficients, from GSL

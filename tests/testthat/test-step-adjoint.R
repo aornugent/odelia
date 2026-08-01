@@ -78,7 +78,8 @@ compile_step_adjoint_interface <- function() {
       for (int j = 0; j < 6; ++j) forward[j] = stage_log[j];
 
       // Those same seven again, from the step step_adjoint retakes, then one rebuilt
-      // stage state per stage, descending from stage six.
+      // stage state per stage descending from stage six, then the start state it
+      // puts the system back to.
       stage_log.clear();
       std::vector<double> lambda_in;
       stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in);
@@ -87,6 +88,7 @@ compile_step_adjoint_interface <- function() {
 
       return Rcpp::List::create(Rcpp::_["forward"] = forward,
                                 Rcpp::_["rebuilt"] = rebuilt,
+                                Rcpp::_["last"] = stage_log.back(),
                                 Rcpp::_["n_logged"] = (int) stage_log.size());
     }
 
@@ -150,13 +152,17 @@ testthat::test_that("step_adjoint rebuilds each stage state bit-identically", {
   r <- lorenz_stage_states(c(10.0, 28.0, 8.0 / 3.0), 0.0, 0.01,
                            c(1.5, -0.7, 20.0), c(0.3, -1.7, 2.1))
 
-  # Seven states from the retaken step, then one per stage: pins the call order the
-  # rebuilds are read back at.
-  expect_identical(r$n_logged, 13L)
+  # Seven states from the retaken step, then one per stage, then the restore: pins
+  # the call order the rebuilds are read back at.
+  expect_identical(r$n_logged, 14L)
   for (j in seq_len(6)) {
     expect_identical(r$rebuilt[[j]], r$forward[[j]],
                      info = paste("stage", j))
   }
+
+  # Retaking the step walks the system to the last stage state, so step_adjoint puts
+  # it back where the step began. A caller sweeping steps backwards reads it there.
+  expect_identical(r$last, c(1.5, -0.7, 20.0))
 })
 
 testthat::test_that("step_adjoint of a zero end adjoint is zero", {
