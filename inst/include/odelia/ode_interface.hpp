@@ -2,6 +2,7 @@
 #ifndef ODELIA_ODE_INTERFACE_HPP_
 #define ODELIA_ODE_INTERFACE_HPP_
 
+#include <odelia/boundary.hpp>
 #include <odelia/ode_util.hpp>
 
 #include <concepts>
@@ -45,90 +46,42 @@ concept Replayable = requires(System s, int stage) {
   { s.has_recorded_field() } -> std::convertible_to<bool>;  // are field values recorded?
 };
 
-// The recursive interface. Each helper walks a container of elements, threading
-// one iterator through them, and is constrained on the one member it calls with
-// the iterator it was handed. Constraining the call rather than the element is
-// what puts the diagnostic here: an element whose state moves through some other
-// scalar's iterator -- a double-typed element reached with an active one -- fails
-// the constraint at the call rather than a page of errors inside the loop.
+// The recursive interface. Each helper walks a container of elements and is one
+// direction of one run of the ODE boundary; boundary.hpp holds the walk, the
+// constraint on the call and the channel each of these names.
 template <typename ForwardIterator>
 size_t ode_size(ForwardIterator first, ForwardIterator last) {
-  size_t ret = 0;
-  while (first != last) {
-    ret += first->ode_size();
-    ++first;
-  }
-  return ret;
+  return odelia::width<state_channel>(first, last);
 }
 
 template <typename ForwardIterator>
 size_t aux_size(ForwardIterator first, ForwardIterator last) {
-  size_t ret = 0;
-  while (first != last) {
-    ret += first->aux_size();
-    ++first;
-  }
-  return ret;
+  return odelia::width<aux_channel>(first, last);
 }
 
 template <typename ForwardIterator, typename It>
-  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
-    { e.set_ode_state(it) } -> std::same_as<It>;
-  }
 It set_ode_state(ForwardIterator first, ForwardIterator last, It it) {
-  while (first != last) {
-    it = first->set_ode_state(it);
-    ++first;
-  }
-  return it;
+  return odelia::write<state_channel>(first, last, it);
 }
 
 template <typename ForwardIterator, typename It>
-  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
-    { e.ode_state(it) } -> std::same_as<It>;
-  }
 It ode_state(ForwardIterator first, ForwardIterator last, It it) {
-  while (first != last) {
-    it = first->ode_state(it);
-    ++first;
-  }
-  return it;
+  return odelia::read<state_channel>(first, last, it);
 }
 
 template <typename ForwardIterator, typename It>
-  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
-    { e.ode_rates(it) } -> std::same_as<It>;
-  }
 It ode_rates(ForwardIterator first, ForwardIterator last, It it) {
-  while (first != last) {
-    it = first->ode_rates(it);
-    ++first;
-  }
-  return it;
+  return odelia::read<rate_channel>(first, last, it);
 }
 
 template <typename ForwardIterator, typename It>
-  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
-    { e.ode_aux(it) } -> std::same_as<It>;
-  }
 It ode_aux(ForwardIterator first, ForwardIterator last, It it) {
-  while (first != last) {
-    it = first->ode_aux(it);
-    ++first;
-  }
-  return it;
+  return odelia::read<aux_channel>(first, last, it);
 }
 
 template <typename ForwardIterator, typename It>
-  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
-    { e.set_ode_aux(it) } -> std::same_as<It>;
-  }
 It set_ode_aux(ForwardIterator first, ForwardIterator last, It it) {
-  while (first != last) {
-    it = first->set_ode_aux(it);
-    ++first;
-  }
-  return it;
+  return odelia::write<aux_channel>(first, last, it);
 }
 
 template <typename T>
