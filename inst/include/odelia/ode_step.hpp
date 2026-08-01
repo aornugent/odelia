@@ -175,11 +175,11 @@ void Step<System>::step_adjoint(System& system,
                                 const state_type &y,
                                 const state_type &lambda_out,
                                 state_type &lambda_in) {
-  static_assert(has_rebind_from<System>::value,
+  using active_type = active_scalar<value_type>;
+  static_assert(Rebindable<System, active_type>,
                 "step_adjoint needs the System's rebind_from() hook to lift it to the "
                 "adjoint scalar");
   using ad = xad::adj<value_type>;
-  using active_type = typename ad::active_type;
 
   const double h = step_size;
 

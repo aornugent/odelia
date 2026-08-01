@@ -7,6 +7,7 @@
 #include <concepts>
 #include <iterator>
 #include <vector>
+#include <XAD/XAD.hpp>
 
 namespace odelia {
 namespace ode {
@@ -14,6 +15,13 @@ namespace ode {
 // Type alias for state vectors based on System's value_type
 template<typename System>
 using state_type = std::vector<typename System::value_type>;
+
+// The scalar a reverse-mode (adjoint) pass runs on: one adjoint layer above T. This is
+// what a System is lifted to for a gradient, and the type its seeds and recorded values
+// have. T is a parameter so the layer can sit on another active scalar; at the default
+// it sits on double, which is the scalar an ordinary solve is differentiated from.
+template <typename T = double>
+using active_scalar = typename xad::adj<T>::active_type;
 
 // By default, we assume that systems are time homogeneous
 template <typename T>
