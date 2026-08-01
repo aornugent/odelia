@@ -45,20 +45,12 @@ concept Replayable = requires(System s, int stage) {
   { s.has_recorded_field() } -> std::convertible_to<bool>;  // are field values recorded?
 };
 
-// An element the range helpers below walk a container of, with its state moving
-// through an iterator over the element's own value_type.
-template <typename E>
-concept OdeElement = requires(E e,
-    typename std::vector<typename E::value_type>::iterator it,
-    typename std::vector<typename E::value_type>::const_iterator cit) {
-  typename E::value_type;
-  { e.ode_state(it) }      -> std::same_as<decltype(it)>;
-  { e.ode_rates(it) }      -> std::same_as<decltype(it)>;
-  { e.ode_aux(it) }        -> std::same_as<decltype(it)>;
-  { e.set_ode_state(cit) } -> std::same_as<decltype(cit)>;
-};
-
-// The recursive interface
+// The recursive interface. Each helper walks a container of elements, threading
+// one iterator through them, and is constrained on the one member it calls with
+// the iterator it was handed. Constraining the call rather than the element is
+// what puts the diagnostic here: an element whose state moves through some other
+// scalar's iterator -- a double-typed element reached with an active one -- fails
+// the constraint at the call rather than a page of errors inside the loop.
 template <typename ForwardIterator>
 size_t ode_size(ForwardIterator first, ForwardIterator last) {
   size_t ret = 0;
@@ -80,7 +72,9 @@ size_t aux_size(ForwardIterator first, ForwardIterator last) {
 }
 
 template <typename ForwardIterator, typename It>
-  requires OdeElement<std::iter_value_t<ForwardIterator>>
+  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
+    { e.set_ode_state(it) } -> std::same_as<It>;
+  }
 It set_ode_state(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->set_ode_state(it);
@@ -90,7 +84,9 @@ It set_ode_state(ForwardIterator first, ForwardIterator last, It it) {
 }
 
 template <typename ForwardIterator, typename It>
-  requires OdeElement<std::iter_value_t<ForwardIterator>>
+  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
+    { e.ode_state(it) } -> std::same_as<It>;
+  }
 It ode_state(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_state(it);
@@ -100,7 +96,9 @@ It ode_state(ForwardIterator first, ForwardIterator last, It it) {
 }
 
 template <typename ForwardIterator, typename It>
-  requires OdeElement<std::iter_value_t<ForwardIterator>>
+  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
+    { e.ode_rates(it) } -> std::same_as<It>;
+  }
 It ode_rates(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_rates(it);
@@ -110,7 +108,9 @@ It ode_rates(ForwardIterator first, ForwardIterator last, It it) {
 }
 
 template <typename ForwardIterator, typename It>
-  requires OdeElement<std::iter_value_t<ForwardIterator>>
+  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
+    { e.ode_aux(it) } -> std::same_as<It>;
+  }
 It ode_aux(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->ode_aux(it);
@@ -120,7 +120,9 @@ It ode_aux(ForwardIterator first, ForwardIterator last, It it) {
 }
 
 template <typename ForwardIterator, typename It>
-  requires OdeElement<std::iter_value_t<ForwardIterator>>
+  requires requires(std::iter_value_t<ForwardIterator>& e, It it) {
+    { e.set_ode_aux(it) } -> std::same_as<It>;
+  }
 It set_ode_aux(ForwardIterator first, ForwardIterator last, It it) {
   while (first != last) {
     it = first->set_ode_aux(it);
@@ -242,6 +244,12 @@ std::vector<double> r_ode_aux(const T& obj) {
   std::vector<double> dydt(obj.aux_size());
   obj.ode_aux(dydt.begin());
   return dydt;
+}
+
+template <typename T>
+void r_set_ode_aux(T& obj, const std::vector<double>& aux) {
+  util::check_length(aux.size(), obj.aux_size());
+  obj.set_ode_aux(aux.begin());
 }
 
 }
