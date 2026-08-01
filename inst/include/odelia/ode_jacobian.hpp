@@ -21,6 +21,7 @@
 
 #include <vector>
 #include <cstddef>
+#include <concepts>
 #include <type_traits>
 #include <utility>
 #include <XAD/XAD.hpp>
@@ -29,23 +30,22 @@
 namespace odelia {
 namespace ode {
 
-// Detect `template<class U> ... rebind_from()` on a System, probed at the System's
-// own scalar type (every system can at least rebind to itself).
-template <typename S, typename = void>
-struct has_rebind_from : std::false_type {};
-
-template <typename S>
-struct has_rebind_from<
-    S, std::void_t<decltype(std::declval<const S>()
-                                .template rebind_from<typename S::value_type>())>>
-    : std::true_type {};
+// A System that can hand back a copy of itself on scalar U. The rebound type must itself
+// be a System on U: a rebind_from() that returns the wrong scalar fails here rather than
+// on the first arithmetic inside the caller. U defaults to the System's own scalar type,
+// which every rebinding system satisfies.
+template <typename S, typename U = typename S::value_type>
+concept Rebindable = requires(const S& s) {
+  { s.template rebind_from<U>() };
+  requires std::same_as<typename decltype(s.template rebind_from<U>())::value_type, U>;
+};
 
 // The System type rebound to scalar U, i.e. decltype(system.rebind_from<U>()).
 // When the System has no rebind_from() the type is not evaluated (a harmless
 // placeholder is used instead), so that Jacobian<System> can still be
 // *class*-instantiated for systems that will never use the implicit stepper --
 // the actual use is gated on `supported` below.
-template <typename S, typename U, bool = has_rebind_from<S>::value>
+template <typename S, typename U, bool = Rebindable<S>>
 struct rebound_system {
   using type = decltype(std::declval<const S>().template rebind_from<U>());
 };
@@ -71,7 +71,7 @@ public:
   // not yet wired up -- see issue #35). Callers gate on this, so Jacobian can be
   // class-instantiated even for systems that never use the implicit stepper.
   static constexpr bool supported =
-      has_rebind_from<System>::value &&
+      Rebindable<System> &&
       std::is_constructible<tangent_type, value_type>::value;
 
   void resize(size_t size_) {

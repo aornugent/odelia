@@ -172,3 +172,93 @@ testthat::test_that("step_adjoint of a zero end adjoint is zero", {
                               c(1.5, -0.7, 20.0), c(0.0, 0.0, 0.0))
   expect_equal(r$lambda_in, c(0.0, 0.0, 0.0))
 })
+
+# The header include path, for compiles that need no link against the shared library.
+odelia_include_dir <- function() {
+  dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+}
+
+testthat::test_that("the adjoint scalar is named at namespace scope", {
+  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(odelia_include_dir())))
+
+  # Reached through the interface header alone, with no Solver named and none
+  # instantiated: the assertions are on types only.
+  Rcpp::sourceCpp(code = '
+    // [[Rcpp::plugins(cpp20)]]
+    #include <Rcpp.h>
+    #include <type_traits>
+    #include <odelia/ode_interface.hpp>
+
+    static_assert(std::is_same_v<odelia::ode::active_scalar<>,
+                                 xad::adj<double>::active_type>);
+    static_assert(std::is_same_v<odelia::ode::active_scalar<float>,
+                                 xad::adj<float>::active_type>);
+
+    // [[Rcpp::export]]
+    bool active_scalar_named_without_solver() { return true; }
+  ')
+  expect_true(active_scalar_named_without_solver())
+
+  # The Solver member alias and the namespace-scope one are the same type.
+  Rcpp::sourceCpp(code = '
+    // [[Rcpp::plugins(cpp20)]]
+    #include <Rcpp.h>
+    #include <type_traits>
+    #include <odelia/ode_solver.hpp>
+    #include <examples/lorenz_system.hpp>
+
+    static_assert(std::is_same_v<
+                  odelia::ode::Solver<LorenzSystem<double>>::active_scalar,
+                  odelia::ode::active_scalar<>>);
+
+    // [[Rcpp::export]]
+    bool active_scalar_matches_solver() { return true; }
+  ')
+  expect_true(active_scalar_matches_solver())
+})
+
+# Compile step_adjoint on a minimal System, with `rebind_body` as its rebind_from()
+# declaration. Empty gives a System with no hook; one returning Decay gives a hook
+# that hands back the wrong scalar. Both must be refused at the call.
+compile_step_adjoint_on <- function(rebind_body) {
+  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(odelia_include_dir())))
+  Rcpp::sourceCpp(code = sprintf('
+    // [[Rcpp::plugins(cpp20)]]
+    #include <Rcpp.h>
+    #include <vector>
+    #include <odelia/ode_step.hpp>
+
+    struct Decay {
+      using value_type = double;
+      size_t ode_size() const { return 1; }
+      template <typename It> It set_ode_state(It it, double = 0.0) { y = it[0]; return it + 1; }
+      template <typename It> It ode_state(It it) const { it[0] = y; return it + 1; }
+      template <typename It> It ode_rates(It it) const { it[0] = -y; return it + 1; }
+      %s
+      double y = 1.0;
+    };
+
+    // [[Rcpp::export]]
+    std::vector<double> decay_step_adjoint() {
+      Decay system;
+      odelia::ode::Step<Decay> stepper;
+      stepper.resize(1);
+      std::vector<double> y(1, 1.0), lambda_out(1, 1.0), lambda_in(1);
+      stepper.step_adjoint(system, 0.0, 0.1, y, lambda_out, lambda_in);
+      return lambda_in;
+    }
+  ', rebind_body))
+}
+
+testthat::test_that("step_adjoint refuses a System that cannot rebind to the adjoint scalar", {
+  # No rebind_from() at all.
+  expect_error(compile_step_adjoint_on(""))
+
+  # Present, but hands back a System on the wrong scalar.
+  expect_error(compile_step_adjoint_on(
+    "template <class U> Decay rebind_from() const { return *this; }"))
+
+  # A System that does rebind is stepped, and its adjoint is checked against a
+  # finite difference, by the Lorenz tests above.
+})
