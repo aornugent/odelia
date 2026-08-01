@@ -9,12 +9,6 @@
 
 namespace odelia {
 
-// Which way the residual's own derivative points at the operating point:
-// dF/dy > 0 (a rising balance) or dF/dy < 0 (a maximiser, whose gradient falls
-// through zero). `any` skips the check, for the callers whose sign is not in
-// question.
-enum class denom_sign { positive, negative, any };
-
 // The value y* defined implicitly by a scalar equation F(y; p) = 0, made
 // differentiable. y* is solved in double, off the tape, by whatever root-find the
 // caller already has; this returns it on the tape carrying the derivative the
@@ -27,11 +21,10 @@ enum class denom_sign { positive, negative, any };
 // returns y* with nothing recorded. Reverse, forward and nested forward-over-reverse
 // scalars all thread dy*/dp through the graft below.
 //
-// `expect` guards invertibility: at a fold dF/dy -> 0 and this divides by ~0.
-// Declaring the operating point's sign turns that into a stop rather than a silent
-// garbage gradient.
+// dF/dy is what the theorem divides by, so a non-invertible operating point stops
+// here: at a fold it approaches zero and the quotient is garbage rather than large.
 template <class S, class Equation>
-S implicit_value(double y_star, Equation&& F, denom_sign expect = denom_sign::any) {
+S implicit_value(double y_star, Equation&& F) {
   // A lambda written `[&](S y) { return ...; }` deduces an XAD expression-template
   // return type holding references to the temporaries of its return statement;
   // those die when it returns, so evaluating F here would read a destroyed tape
@@ -57,11 +50,13 @@ S implicit_value(double y_star, Equation&& F, denom_sign expect = denom_sign::an
     auto Fd = [&](double y) -> double { return util::to_passive(F(S(y))); };
     const double dFdy = (Fd(y_star + eps) - Fd(y_star - eps)) / (2.0 * eps);
     if (was_recording) tape->activate();
-    if (expect != denom_sign::any) {
-      const bool ok = (expect == denom_sign::positive) ? (dFdy > 0.0) : (dFdy < 0.0);
-      if (!ok)
-        util::stop("implicit_value: dF/dy has the wrong sign -- the operating "
-                   "point is not invertible (near a fold?)");
+    // Zero is the only threshold available here: a smooth F differenced over eps
+    // returns exactly zero only where it has no slope at the probe's own scale, and
+    // how small a nonzero slope is too small depends on F's units, which the caller
+    // has and this does not.
+    if (!util::is_finite(dFdy) || dFdy == 0.0) {
+      util::stop("implicit_value: dF/dy is zero at the operating point, so the "
+                 "implicit function theorem does not apply there (a fold?)");
     }
     // corr's value is ~0, since y* is the root; its derivative is (dF/dp)/(dF/dy).
     // Subtracting its own passive value leaves the returned value exactly y* and

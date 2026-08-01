@@ -71,8 +71,7 @@ compile_implicit_value_interface <- function() {
 
       const double y_star = sys.solve();
       adouble y = odelia::implicit_value<adouble>(
-          y_star, [&](adouble yy) -> adouble { return sys.residual(yy); },
-          odelia::denom_sign::positive);
+          y_star, [&](adouble yy) -> adouble { return sys.residual(yy); });
 
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
@@ -85,19 +84,16 @@ compile_implicit_value_interface <- function() {
           Rcpp::_["d_db"] = xad::derivative(sys.b));
     }
 
-    // The same node with the sign of the operating point declared the wrong way
-    // round, which is what a fold looks like from the caller.
+    // A residual that touches zero rather than crossing it, so dF/dy is zero at
+    // the operating point and the quotient the theorem asks for does not exist.
     // [[Rcpp::export]]
-    double implicit_value_wrong_sign(double a, double b) {
+    double implicit_value_at_fold(double a) {
       tape_type tape;
-      CubicBalance<adouble> sys{adouble(a), adouble(b)};
-      tape.registerInput(sys.a);
-      tape.registerInput(sys.b);
+      adouble aa(a);
+      tape.registerInput(aa);
       tape.newRecording();
-      const double y_star = sys.solve();
       adouble y = odelia::implicit_value<adouble>(
-          y_star, [&](adouble yy) -> adouble { return sys.residual(yy); },
-          odelia::denom_sign::negative);
+          a, [&](adouble yy) -> adouble { return (yy - aa) * (yy - aa); });
       return xad::value(y);
     }', verbose = FALSE)
 }
@@ -137,11 +133,11 @@ testthat::test_that("implicit_value returns the operating point and its IFT deri
   }
 })
 
-testthat::test_that("implicit_value stops when the declared denominator sign is wrong", {
+testthat::test_that("implicit_value stops where the theorem does not apply", {
   compile_implicit_value_interface()
 
-  # a > 0 makes dF/dy = 3*a*y^2 + 1 strictly positive, so declaring it negative is
-  # the fold case: the node must stop rather than return an inverted gradient.
-  testthat::expect_error(implicit_value_wrong_sign(0.35, 2.2), "not invertible")
+  # F(y) = (y - a)^2 is zero at y* = a and so is its slope there, so the node must
+  # stop rather than divide by it and return a gradient nothing supports.
+  testthat::expect_error(implicit_value_at_fold(0.35), "does not apply")
 })
 
