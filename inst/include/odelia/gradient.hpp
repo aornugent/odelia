@@ -6,6 +6,7 @@
 #include <odelia/ode_solver.hpp>
 #include <functional>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace odelia {
@@ -143,20 +144,27 @@ std::pair<double, std::vector<double>> compute_gradient(
     return {values[0], jacobian[0]};
 }
 
-// One block of `f`, recorded and swept once: `input_adjoints` receives
-// transpose(jacobian) * output_adjoints, and the return value is the recording's size.
-// `f` is instantiated at the active scalar here, so only doubles cross in and out.
+// One block of `f`, recorded and swept once on the tape handed in: `input_adjoints`
+// receives transpose(jacobian) * output_adjoints, and the return value is the recording's
+// size. `f` is instantiated at the active scalar here, so only doubles cross in and out.
 //
-// Stops if a tape is already active: this block would otherwise be recorded onto the
-// caller's tape as well, and its adjoints would be swept twice.
+// The tape is the caller's and is reused across calls, so nothing here allocates one; a
+// tape costs about a fifth of this whole product and the product runs millions of times
+// per gradient.
+//
+// Stops if a tape other than this one is active. Recording onto a tape this product does
+// not own would sweep the block's adjoints twice, so "the tape handed in is the only one"
+// is checked rather than assumed.
 template <class F>
-std::size_t vector_jacobian_product(const std::vector<double>& x,
+std::size_t vector_jacobian_product(xad::adj<double>::tape_type& tape,
+                                    const std::vector<double>& x,
                                     const std::vector<double>& output_adjoints, F&& f,
                                     std::vector<double>& input_adjoints) {
     using ad = xad::adj<double>;
     using ad_type = ad::active_type;
 
-    if (ad::tape_type::getActive() != nullptr) {
+    ad::tape_type* active = ad::tape_type::getActive();
+    if (active != nullptr && active != &tape) {
         util::stop("vector_jacobian_product: a tape is already active");
     }
     if (x.empty()) {
@@ -166,9 +174,19 @@ std::size_t vector_jacobian_product(const std::vector<double>& x,
         util::stop("vector_jacobian_product: 'output_adjoints' must have at least one entry");
     }
 
-    ad::tape_type tape;
+    tape.activate();
     tape_guard<ad::tape_type> guard{&tape};
 
+    // clearAll() returns the tape to an empty recording with its derivative-slot counter
+    // back at zero. newRecording() alone leaves that counter where the previous call left
+    // it -- destroying a registered input only releases its slot when the slot is the last
+    // one, which it is not for a vector destroyed front to back -- so the tape's memory and
+    // variable count would climb with every call while the adjoints stayed correct.
+    tape.clearAll();
+
+    // Inputs are registered before newRecording(). Registering after it leaves them outside
+    // the recording, and the sweep then reports every input adjoint as zero with nothing
+    // thrown.
     std::vector<ad_type> x_active(x.begin(), x.end());
     tape.registerInputs(x_active);
     tape.newRecording();
@@ -194,6 +212,17 @@ std::size_t vector_jacobian_product(const std::vector<double>& x,
     }
 
     return tape.getMemory();
+}
+
+// The same product for a caller with no tape to reuse: one call, one tape. Constructed
+// inactive, so a tape already active here belongs to someone else and the overload above
+// stops on it.
+template <class F>
+std::size_t vector_jacobian_product(const std::vector<double>& x,
+                                    const std::vector<double>& output_adjoints, F&& f,
+                                    std::vector<double>& input_adjoints) {
+    xad::adj<double>::tape_type tape(false);
+    return vector_jacobian_product(tape, x, output_adjoints, std::forward<F>(f), input_adjoints);
 }
 
 // Sum of squared residuals between predicted and measured observations.

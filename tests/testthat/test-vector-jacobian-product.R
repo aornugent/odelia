@@ -71,11 +71,45 @@ compile_vjp_interface <- function() {
             [](const auto& xa, auto& ya) { padded_block(xa, ya); }, input_adjoints));
       }
 
+      // Repeated products on one caller-owned tape. Returns the adjoints of every
+      // call laid end to end, then the tape memory after each call: a tape that is
+      // not reset between calls either carries adjoints over from the call before it
+      // or grows its recording, and both show up here.
+      // [[Rcpp::export]]
+      Rcpp::List small_block_vjp_reused_tape(std::vector<double> x,
+                                             std::vector<double> output_adjoints,
+                                             int n_calls) {
+        xad::adj<double>::tape_type tape(false);
+        std::vector<double> input_adjoints, all_adjoints, sizes;
+        for (int k = 0; k < n_calls; ++k) {
+          sizes.push_back(double(odelia::ode::vector_jacobian_product(
+              tape, x, output_adjoints,
+              [](const auto& xa, auto& ya) { small_block(xa, ya); }, input_adjoints)));
+          for (double v : input_adjoints) all_adjoints.push_back(v);
+        }
+        return Rcpp::List::create(Rcpp::Named("adjoints") = Rcpp::wrap(all_adjoints),
+                                  Rcpp::Named("sizes") = Rcpp::wrap(sizes));
+      }
+
       // [[Rcpp::export]]
       Rcpp::NumericVector small_block_vjp_under_active_tape(
           std::vector<double> x, std::vector<double> output_adjoints) {
         xad::adj<double>::tape_type tape;
         return small_block_vjp(x, output_adjoints);
+      }
+
+      // A caller-owned tape handed in while a second tape is the active one. The
+      // product must record onto neither.
+      // [[Rcpp::export]]
+      Rcpp::NumericVector small_block_vjp_owned_tape_under_another(
+          std::vector<double> x, std::vector<double> output_adjoints) {
+        xad::adj<double>::tape_type owned(false);
+        xad::adj<double>::tape_type other;  // constructed active
+        std::vector<double> input_adjoints;
+        odelia::ode::vector_jacobian_product(
+            owned, x, output_adjoints,
+            [](const auto& xa, auto& ya) { small_block(xa, ya); }, input_adjoints);
+        return Rcpp::wrap(input_adjoints);
       }', verbose = FALSE)
     NULL
   }, error = function(e) e)
@@ -124,10 +158,35 @@ testthat::test_that("the recording size is a property of the block", {
   expect_lt(large, 10 * small)
 })
 
+testthat::test_that("a reused tape gives each call the adjoints a single call gives", {
+  compile_vjp_interface()
+
+  x <- c(0.7, -1.3, 0.45, 1.1)
+  w <- c(1.0, -2.0, 0.5)
+  once <- small_block_vjp(x, w)
+
+  n <- 4L
+  reused <- small_block_vjp_reused_tape(x, w, n)
+
+  # Every call on the shared tape sees an empty recording, so it reports the same
+  # adjoints as a call that owned its own tape.
+  expect_equal(reused$adjoints, rep(once, n))
+
+  # And the recording is the same size on every call. Without the reset the tape
+  # keeps the previous calls' derivative slots and this grows without bound.
+  expect_equal(reused$sizes, rep(reused$sizes[1], n))
+})
+
 testthat::test_that("vector_jacobian_product stops when a tape is already active", {
   compile_vjp_interface()
 
   expect_error(small_block_vjp_under_active_tape(c(0.7, -1.3, 0.45, 1.1),
                                                  c(1.0, -2.0, 0.5)),
+               "tape is already active")
+
+  # Handing a tape in does not license recording onto whichever tape happens to be
+  # active: the one handed in must be the active one.
+  expect_error(small_block_vjp_owned_tape_under_another(c(0.7, -1.3, 0.45, 1.1),
+                                                        c(1.0, -2.0, 0.5)),
                "tape is already active")
 })
