@@ -176,8 +176,8 @@ std::size_t vector_jacobian_product(const std::vector<double>& x,
     std::vector<ad_type> y_active(output_adjoints.size());
     f(x_active, y_active);
     if (y_active.size() != output_adjoints.size()) {
-        util::stop("vector_jacobian_product: 'f' wrote a different number of outputs "
-                   "than 'output_adjoints' has entries");
+        util::stop("vector_jacobian_product: 'f' resized the output buffer; it is "
+                   "handed one entry per output adjoint and must write in place");
     }
     tape.registerOutputs(y_active);
 
