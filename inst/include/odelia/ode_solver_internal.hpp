@@ -44,6 +44,18 @@ public:
   void advance_euler(System& system, const std::vector<double>& times);
 
   void step(System& system);
+
+  // The adjoint of one step, from the state that step started at. RKCK only:
+  // the Rosenbrock stepper carries no reverse counterpart.
+  void step_adjoint(System& system, double time, double step_size,
+                    const state_type& y, const state_type& lambda_out,
+                    state_type& lambda_in) {
+    if (method == Method::rodas) {
+      util::stop("method='rodas' has no adjoint; use method='rkck'.");
+    }
+    stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in);
+  }
+
   void step_to(System& system, double time_max_);
   void step_by(System& system, double step_size);
   void step_euler(System& system, double time_max_);

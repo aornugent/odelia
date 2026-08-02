@@ -250,6 +250,30 @@ public:
   bool has_recording() const { return times().size() > 1; }
   std::vector<double> recorded_steps() const { return times(); }
 
+  // Carry lambda back over the recorded steps, last to first. states[k] is the
+  // state the run held at recorded_steps()[k], so step k ran from states[k - 1]
+  // with step_sizes()[k]; on return lambda is the adjoint of states[0]. Only
+  // accepted steps are recorded, and a rejected step never enters the solution,
+  // so the recorded list is the whole of what the sweep visits.
+  void solve_adjoint(const std::vector<ode::state_type<System> >& states,
+                     ode::state_type<System>& lambda)
+  {
+    if (!has_recording()) {
+      util::stop("no recorded steps to sweep; run the adaptive pass first");
+    }
+    const std::vector<double> t = times();
+    const std::vector<double> h = step_sizes();
+    util::check_length(states.size(), t.size());
+    util::check_length(lambda.size(), system.ode_size());
+    ode::state_type<System> lambda_in(lambda.size());
+    for (size_t k = t.size() - 1; k > 0; --k) {
+      util::check_length(states[k - 1].size(), system.ode_size());
+      solver.step_adjoint(system, t[k - 1], h[k], states[k - 1], lambda,
+                          lambda_in);
+      lambda = lambda_in;
+    }
+  }
+
   // Hand the recorded replay schedule (L1) to this solver. The active twin holds no
   // recording of its own (rebind copies values, not the schedule), so the schedule is
   // handed over per gradient call -- the L1 analogue of the System's set_recording for
