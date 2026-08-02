@@ -147,6 +147,37 @@ compile_rates_adjoint_interface <- function() {
                                 Rcpp::_["lambda"] = lambda);
     }
 
+    // The same sweep taken as two segments meeting at `split`, which is what a
+    // caller whose System changes width between steps does.
+    // [[Rcpp::export]]
+    std::vector<double> lv_solve_adjoint_segments(std::vector<double> pars,
+                                                  std::vector<double> y0,
+                                                  double t_end,
+                                                  std::vector<double> lambda_end,
+                                                  int split) {
+      odelia::ode::OdeControl ctl;
+      LotkaVolterra system(pars[0], pars[1], pars[2], pars[3]);
+      odelia::ode::Solver<LotkaVolterra> solver(system, ctl);
+      solver.set_state(y0, 0.0);
+      solver.advance_adaptive({0.0, t_end});
+      const std::vector<double> h = solver.step_sizes();
+
+      odelia::ode::Solver<LotkaVolterra> replay(system, ctl);
+      replay.set_state(y0, 0.0);
+      replay.advance_fixed_steps(h);
+      std::vector<std::vector<double> > states;
+      for (size_t i = 0; i < replay.get_history_size(); ++i) {
+        std::vector<double> s(y0.size());
+        replay.get_history_step(i).ode_state(s.begin());
+        states.push_back(s);
+      }
+
+      std::vector<double> lambda(lambda_end);
+      replay.solve_adjoint(states, lambda, (size_t) split, states.size() - 1);
+      replay.solve_adjoint(states, lambda, 0, (size_t) split);
+      return lambda;
+    }
+
     // The same recorded schedule run forward from a given start state, so a
     // finite difference of the whole run reads the identical step sizes.
     // [[Rcpp::export]]
@@ -268,4 +299,34 @@ testthat::test_that("solve_adjoint over the recorded steps matches a finite diff
   })
   expected <- as.vector(t(jacobian) %*% lambda_end)
   expect_equal(r$lambda, expected, tolerance = 1e-5)
+})
+
+testthat::test_that("the sweep taken as two segments equals the sweep taken whole", {
+  compile_rates_adjoint_interface()
+
+  t_end <- 1.5
+  lambda_end <- c(0.4, -1.3)
+  whole <- lv_solve_adjoint(lv_pars, lv_y, t_end, lambda_end)
+
+  # Every interior split, so no segment is empty and every boundary is a step
+  # boundary. Bit-identity, not a tolerance: a segment sweeps the same steps in
+  # the same order and the arithmetic does not change.
+  for (split in seq_len(whole$n_steps - 2L)) {
+    got <- lv_solve_adjoint_segments(lv_pars, lv_y, t_end, lambda_end, split)
+    expect_identical(got, whole$lambda, info = paste("split at", split))
+  }
+})
+
+testthat::test_that("a segment that is not a range of recorded steps is refused", {
+  compile_rates_adjoint_interface()
+
+  t_end <- 1.5
+  lambda_end <- c(0.4, -1.3)
+  n <- lv_solve_adjoint(lv_pars, lv_y, t_end, lambda_end)$n_steps
+  # A split at either end leaves one of the two segments empty.
+  expect_error(lv_solve_adjoint_segments(lv_pars, lv_y, t_end, lambda_end, 0L),
+               "not a range of recorded steps")
+  expect_error(lv_solve_adjoint_segments(lv_pars, lv_y, t_end, lambda_end,
+                                         n - 1L),
+               "not a range of recorded steps")
 })

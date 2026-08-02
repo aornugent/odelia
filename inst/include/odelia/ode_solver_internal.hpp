@@ -53,6 +53,11 @@ public:
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
+    // The System can be a different width from the one the forward pass left,
+    // because a caller sweeping a segment narrows it between segments, and the
+    // stage buffers are sized once at construction. A sweep is the end of the
+    // solver's forward state either way: every stage rebuild overwrites it.
+    resize(lambda_out.size());
     stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in);
   }
 

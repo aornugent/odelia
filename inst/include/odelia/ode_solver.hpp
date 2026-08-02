@@ -258,6 +258,17 @@ public:
   void solve_adjoint(const std::vector<ode::state_type<System> >& states,
                      ode::state_type<System>& lambda)
   {
+    solve_adjoint(states, lambda, 0, states.size() - 1);
+  }
+
+  // The same sweep restricted to steps k_last down to k_first + 1, so on return
+  // lambda is the adjoint of states[k_first]. Every state it visits has to be
+  // the width the System holds, so a caller whose System changes width between
+  // steps sweeps one segment per width and changes the System in between.
+  void solve_adjoint(const std::vector<ode::state_type<System> >& states,
+                     ode::state_type<System>& lambda, size_t k_first,
+                     size_t k_last)
+  {
     if (!has_recording()) {
       util::stop("no recorded steps to sweep; run the adaptive pass first");
     }
@@ -265,8 +276,11 @@ public:
     const std::vector<double> h = step_sizes();
     util::check_length(states.size(), t.size());
     util::check_length(lambda.size(), system.ode_size());
+    if (k_first >= k_last || k_last >= t.size()) {
+      util::stop("the adjoint segment is not a range of recorded steps");
+    }
     ode::state_type<System> lambda_in(lambda.size());
-    for (size_t k = t.size() - 1; k > 0; --k) {
+    for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
       solver.step_adjoint(system, t[k - 1], h[k], states[k - 1], lambda,
                           lambda_in);
