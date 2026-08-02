@@ -42,6 +42,23 @@ public:
   static const bool first_same_as_last = true;
 
 private:
+  // Y_i for stage i, into ytmp: y at stage 0, and y plus the tableau's
+  // combination of the earlier stage rates above that. step()'s own arithmetic,
+  // term for term, so a rebuilt stage state is bit-identical to the one step()
+  // stepped through.
+  void stage_state(int i, const state_type& y, double h);
+  double stage_time(int i, double time, double h) const;
+  const double* stage_row(int i) const;
+
+  // One reverse traversal of the stages, shared by every System: descending, so
+  // a stage's rate adjoint is complete before it is used, since stage i reads
+  // only the rates of stages before it. sweep_stage carries one stage's rate
+  // adjoint back to its state adjoint.
+  template <class SweepStage>
+  void sweep_stages(double time, double h, const state_type& y,
+                    std::vector<state_type>& lambda_k, state_type& lambda_in,
+                    SweepStage sweep_stage);
+
   // Intermediate storage, representing state (was GSL rkck_state_t)
   size_t size;
   state_type k1, k2, k3, k4, k5, k6, ytmp;
@@ -162,13 +179,82 @@ void Step<System>::step(System& system,
   }
 }
 
+// The tableau row stage i's state combines the earlier stage rates with.
+template <class System>
+const double* Step<System>::stage_row(int i) const {
+  const double* const rows[] = {&b21, b3, b4, b5, b6};
+  return rows[i - 1];
+}
+
+template <class System>
+double Step<System>::stage_time(int i, double time, double h) const {
+  return i == 0 ? time : time + ah[i - 1] * h;
+}
+
+template <class System>
+void Step<System>::stage_state(int i, const state_type& y, double h) {
+  if (i == 0) {
+    std::copy(y.begin(), y.end(), ytmp.begin());
+    return;
+  }
+  // Stage 1 keeps step()'s grouping of the single term: b21 * h * k1 and
+  // h * (b21 * k1) round differently.
+  if (i == 1) {
+    for (size_t q = 0; q < size; ++q) {
+      ytmp[q] = y[q] + b21 * h * k1[q];
+    }
+    return;
+  }
+  const state_type* const k[] = {&k1, &k2, &k3, &k4, &k5, &k6};
+  const double* const b = stage_row(i);
+  for (size_t q = 0; q < size; ++q) {
+    // Summed in ascending stage, then one h, as step() sums it. Cash-Karp's
+    // rows are dense, so this is a sum over every earlier stage rather than a
+    // term for the immediate predecessor.
+    value_type combination = b[0] * k1[q];
+    for (int m = 1; m < i; ++m) {
+      combination += b[m] * (*k[m])[q];
+    }
+    ytmp[q] = y[q] + h * combination;
+  }
+}
+
+template <class System>
+template <class SweepStage>
+void Step<System>::sweep_stages(double time, double h, const state_type& y,
+                                std::vector<state_type>& lambda_k,
+                                state_type& lambda_in, SweepStage sweep_stage) {
+  state_type lambda_stage(size);
+  for (int i = 5; i >= 0; --i) {
+    stage_state(i, y, h);
+    sweep_stage(i, stage_time(i, time, h), ytmp, lambda_k[i], lambda_stage);
+    // The stage state is y plus the earlier rates, so its adjoint splits over
+    // both.
+    for (size_t q = 0; q < size; ++q) {
+      lambda_in[q] += lambda_stage[q];
+    }
+    if (i == 0) {
+      continue;
+    }
+    const double* const b = stage_row(i);
+    for (int m = 0; m < i; ++m) {
+      for (size_t q = 0; q < size; ++q) {
+        lambda_k[m][q] += h * b[m] * lambda_stage[q];
+      }
+    }
+  }
+}
+
 // lambda_in = (d y_end / d y)^T lambda_out for the one step step() takes from y. The
 // step's own stage rates go back into k1..k6, since the stage states are y plus the
-// RKCK combination of those rates and the caller keeps only y.
+// RKCK combination of those rates and the caller keeps only y. The rebuild runs
+// forward, because Y_i needs k_1 ... k_{i-1}; the sweep runs backward, because a
+// stage's rate adjoint is complete only once the stages above it are swept.
 //
-// Each stage contributes J_f(stage state)^T times that stage's rate adjoint. Those
-// vector-Jacobian products are recorded on a tape of this function's own, on the System
-// lifted to the adjoint scalar, so the caller's reverse pass stays in value_type.
+// A System carrying ode_rates_adjoint is swept through it, at the state, field and
+// aux of each stage. Any other System has each stage's vector-Jacobian product
+// recorded on a tape of this function's own, on the System lifted to the adjoint
+// scalar, so the caller's reverse pass stays in value_type.
 template <class System>
 void Step<System>::step_adjoint(System& system,
                                 double time, double step_size,
@@ -176,88 +262,99 @@ void Step<System>::step_adjoint(System& system,
                                 const state_type &lambda_out,
                                 state_type &lambda_in) {
   using active_type = active_scalar<value_type>;
-  static_assert(Rebindable<System, active_type>,
-                "step_adjoint needs the System's rebind_from() hook to lift it to the "
-                "adjoint scalar");
   using ad = xad::adj<value_type>;
 
   const double h = step_size;
+  std::vector<state_type> aux;
 
-  // Retake the step to refill k1..k6; step() overwrites the state it is given, so the
-  // start state is read from y throughout below.
-  state_type dydt_in(size), dydt_out(size), yerr(size), y_end(y);
-  ode::derivs(system, y, dydt_in, time);
-  step(system, time, h, y_end, yerr, dydt_in, dydt_out);
+  if constexpr (AdjointRates<System>) {
+    // Six rate evaluations, k1 among them: first-same-as-last carries k1 into
+    // step() as the previous step's dydt_out, which a reverse traversal has not
+    // rebuilt, so it is re-derived here at this step's own start state. Each
+    // stage's aux is kept for the sweep to hand back.
+    state_type* const k[] = {&k1, &k2, &k3, &k4, &k5, &k6};
+    aux.assign(6, state_type(system.aux_size()));
+    for (int i = 0; i < 6; ++i) {
+      stage_state(i, y, h);
+      if (i == 0) {
+        ode::derivs(system, ytmp, *k[i], time);
+      } else {
+        ode::derivs(system, ytmp, *k[i], stage_time(i, time, h), i - 1);
+      }
+      system.ode_aux(aux[i].begin());
+    }
+  } else {
+    // Retake the step to refill k1..k6; step() overwrites the state it is given,
+    // so the start state is read from y throughout below.
+    state_type dydt_in(size), dydt_out(size), yerr(size), y_end(y);
+    ode::derivs(system, y, dydt_in, time);
+    step(system, time, h, y_end, yerr, dydt_in, dydt_out);
+  }
 
-  const state_type* const k[] = {&k1, &k2, &k3, &k4, &k5, &k6};
-  const double* const b[] = {&b21, b3, b4, b5, b6};  // stage j reads row b[j - 2]
-
-  // The direct term of y_end = y + h * (c1 k1 + c3 k3 + c4 k4 + c6 k6), then the rate
-  // adjoints it seeds. k2 and k5 enter y_end only through later stages.
+  // The direct term of y_end = y + h * (c1 k1 + c3 k3 + c4 k4 + c6 k6), then the
+  // rate adjoints it seeds. k2 and k5 enter y_end only through later stages.
   lambda_in.assign(lambda_out.begin(), lambda_out.end());
   std::vector<state_type> lambda_k(6, state_type(size, value_type(0.0)));
-  for (size_t i = 0; i < size; ++i) {
-    lambda_k[0][i] = h * c1 * lambda_out[i];
-    lambda_k[2][i] = h * c3 * lambda_out[i];
-    lambda_k[3][i] = h * c4 * lambda_out[i];
-    lambda_k[5][i] = h * c6 * lambda_out[i];
+  for (size_t q = 0; q < size; ++q) {
+    lambda_k[0][q] = h * c1 * lambda_out[q];
+    lambda_k[2][q] = h * c3 * lambda_out[q];
+    lambda_k[3][q] = h * c4 * lambda_out[q];
+    lambda_k[5][q] = h * c6 * lambda_out[q];
   }
 
-  auto twin = system.template rebind_from<active_type>();
-  typename ad::tape_type tape;  // Activates here; deactivates when it goes out of scope.
-  state_type lambda_stage(size);
-
-  // Descending, so a stage's rate adjoint is complete before it is swept: stage j reads
-  // only the rates of stages before it.
-  for (int j = 6; j >= 1; --j) {
-    // Fresh values each stage: an input carrying a slot from the previous recording
-    // registers as a variable with no dependencies, and its adjoint sweeps to zero.
-    std::vector<active_type> stage(size), rates(size);
-    for (size_t i = 0; i < size; ++i) {
-      // step()'s own arithmetic, so the stage state is bit-identical to the one it
-      // stepped through: the rate combination summed in ascending m, then one h.
-      value_type s = y[i];
-      if (j == 2) {
-        s = y[i] + b21 * h * k1[i];
-      } else if (j > 2) {
-        value_type combination = b[j - 2][0] * k1[i];
-        for (int m = 2; m < j; ++m) {
-          combination += b[j - 2][m - 1] * (*k[m - 1])[i];
-        }
-        s = y[i] + h * combination;
+  if constexpr (AdjointRates<System>) {
+    sweep_stages(time, h, y, lambda_k, lambda_in,
+                 [&](int i, double stage_t, const state_type& stage,
+                     const state_type& lambda_rate,
+                     state_type& lambda_stage) -> void {
+      // State and field, then this stage's aux, then the transpose. No rate
+      // evaluation: ode_rates_adjoint carries the rate chain itself, and one in
+      // value_type here would compute all of it a second time.
+      system.set_ode_state_and_field(stage.begin(), stage_t);
+      system.set_ode_aux(aux[i].cbegin());
+      system.ode_rates_adjoint(lambda_rate.begin(), lambda_stage.begin());
+    });
+    // The last stage swept is stage 0, whose state is y, so the System is
+    // already back where the step started.
+  } else {
+    static_assert(Rebindable<System, active_type>,
+                  "step_adjoint needs the System's rebind_from() hook to lift it to the "
+                  "adjoint scalar, or ode_rates_adjoint to carry the transpose itself");
+    auto twin = system.template rebind_from<active_type>();
+    typename ad::tape_type tape;  // Activates here; deactivates when it goes out of scope.
+    sweep_stages(time, h, y, lambda_k, lambda_in,
+                 [&](int i, double stage_t, const state_type& stage_values,
+                     const state_type& lambda_rate,
+                     state_type& lambda_stage) -> void {
+      // Fresh values each stage: an input carrying a slot from the previous
+      // recording registers as a variable with no dependencies, and its adjoint
+      // sweeps to zero. Registered before newRecording(), or every adjoint is zero.
+      std::vector<active_type> stage(size), rates(size);
+      for (size_t q = 0; q < size; ++q) {
+        stage[q] = active_type(stage_values[q]);
       }
-      stage[i] = active_type(s);
-    }
-    tape.registerInputs(stage);
-    tape.newRecording();
-
-    if (j == 1) {
-      ode::derivs(twin, stage, rates, time);
-    } else {
-      ode::derivs(twin, stage, rates, time + ah[j - 2] * h, j - 2);
-    }
-    tape.registerOutputs(rates);
-    for (size_t i = 0; i < size; ++i) {
-      xad::derivative(rates[i]) = lambda_k[j - 1][i];
-    }
-    tape.computeAdjoints();
-    for (size_t i = 0; i < size; ++i) {
-      lambda_stage[i] = xad::derivative(stage[i]);
-    }
-
-    // The stage state is y plus the earlier rates, so its adjoint splits over both.
-    for (size_t i = 0; i < size; ++i) {
-      lambda_in[i] += lambda_stage[i];
-      for (int m = 1; m < j; ++m) {
-        lambda_k[m - 1][i] += h * b[j - 2][m - 1] * lambda_stage[i];
+      tape.registerInputs(stage);
+      tape.newRecording();
+      if (i == 0) {
+        ode::derivs(twin, stage, rates, stage_t);
+      } else {
+        ode::derivs(twin, stage, rates, stage_t, i - 1);
       }
-    }
+      tape.registerOutputs(rates);
+      for (size_t q = 0; q < size; ++q) {
+        xad::derivative(rates[q]) = lambda_rate[q];
+      }
+      tape.computeAdjoints();
+      for (size_t q = 0; q < size; ++q) {
+        lambda_stage[q] = xad::derivative(stage[q]);
+      }
+    });
+
+    // Retaking the step walked the System through the stage states and left it at
+    // the last of them, so put it back where the step started. A caller sweeping
+    // steps backwards reads the System between calls.
+    ode::internal::set_ode_state(system, y, time);
   }
-
-  // Retaking the step walked the System through the stage states and left it at the
-  // last of them, so put it back where the step started. A caller sweeping steps
-  // backwards reads the System between calls.
-  ode::internal::set_ode_state(system, y, time);
 }
 
 // RKCK coefficients, from GSL
