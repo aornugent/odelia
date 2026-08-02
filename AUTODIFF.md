@@ -171,6 +171,50 @@ fixed order, so a 30-parameter System is one `return {&a, &b, …}` rather than 
 Nothing forces a System to be differentiable — one without these still simulates.
 (`LorenzSystem` is the worked example.)
 
+### Carrying your own rate transpose: the `AdjointRates` hooks
+
+A reverse sweep needs, at each stage, the transpose of the rate evaluation: the adjoint of
+`dydt` taken back to the adjoint of `y`. By default `Step::step_adjoint` builds that itself —
+it rebinds the System to the adjoint scalar and records one vector-Jacobian product per stage
+on a tape of its own, so the caller's sweep stays in `value_type`. That needs nothing from the
+System but `rebind_from`, and a `static_assert` on `Rebindable` says so where it is missing.
+
+A System that already knows its own transpose supplies it instead:
+
+```cpp
+template <typename It> It set_ode_state_and_field(It it, double time);
+template <typename It> It ode_rates_adjoint(It lambda_dydt, It lambda_y);
+```
+
+Satisfying `AdjointRates` (in `ode_interface.hpp`) switches `step_adjoint` onto them with
+`if constexpr` — a compile-time choice, so a System that satisfies neither is refused at the
+`static_assert` rather than falling back. The concept also requires the aux family, because
+that is how a stage's operating point is carried across: the sweep hands each stage's aux back
+before taking the transpose, so `ode_rates_adjoint` reads the point the rates were evaluated
+at rather than re-deriving it.
+
+`set_ode_state_and_field` is what `set_ode_state` does **up to** the rate evaluation, and it
+exists because the transpose stands in for that evaluation: a System put at the stage by
+`set_ode_state` would compute the whole rate chain in `double` and then compute it again
+inside `ode_rates_adjoint`. A System whose `set_ode_state` only loads state can forward one to
+the other.
+
+Two things the branch does not change. `lambda_dydt` and `lambda_y` are in `value_type`, so no
+tape is created on this path at all — which is the point, and why a System with an analytic or
+hand-assembled transpose pays nothing for the machinery it does not use. And the stage
+traversal is shared: both branches walk the same six stages through the same tableau weights,
+so a bit-identity test on the rebuilt stage states covers them both.
+
+**The adjoint is RKCK only.** `method = "rodas"` has no reverse counterpart and
+`Solver::step_adjoint` stops rather than stepping — a Rosenbrock stage is a linear solve, and
+transposing it is a different derivation, not the same one with a sign moved.
+
+`Solver::solve_adjoint(states, lambda)` drives the sweep over a whole run: it walks
+`recorded_steps()` last to first, so on return `lambda` is the adjoint of `states[0]`. Only
+accepted steps are recorded and a rejected step never enters the solution, so the recorded list
+is the whole of what the sweep visits. It stops if there is no recording, which is the
+"forgot to record" guard rather than a sweep over one step.
+
 ## Differentiation targets and the drivers
 
 ```cpp
