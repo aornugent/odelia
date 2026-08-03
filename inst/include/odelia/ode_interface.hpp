@@ -204,8 +204,10 @@ std::vector<double> r_ode_state(const T& obj) {
   return values;
 }
 
+// Mutable: a System may evaluate its rates here rather than store them, so that
+// what it returns is the derivative at the state it currently holds.
 template <typename T>
-std::vector<double> r_ode_rates(const T& obj) {
+std::vector<double> r_ode_rates(T& obj) {
   std::vector<double> dydt(obj.ode_size());
   obj.ode_rates(dydt.begin());
   return dydt;

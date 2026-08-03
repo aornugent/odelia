@@ -25,10 +25,11 @@ public:
   using value_type = typename System::value_type;
   using state_type = std::vector<value_type>;
 
-  SolverInternal(const System &system, OdeControl control_,
+  SolverInternal(System &system, OdeControl control_,
                  Method method_ = Method::rkck);
-  void reset(const System& system);
-  void set_state_from_system(const System& system);
+  void reset(System& system);
+  // Mutable: reading the System's rates may evaluate them (see set_state_from_system).
+  void set_state_from_system(System& system);
 
   state_type get_state() const {return y;}
   double get_time() const {return time;}
@@ -107,7 +108,7 @@ private:
 // NOTE I'm setting the initial system size to 0 here, but some
 // systems are self-initialising.
 template <class System>
-SolverInternal<System>::SolverInternal(const System &system, OdeControl control_,
+SolverInternal<System>::SolverInternal(System &system, OdeControl control_,
                                        Method method_)
   : control(control_), method(method_) {
   reset(system);
@@ -115,7 +116,7 @@ SolverInternal<System>::SolverInternal(const System &system, OdeControl control_
 
 // NOTE: This resets *everything* to basically a recreated object.
 template <class System>
-void SolverInternal<System>::reset(const System& system) {
+void SolverInternal<System>::reset(System& system) {
   prev_times.clear();
   step_size_last = control.step_size_initial;
   time_max = std::numeric_limits<double>::infinity();
@@ -148,7 +149,7 @@ typename std::enable_if<!has_cache<System>::value, void>::type
 load(System& system) {}
 
 template <class System>
-void SolverInternal<System>::set_state_from_system(const System& system) {
+void SolverInternal<System>::set_state_from_system(System& system) {
   set_time(ode::ode_time(system));
   resize(system.ode_size());
   system.ode_state(y.begin());
