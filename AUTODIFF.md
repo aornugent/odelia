@@ -215,6 +215,27 @@ accepted steps are recorded and a rejected step never enters the solution, so th
 is the whole of what the sweep visits. It stops if there is no recording, which is the
 "forgot to record" guard rather than a sweep over one step.
 
+**A System that changes width mid-run sweeps one segment per width.**
+`solve_adjoint(states, lambda, k_first, k_last)` restricts the sweep to steps `k_last` down to
+`k_first + 1`, so on return `lambda` is the adjoint of `states[k_first]`; the two-argument form
+is that call over the whole recording. Every state a segment visits has to be the width the
+System holds, so a caller whose System widens or narrows between steps runs a segment, changes
+the System, and runs the next — and it changes the System itself, because the solver has no way
+to know what a width change *means*. A caller that adds a component to a compound state knows
+which rows are new and which carried over; a width alone under-determines that, so a rule like
+"drop the last row" is wrong for any state that is not laid out in the order the additions
+happened. **The narrowing and the between-segment boundary condition belong to the System's
+owner, and only the segment range belongs here.**
+
+The stage buffers are sized at construction, so `Solver::step_adjoint` resizes them from the
+adjoint it is handed rather than from the width the forward pass left. A sweep is the end of the
+solver's forward state in any case: every stage rebuild overwrites it.
+
+Two properties hold and both are tested. Every interior split of one recording sweeps
+**bit-identically** to the whole sweep — the segment boundary is a place the sweep is
+interrupted, not a place it is approximated. And a range that is not a range of recorded steps
+stops rather than sweeping a truncated one.
+
 ## Differentiation targets and the drivers
 
 ```cpp
