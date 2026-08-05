@@ -1,5 +1,75 @@
 # Changelog
 
+## odelia 0.3.0
+
+**Invariant-aware step rejection
+([\#55](https://github.com/traitecoevo/odelia/issues/55)).** A system
+may now declare the domain its state lives in, and the adaptive stepper
+will refuse to commit a step that leaves it. Two ways to say so, both
+opt-in:
+
+- an optional `bool ode_state_valid(const state_type&) const` on the
+  system, checked after each completed step;
+- `util::stop_domain(msg)`, which throws the new `util::DomainError`,
+  from anywhere in a stage.
+
+Either one turns the step into a *rejection* — shrink and retry — rather
+than a committed out-of-domain state or, in the throwing case, a dead
+solve. Previously a throw from a stage ended the whole integration even
+though the pre-step state was still on the stack one frame up.
+
+Only `DomainError` is caught. `util::stop()` and everything else still
+propagate, which is the point: absorbing them would turn a programming
+error into step-shrinking until “Cannot achieve the desired accuracy”, a
+diagnostic that points at the solver instead of at the bug.
+
+This matters for bounded quantities that a finite RK step can overshoot
+even when the exact flow cannot — a carbon pool at zero, soil water at
+saturation, a probability at one. It is a discretisation guard, **not**
+a way to fix a model whose exact flow leaves its domain: that case
+shrinks to the minimum step and raises, now naming the reason and the
+location rather than blaming accuracy.
+
+Version bumped so downstreams can pin against the capability
+(`odelia (>= 0.3.0)`); systems declaring neither hook are unaffected,
+and a Lorenz trajectory over 4127 steps is bit-identical across the
+change.
+
+Also adds `util::to_string_g()`, which formats a double with `%g` —
+`std::to_string` renders a `1e-8` step size as `"0.000000"`, exactly
+where a diagnostic needs the magnitude.
+
+## odelia 0.2.2
+
+**An out-of-domain interpolator lookup now says which point, how far
+out, and what the domain was.** `Interpolator::eval()` had all three in
+hand — `u`, [`min()`](https://rdrr.io/r/base/Extremes.html) and
+[`max()`](https://rdrr.io/r/base/Extremes.html) — and reported none of
+them:
+
+    Extrapolation disabled and evaluation point outside of interpolated domain.
+
+That sentence is the same whichever spline threw it, so a consumer
+holding several of them learns nothing about which one, and nothing
+about whether the point missed the near end or the far end. It cost real
+time downstream: localising
+[traitecoevo/plant#576](https://github.com/traitecoevo/plant/issues/576)
+meant instrumenting four call sites by hand to discover which spline was
+being asked and at what value, and the answer — the **lower** end, not
+past the far end as everyone had assumed — inverted the fix. Now:
+
+    Extrapolation disabled and evaluation point outside of interpolated domain:
+    u = -0.0023 lies 0.0023 beyond the lower end of [0, 6.8918].
+
+Which spline, and which caller, is the one thing this layer cannot know;
+consumers that build several should catch and add it. A patch bump so
+downstreams can pin against the message.
+
+Behaviour is otherwise unchanged. In particular the guard is still
+written `u < min() || u > max()` rather than the negation of an in-range
+test, because every comparison against NaN is false and a non-finite `u`
+must keep falling through to the spline — plant relies on that.
+
 ## odelia 0.2.1
 
 A patch bump for one reason: **\#46 has no version number, and a
