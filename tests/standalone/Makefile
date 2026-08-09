@@ -17,6 +17,14 @@ CXXSTD  ?= -std=c++17
 OPT     ?= -O0
 WARN    ?= -Wall -Wextra -Wno-unused-parameter
 
+# propagator.cpp compares two spellings of the same real-number expression and
+# requires them to agree bitwise, so the compiler must not contract `a*b + c`
+# into an FMA in one spelling and not the other -- that changes the rounding and
+# the check would fail on arithmetic rather than on a defect. Needed under
+# -march=native (g++) and at clang's default. Scoped to that one object; nothing
+# else here cares.
+FPEXACT  = -ffp-contract=off
+
 INCLUDES = -I../../inst/include
 HEADERS  = $(wildcard ../../inst/include/odelia/*.hpp)
 
@@ -24,8 +32,9 @@ HEADERS  = $(wildcard ../../inst/include/odelia/*.hpp)
 
 all: build selfcontained
 	./r_free
+	./propagator
 
-build: r_free
+build: r_free propagator
 
 # Every core header must also compile on its own -- no leaning on whichever
 # sibling header happened to be included first to have pulled in <vector> or
@@ -46,9 +55,15 @@ r_free: r_free.o Tape.o
 r_free.o: r_free.cpp $(HEADERS)
 	$(CXX) $(CXXSTD) $(OPT) $(WARN) $(INCLUDES) -c -o $@ $<
 
+propagator: propagator.o Tape.o
+	$(CXX) $(CXXSTD) -o $@ $^
+
+propagator.o: propagator.cpp $(HEADERS)
+	$(CXX) $(CXXSTD) $(OPT) $(FPEXACT) $(WARN) $(INCLUDES) -c -o $@ $<
+
 # Vendored third-party code: build it quietly, we do not police its warnings.
 Tape.o: ../../src/Tape.cpp
 	$(CXX) $(CXXSTD) $(OPT) -w $(INCLUDES) -c -o $@ $<
 
 clean:
-	rm -f r_free r_free.o Tape.o
+	rm -f r_free r_free.o propagator propagator.o Tape.o
