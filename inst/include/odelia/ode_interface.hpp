@@ -2,6 +2,8 @@
 #ifndef ODELIA_ODE_INTERFACE_HPP_
 #define ODELIA_ODE_INTERFACE_HPP_
 
+#include <cstddef>
+#include <vector>
 #include <odelia/ode_util.hpp>
 
 #include <concepts>
@@ -71,6 +73,41 @@ concept AdjointRates =
     { s.ode_aux(out) } -> std::same_as<decltype(out)>;
     { s.set_ode_aux(in) } -> std::same_as<decltype(in)>;
   };
+
+// Opt-in domain check (#55). A system may declare
+//
+//   bool ode_state_valid(const state_type& y) const;
+//
+// and the adaptive stepper will reject any step landing on a state it refuses,
+// shrinking and retrying instead of committing it. Systems that do not declare it
+// are unaffected: state_valid() below resolves to the constant-true overload, so
+// nothing is called and nothing costs anything.
+//
+// The predicate is handed the state *vector* rather than reading the system. The
+// stepper's final derivs() does leave the system sitting on y, so either would
+// work, but a predicate over a vector is testable without constructing a system
+// and is honest about what it is judging.
+template <typename System>
+class has_state_check {
+  typedef char true_type;
+  typedef long false_type;
+  template <typename C> static true_type test(decltype(&C::ode_state_valid)) ;
+  template <typename C> static false_type test(...);
+public:
+  enum { value = sizeof(test<System>(0)) == sizeof(true_type) };
+};
+
+template <typename System, typename StateType>
+typename std::enable_if<has_state_check<System>::value, bool>::type
+state_valid(const System& system, const StateType& y) {
+  return system.ode_state_valid(y);
+}
+
+template <typename System, typename StateType>
+typename std::enable_if<!has_state_check<System>::value, bool>::type
+state_valid(const System& /* system */, const StateType& /* y */) {
+  return true;
+}
 
 // The recursive interface. Each helper walks a container of elements, threading
 // one iterator through them, and is constrained on the one member it calls with
@@ -259,8 +296,8 @@ std::vector<double> r_ode_state(const T& obj) {
   return values;
 }
 
-// Mutable: a System may evaluate its rates here rather than store them, so that
-// what it returns is the derivative at the state it currently holds.
+// Mutable, unlike r_ode_state: a system's ode_rates may compute the rates for
+// the state it currently holds rather than return a cached vector.
 template <typename T>
 std::vector<double> r_ode_rates(T& obj) {
   std::vector<double> dydt(obj.ode_size());

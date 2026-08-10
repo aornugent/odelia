@@ -2,30 +2,26 @@
 #ifndef ODELIA_UTIL_HPP_
 #define ODELIA_UTIL_HPP_
 
-#include <cstdint>
-#include <cstring>
+// This header, and therefore the whole solver core that includes it, is free of
+// R: `stop` throws a std::runtime_error, which Rcpp converts into an ordinary R
+// error at the package boundary, and `warning` writes to std::cerr. That is what
+// lets consumers of inst/include/ compile and run as plain C++ with no R
+// installation at all (traitecoevo/leaf_cpp#11). R belongs in src/ and in the
+// interface headers -- solver_interface.hpp, rcpp_interface_helpers.hpp -- not
+// here.
+
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <stdexcept>
+#include <string>
 #include <stddef.h> // size_t
-#include <RcppCommon.h> // as/wrap/SEXP
 
 namespace odelia {
 namespace util {
-
-struct index {
-  index(size_t x_) : x(x_) {}
-  size_t check_bounds(size_t size);
-  size_t x;
-  operator size_t() {return x;}
-};
-
-inline std::vector<index> index_vector(const std::vector<size_t> x) {
-  std::vector<index> ret;
-  ret.reserve(x.size());
-  for (size_t i : x) {
-    ret.push_back(i);
-  }
-  return ret;
-}
 
 inline bool is_finite(double x) {
   return std::isfinite(x);
@@ -40,13 +36,65 @@ inline double to_passive(double x) { return x; }
 template <typename T>
 inline double to_passive(const T& x) { return to_passive(value(x)); }
 
+// Throws; never returns. The attribute lets the compiler see that callers whose
+// error branches end in util::stop() do not fall through.
+[[noreturn]] inline void stop(const std::string &msg) {
+  throw std::runtime_error(msg);
+}
+
+// A state outside the system's valid domain, as distinct from a bug (#55).
+//
+// The adaptive stepper catches *this type specifically* and treats it as a step
+// rejection -- shrink and retry -- rather than letting it end the solve. Anything
+// else, util::stop() included, still propagates, and that distinction is
+// load-bearing: catching runtime_error broadly would turn a genuine programming
+// error into step-shrinking until "Cannot achieve the desired accuracy", a
+// diagnostic pointing at the solver instead of at the bug. A system saying "this
+// state is impossible" and a system saying "this code is wrong" must not be the
+// same signal.
+//
+// Deriving from std::runtime_error keeps the Rcpp conversion to an ordinary R
+// error intact for the cases that do escape -- a fixed-step solve, which has no
+// step size to shrink, or an adaptive one already at step_size_min.
+struct DomainError : std::runtime_error {
+  explicit DomainError(const std::string &msg) : std::runtime_error(msg) {}
+};
+
+// As stop(), but for a state the model has no meaning for rather than an error in
+// the code. Prefer a message naming the quantity, its value and the constraint:
+// this string is what the solver reports if the step cannot be shrunk far enough.
+[[noreturn]] inline void stop_domain(const std::string &msg) {
+  throw DomainError(msg);
+}
+
+// Not an R warning: nothing in the solver core may assume an R session exists.
+// Callers that need one should raise it from their own R-facing code. Uses
+// fprintf rather than std::cerr to keep <iostream>, and its per-translation-unit
+// static initialiser, out of a header that everything includes.
+inline void warning(const std::string &msg) {
+  std::fprintf(stderr, "odelia: %s\n", msg.c_str());
+}
+
+// A double in an error message. std::to_string is fixed-point with six decimals,
+// so it renders a flux of 1e-22 as "0.000000" and a domain endpoint of 1e8 with
+// eight useless digits -- in both cases erasing the number the reader needed.
+// Six significant figures, matching plant's util::format_double so the family
+// renders numbers the same way; enough to identify a value, and short enough that
+// 6.8918 does not arrive as 6.8917999999999999. Deliberately NOT round-trip
+// precision: these strings are for reading, not for reconstructing a double.
+inline std::string format_double(double x) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%.6g", x);
+  return std::string(buf);
+}
+
 inline void check_length(size_t received, size_t expected)
 {
   if (expected != received)
   {
-    Rcpp::stop("Incorrect length input; expected " +
-               std::to_string(expected) + ", received " +
-               std::to_string(received));
+    stop("Incorrect length input; expected " +
+         std::to_string(expected) + ", received " +
+         std::to_string(received));
   }
 }
 
@@ -69,30 +117,6 @@ bool almost_equal(T x, T y, int ulp) {
   return std::abs(x - y) <=   std::numeric_limits<T>::epsilon()
     * std::max(std::abs(x), std::abs(y))
     * ulp;
-}
-
-// Rcpp converts size_t -> numeric, and I want to be able to preserve
-// NA values while doing base 0 to base 1 index conversion (and v.v.).
-// This should take the guesswork and remembering out, and should keep
-// NA values preserved.
-template <class T>
-T base_1_to_0(T x) {
-  return x - 1;
-}
-
-template <class T>
-T base_0_to_1(T x) {
-  return x + 1;
-}
-
-template <class T_from, class T_to>
-T_to base_1_to_0(T_from x) {
-  return static_cast<T_to>(base_1_to_0<T_from>(x));
-}
-
-template <class T_from, class T_to>
-T_to base_0_to_1(T_from x) {
-  return static_cast<T_to>(base_0_to_1<T_from>(x));
 }
 
 // Based on C++11's is_sorted
@@ -124,22 +148,22 @@ bool is_decreasing(ForwardIterator first, ForwardIterator last) {
   return true;
 }
 
-inline void stop(const std::string &msg) { Rcpp::stop(msg); }
-
-inline void warning(const std::string &msg) { Rcpp::warning(msg); }
-
 template<typename T>
 std::string to_string(T x) {
   return std::to_string(x);
 }
 
-}
+// std::to_string on a double is "%f" with six decimals, so it renders 1e-8 as
+// "0.000000" -- useless in precisely the diagnostics that need to report a small
+// number, such as a step size at its floor. "%g" keeps the magnitude. snprintf
+// rather than ostringstream to keep <sstream> out of a header everything includes.
+inline std::string to_string_g(double x) {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%g", x);
+  return std::string(buf);
 }
 
-namespace Rcpp {
-template <> SEXP wrap(const odelia::util::index&);
-template <> odelia::util::index as(SEXP);
-template <> SEXP wrap(const std::vector<odelia::util::index>&);
+}
 }
 
 #endif

@@ -3,6 +3,8 @@
 
 #include <vector>
 #include <cstddef>
+#include <cmath>
+#include <limits>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
@@ -72,32 +74,55 @@ struct OdeControl {
                           const state_type &dydt)
   {
     double rmax = std::numeric_limits<double>::min();
-    bool err_non_finite = false;
     const double S = 0.9;
+    bool nonfinite = false;
 
     for (size_t i = 0; i < dim; i++)
     {
       const double D0 = errlevel(y[i], dydt[i], step_size);
       using std::abs;
       const double r = abs(yerr[i]) / abs(D0);
-      // std::max does not propagate NaN, so a non-finite ratio must not reach it:
-      // with a finite ratio after it the NaN is dropped and the largest error comes
-      // from whichever components stayed finite, so the step is accepted -- and
-      // grown, if those are small. With no finite ratio after it rmax is NaN, both
-      // tests below are false, and the step is accepted unchanged. Either way a
-      // non-finite state enters the trajectory.
-      if (!util::is_finite(r))
+      // A non-finite ratio means the step left the model's valid domain: yerr
+      // or y is NaN (a NaN y poisons D0, so it arrives here too). Such a step
+      // must be rejected, and it has to be caught here rather than left to the
+      // comparisons below, because the reduction does not propagate
+      // non-finiteness. `std::max(a, b)` is `(a < b) ? b : a` and NaN compares
+      // false against everything, so it yields NaN for a = NaN -- but on the
+      // next element a finite a yields that instead, *wiping* the NaN. The NaN
+      // component is then never accounted for at all, and the step is accepted
+      // one of two ways (odelia#52):
+      //
+      //   (a) the NaN survives to the end of the loop (last element, or all of
+      //       them): rmax stays NaN, both `rmax > 1.1` and `rmax < 0.5` are
+      //       false, and control falls through to the final else, reporting no
+      //       shrink;
+      //   (b) the NaN is wiped by finite elements whose own ratios are small:
+      //       rmax is finite and passes, so the step is accepted *carrying* a
+      //       NaN.
+      //
+      // The caller branches solely on step_size_shrank(), so either way the
+      // diverging step is committed. (b) is the mode coupled systems hit in
+      // practice. Breaking on the first non-finite ratio removes the positional
+      // dependence that made this so easy to miss.
+      //
+      // Inf already rejected via `> 1.1`; folding it in costs nothing and
+      // states the intent once.
+      if (!std::isfinite(r))
       {
-        err_non_finite = true;
+        nonfinite = true;
         break;
       }
       rmax = std::max(r, rmax);
     }
 
-    if (err_non_finite || rmax > 1.1)
+    if (nonfinite)
+    {
+      step_size = reject_step(step_size);
+    }
+    else if (rmax > 1.1)
     {
       // decrease step, no more than factor of 5
-      double r = err_non_finite ? 0.2 : S / pow(rmax, 1.0 / ord);
+      double r = S / pow(rmax, 1.0 / ord);
       if (r < 0.2)
       {
         r = 0.2;
@@ -139,6 +164,26 @@ struct OdeControl {
     }
 
     return step_size;
+  }
+
+  // Reject the current step outright: not merely inaccurate but *invalid* -- a
+  // non-finite error estimate (odelia#52), or a state the system refuses (#55).
+  //
+  // Shrink hardest (the same floor the accuracy branch clamps to) and always
+  // report the shrink, even when already at step_size_min and so unable to
+  // decrease. That makes the caller raise rather than commit the state, and it is
+  // deliberately unlike the `rmax > 1.1` branch above, which reports no shrink
+  // once it cannot decrease further and so lets an inaccurate step through at the
+  // floor. That trade is defensible for accuracy and never for validity.
+  double reject_step(double step_size)
+  {
+    double new_step = step_size * 0.2;
+    if (new_step < step_size_min)
+    {
+      new_step = step_size_min;
+    }
+    last_step_size_shrank = true;
+    return new_step;
   }
 
   double errlevel(double y, double dydt, double h) const

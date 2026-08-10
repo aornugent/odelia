@@ -26,6 +26,8 @@ against. The next-generation `plant` core links against it.
 - `make Rcpp` / `make roxygen` — regenerate Rcpp exports / roxygen docs (don't hand-edit
   generated files: `R/RcppExports.R`, `src/RcppExports.cpp`, `NAMESPACE`, `man/`).
 - `make test` — run the test suite (`testthat`). `make check` — `R CMD check`.
+- `make test-cpp` — build and run the core as plain C++ with no R on the include path
+  (`tests/standalone/`); fast, and the guard that keeps the headers R-free.
 
 ## Gotchas
 
@@ -34,6 +36,12 @@ against. The next-generation `plant` core links against it.
 - The header core is a cross-boundary artifact: changing a solver signature ripples to
   anything that `LinkingTo` it (notably the next-gen `plant`). Treat such changes as
   `cross-package` / `breaking`.
+- **The header core must stay free of R.** Everything in `inst/include/odelia/` bar
+  `solver_interface.hpp` and `rcpp_interface_helpers.hpp` compiles with no R installed —
+  `util::stop` throws, it does not call `Rcpp::stop`. Consumers depend on this (`leaf`
+  runs its C++ tests without R). Keep Rcpp in `src/` and the two interface headers, and
+  remember that these headers no longer get `<cassert>`, `<string>` and friends for free
+  via R — include what you use. See ARCHITECTURE.md.
 
 ## Code & comment style
 
@@ -83,3 +91,7 @@ org — a hub-and-spoke set of packages built around the
   work is tracked on [board #5](https://github.com/orgs/traitecoevo/projects/5) (new issues
   auto-add with no Status = the triage queue). Labels: `bug` / `task` / `epic` plus `blocked`,
   `needs-info`, `cross-package`, `breaking`, `question`.
+- **Commit messages** — the repo squash-merges, so a PR's title and body are copied verbatim into
+  permanent history. Keep them short and durable, and put the working detail (measurements,
+  alternatives rejected, what you tried first) in the first PR comment instead — see
+  [`commit-messages.md`](https://github.com/traitecoevo/plant-meta/blob/main/governance/commit-messages.md).
