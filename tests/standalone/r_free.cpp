@@ -29,7 +29,7 @@
 #include <odelia/ode_step_rodas.hpp>
 #include <odelia/ode_solver_internal.hpp>
 #include <odelia/ode_solver.hpp>
-#include <odelia/ode_fit.hpp>
+#include <odelia/gradient.hpp>
 #include <examples/lorenz_system.hpp>
 
 #include <cmath>
