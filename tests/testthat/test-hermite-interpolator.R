@@ -145,9 +145,13 @@ compile_hermite_interface <- function() {
     }', verbose = FALSE)
 }
 
-# Two knot sets: uniform (indexed by arithmetic) and not (indexed by a search).
+# Three knot sets: uniform (indexed by arithmetic), not (indexed by a search),
+# and the shape a resource field builds -- knot k at k * spacing, accumulated by
+# multiplication so consecutive gaps are not bit-identical. That last one is what
+# the equal-spacing test has to hold on, and it is the only shape a run uses.
 knot_sets <- list(uniform = seq(0, 4, length.out = 33),
-                  irregular = c(0, 0.07, 0.31, 0.4, 0.95, 1.6, 2.05, 2.9, 3.4, 4))
+                  irregular = c(0, 0.07, 0.31, 0.4, 0.95, 1.6, 2.05, 2.9, 3.4, 4),
+                  multiplied = (0:40) * 0.1)
 query <- c(0.05, 0.31, 0.62, 1.0, 1.55, 2.4, 3.87, 3.999)
 
 testthat::test_that("slope is the exact derivative of what eval returns", {
