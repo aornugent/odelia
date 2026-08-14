@@ -67,6 +67,48 @@ compile_hermite_interface <- function() {
                                 Rcpp::_["pair_slope"] = pair_slope);
     }
 
+    // Laying the lattice and extending it: what a resource field on fixed knots asks
+    // for as its domain grows. Returns the nodes each bound produced, and whether the
+    // queries the shorter grid already answered moved when it was extended.
+    // [[Rcpp::export]]
+    Rcpp::List hermite_lattice(double spacing, std::vector<double> bounds,
+                               std::vector<double> u, bool start_off_lattice) {
+      hermite_interpolator<double> interp;
+      if (start_off_lattice) {
+        // A grid this class did not lay out, long enough to pass a length test.
+        std::vector<double> odd;
+        for (int k = 0; k < 40; ++k) odd.push_back(0.5 + 0.37 * k);
+        interp.init(odd, field_values(odd), field_slopes(odd));
+      }
+      std::vector<int> wanted(bounds.size()), sizes(bounds.size());
+      std::vector<double> second(bounds.size()), top(bounds.size());
+      std::vector<int> held(u.size() * bounds.size(), 1);
+      std::vector<double> previous(u.size());
+      bool have_previous = false;
+      for (std::size_t b = 0; b < bounds.size(); ++b) {
+        wanted[b] = static_cast<int>(
+            hermite_interpolator<double>::lattice_size(spacing, bounds[b]));
+        interp.ensure_lattice(spacing, static_cast<std::size_t>(wanted[b]));
+        const std::vector<double> nodes = interp.knots();
+        interp.set_data(field_values(nodes), field_slopes(nodes));
+        sizes[b] = static_cast<int>(interp.size());
+        second[b] = nodes[1];
+        top[b] = nodes.back();
+        for (std::size_t i = 0; i < u.size(); ++i) {
+          const double now = interp.eval(u[i]);
+          if (have_previous)
+            held[b * u.size() + i] = odelia::util::identical(now, previous[i]);
+          previous[i] = now;
+        }
+        have_previous = true;
+      }
+      return Rcpp::List::create(Rcpp::_["wanted"] = wanted,
+                                Rcpp::_["size"] = sizes,
+                                Rcpp::_["second"] = second,
+                                Rcpp::_["top"] = top,
+                                Rcpp::_["held"] = held);
+    }
+
     // Setting the nodes once and the data twice, against two all-at-once builds on the
     // same nodes: what a per-stage rebuild does, compared with rebuilding everything.
     // [[Rcpp::export]]
@@ -210,4 +252,37 @@ testthat::test_that("an incomplete or unusable build stops", {
   testthat::expect_error(hermite_data_before_nodes(z), "no knots set")
   testthat::expect_error(hermite_set_nodes_descending(rev(z)), "strictly ascending")
   testthat::expect_error(hermite_set_nodes_descending(c(1.0)), "at least 2 knots")
+})
+
+test_that("the lattice is laid, extended and never moved", {
+  compile_hermite_interface()
+  spacing <- 0.05
+  bounds <- c(0.4, 1.0, 1.0, 4.3, 17.35)
+  # Queries strictly inside the first grid, so every later bound must answer them
+  # with the same number: an extension adds nodes above, never moves one below.
+  u <- c(0.013, 0.11, 0.276, 0.39)
+  out <- hermite_lattice(spacing, bounds, u, FALSE)
+
+  # One node clear of the bound, so a query at the bound is inside a span.
+  expect_identical(out$wanted, as.integer(ceiling(bounds / spacing) + 2))
+  expect_true(all(out$top > bounds))
+  # Node k sits at k * spacing, read back off the grid.
+  expect_equal(out$second, rep(spacing, length(bounds)))
+  expect_equal(out$top, (out$size - 1) * spacing)
+  # The grid only grows, and a bound that needs no more nodes changes nothing.
+  expect_false(is.unsorted(out$size))
+  expect_identical(out$size[[2]], out$size[[3]])
+  # Bit-identical below the old top, for every bound after the first.
+  expect_true(all(out$held == 1L))
+})
+
+test_that("a grid the lattice did not lay out is replaced, not extended", {
+  compile_hermite_interface()
+  spacing <- 0.05
+  # The off-lattice grid is 40 nodes reaching 15.0, so it is long enough for the
+  # first bound and sits nowhere near k * spacing. Length alone would keep it.
+  out <- hermite_lattice(spacing, c(0.4), numeric(0), TRUE)
+  expect_identical(out$size[[1]], as.integer(ceiling(0.4 / spacing) + 2))
+  expect_equal(out$second[[1]], spacing)
+  expect_equal(out$top[[1]], (out$size[[1]] - 1) * spacing)
 })
