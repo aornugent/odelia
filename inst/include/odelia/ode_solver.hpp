@@ -288,6 +288,38 @@ public:
     }
   }
 
+  // The same segment, carrying one lambda per seed. Every seed sees the same
+  // trajectory, so the stage states are rebuilt once per step however many are
+  // carried and the System's transpose is recorded once -- which is where the
+  // saving is, because a recording is a model evaluation and a sweep is not.
+  void solve_adjoint_batched(const std::vector<ode::state_type<System> >& states,
+                             std::vector<ode::state_type<System> >& lambda,
+                             size_t k_first, size_t k_last)
+  {
+    if (!has_recording()) {
+      util::stop("no recorded steps to sweep; run the adaptive pass first");
+    }
+    if (lambda.empty()) {
+      util::stop("solve_adjoint_batched: needs at least one seed");
+    }
+    const std::vector<double> t = times();
+    const std::vector<double> h = step_sizes();
+    util::check_length(states.size(), t.size());
+    for (const ode::state_type<System>& l : lambda) {
+      util::check_length(l.size(), system.ode_size());
+    }
+    if (k_first >= k_last || k_last >= t.size()) {
+      util::stop("the adjoint segment is not a range of recorded steps");
+    }
+    std::vector<ode::state_type<System> > lambda_in;
+    for (size_t k = k_last; k > k_first; --k) {
+      util::check_length(states[k - 1].size(), system.ode_size());
+      solver.step_adjoint_batched(system, t[k - 1], h[k], states[k - 1], lambda,
+                                  lambda_in);
+      lambda = lambda_in;
+    }
+  }
+
   // Hand the recorded replay schedule (L1) to this solver. The active twin holds no
   // recording of its own (rebind copies values, not the schedule), so the schedule is
   // handed over per gradient call -- the L1 analogue of the System's set_recording for
