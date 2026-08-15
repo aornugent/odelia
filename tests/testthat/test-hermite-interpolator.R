@@ -21,6 +21,7 @@ compile_hermite_interface <- function() {
     #include <Rcpp.h>
     #include <vector>
     #include <cmath>
+    #include <limits>
     #include <XAD/XAD.hpp>
     #include <odelia/hermite_interpolator.hpp>
 
@@ -184,6 +185,93 @@ compile_hermite_interface <- function() {
     void hermite_set_nodes_descending(std::vector<double> z) {
       hermite_interpolator<double> interp;
       interp.set_nodes(z);
+    }
+
+    // What a query outside the knot range reads: the end line, value and slope of
+    // the nearest end.
+    // [[Rcpp::export]]
+    Rcpp::List hermite_outside(std::vector<double> z, double below, double above) {
+      hermite_interpolator<double> interp;
+      interp.set_nodes(z);
+      interp.set_data(field_values(z), field_slopes(z));
+      return Rcpp::List::create(
+        Rcpp::_["below"] = interp.eval(below),
+        Rcpp::_["below_slope"] = interp.slope(below),
+        Rcpp::_["above"] = interp.eval(above),
+        Rcpp::_["above_slope"] = interp.slope(above),
+        Rcpp::_["front_value"] = field.value(z.front()),
+        Rcpp::_["front_slope"] = field.slope(z.front()),
+        Rcpp::_["back_value"] = field.value(z.back()),
+        Rcpp::_["back_slope"] = field.slope(z.back()));
+    }
+
+    // A non-finite query compares false against both ends, so it reaches the span
+    // lookup. Reading one is not meaningful; landing on a span that exists is,
+    // because the alternative is an unspecified index or a read past the last span.
+    // [[Rcpp::export]]
+    Rcpp::List hermite_nonfinite(std::vector<double> z) {
+      hermite_interpolator<double> interp;
+      interp.set_nodes(z);
+      interp.set_data(field_values(z), field_slopes(z));
+      const double nan = std::numeric_limits<double>::quiet_NaN();
+      const double inf = std::numeric_limits<double>::infinity();
+      double pv, ps;
+      interp.value_and_slope(nan, pv, ps);
+      return Rcpp::List::create(
+        Rcpp::_["nan"] = interp.eval(nan),
+        Rcpp::_["nan_slope"] = interp.slope(nan),
+        Rcpp::_["nan_pair_value"] = pv,
+        Rcpp::_["nan_pair_slope"] = ps,
+        Rcpp::_["pos_inf"] = interp.eval(inf),
+        Rcpp::_["neg_inf"] = interp.eval(-inf));
+    }
+
+    // The residual at the knots themselves, and the error away from them at two
+    // refinements of the same lattice.
+    // [[Rcpp::export]]
+    Rcpp::List hermite_accuracy(int n, std::vector<double> u) {
+      std::vector<double> z(n);
+      const double spacing = 4.0 / (n - 1);
+      for (int k = 0; k < n; ++k) z[k] = k * spacing;
+      hermite_interpolator<double> interp;
+      interp.set_nodes(z);
+      interp.set_data(field_values(z), field_slopes(z));
+      std::vector<double> at_knot(z.size()), away(u.size());
+      for (std::size_t i = 0; i < z.size(); ++i)
+        at_knot[i] = interp.eval(z[i]) - field.value(z[i]);
+      for (std::size_t i = 0; i < u.size(); ++i)
+        away[i] = std::abs(interp.eval(u[i]) - field.value(u[i]));
+      return Rcpp::List::create(Rcpp::_["at_knot"] = at_knot,
+                                Rcpp::_["away"] = away);
+    }
+
+    // A lattice asked for a spacing other than the one it holds.
+    // [[Rcpp::export]]
+    Rcpp::List hermite_lattice_respace(double first, double second, double upper) {
+      hermite_interpolator<double> interp;
+      interp.ensure_lattice(first,
+        hermite_interpolator<double>::lattice_size(first, upper));
+      const int n1 = static_cast<int>(interp.size());
+      const double s1 = interp.knots()[1];
+      interp.ensure_lattice(second,
+        hermite_interpolator<double>::lattice_size(second, upper));
+      return Rcpp::List::create(
+        Rcpp::_["first_size"] = n1, Rcpp::_["first_step"] = s1,
+        Rcpp::_["second_size"] = static_cast<int>(interp.size()),
+        Rcpp::_["second_step"] = interp.knots()[1],
+        Rcpp::_["second_top"] = interp.knots().back());
+    }
+
+    // [[Rcpp::export]]
+    double hermite_lattice_size(double spacing, double upper) {
+      return static_cast<double>(
+        hermite_interpolator<double>::lattice_size(spacing, upper));
+    }
+
+    // [[Rcpp::export]]
+    void hermite_ensure_lattice_too_short(double spacing) {
+      hermite_interpolator<double> interp;
+      interp.ensure_lattice(spacing, 1);
     }', verbose = FALSE)
 }
 
@@ -274,6 +362,97 @@ test_that("the lattice is laid, extended and never moved", {
   expect_identical(out$size[[2]], out$size[[3]])
   # Bit-identical below the old top, for every bound after the first.
   expect_true(all(out$held == 1L))
+})
+
+testthat::test_that("the interpolant reproduces the data it was built from", {
+  compile_hermite_interface()
+
+  # A value and a slope per knot leaves the span polynomial pinned at both ends,
+  # so a knot is not approximated: it is returned. Nothing downstream should have
+  # to allow for a residual there.
+  r <- hermite_accuracy(41, query)
+  testthat::expect_true(all(r$at_knot == 0))
+})
+
+testthat::test_that("the value converges at the order a cubic span gives", {
+  compile_hermite_interface()
+
+  # Away from the knots the error is the span polynomial against the field, which
+  # for a smooth field falls as the fourth power of the spacing. This is the
+  # accuracy claim that does hold; the SLOPE does not converge on a field whose
+  # spans carry curvature breaks, which is a statement about that field and not
+  # about this interpolant.
+  coarse <- max(hermite_accuracy(41, query)$away)
+  fine <- max(hermite_accuracy(321, query)$away)
+  order <- log2(coarse / fine) / log2(8)
+  message(sprintf("value convergence order over an eightfold refinement: %.2f", order))
+  testthat::expect_gt(order, 3.5)
+})
+
+testthat::test_that("outside the knots the end line is extended", {
+  compile_hermite_interface()
+
+  # A cubic continued past its span runs away; the end value and end slope do not,
+  # and they keep the read C1 across the boundary.
+  z <- knot_sets$uniform
+  below <- -0.5
+  above <- 4.5
+  r <- hermite_outside(z, below, above)
+  testthat::expect_equal(r$below,
+                         r$front_value + r$front_slope * (below - z[[1]]))
+  testthat::expect_identical(r$below_slope, r$front_slope)
+  testthat::expect_equal(r$above,
+                         r$back_value + r$back_slope * (above - z[[length(z)]]))
+  testthat::expect_identical(r$above_slope, r$back_slope)
+})
+
+testthat::test_that("a non-finite query lands on a span that exists", {
+  compile_hermite_interface()
+
+  # NaN compares false against both ends, so it reaches the span lookup rather
+  # than an early return. Reading one is not meaningful and NaN is the right
+  # answer; what matters is that neither route leaves the spans -- the arithmetic
+  # one would convert an unspecified index and the search one would run one past
+  # the last span. A read that returns is the evidence for both.
+  for (z in knot_sets) {
+    r <- hermite_nonfinite(z)
+    testthat::expect_true(is.nan(r$nan))
+    testthat::expect_true(is.nan(r$nan_slope))
+    testthat::expect_true(is.nan(r$nan_pair_value))
+    testthat::expect_true(is.nan(r$nan_pair_slope))
+    # The infinities are outside the range and take the end line, which runs away
+    # in the direction the end slope points.
+    testthat::expect_true(is.infinite(r$pos_inf))
+    testthat::expect_true(is.infinite(r$neg_inf))
+  }
+})
+
+test_that("a lattice asked for a different spacing is laid again", {
+  compile_hermite_interface()
+
+  # Holding a lattice is not the same as holding THIS lattice, and the held grid
+  # answers that off its own nodes rather than off a remembered spacing.
+  r <- hermite_lattice_respace(0.05, 0.1, 1.0)
+  expect_identical(r$first_size, as.integer(ceiling(1.0 / 0.05) + 2))
+  expect_equal(r$first_step, 0.05)
+  expect_identical(r$second_size, as.integer(ceiling(1.0 / 0.1) + 2))
+  expect_equal(r$second_step, 0.1)
+  expect_equal(r$second_top, (r$second_size - 1) * 0.1)
+})
+
+test_that("a lattice that cannot be laid is refused, and a large one is not", {
+  compile_hermite_interface()
+
+  expect_error(hermite_lattice_size(0, 1), "spacing must be positive")
+  expect_error(hermite_lattice_size(-0.1, 1), "spacing must be positive")
+  expect_error(hermite_lattice_size(0.05, -1), "must not be negative")
+  expect_error(hermite_lattice_size(0.05, NaN), "must not be negative")
+  expect_error(hermite_ensure_lattice_too_short(0.05), "at least 2 nodes")
+
+  # lattice_size is arithmetic and does not allocate, so a count no memory could
+  # hold is a number rather than an error. Whoever asked knows what ran away and
+  # refuses in its own words; this class does not.
+  expect_equal(hermite_lattice_size(1e-9, 1e9), 1e18)
 })
 
 test_that("a grid the lattice did not lay out is replaced, not extended", {

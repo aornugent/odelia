@@ -233,15 +233,23 @@ private:
     return (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
   }
 
+  // Both routes are written so that every value of `u` lands on a span that
+  // exists, without a test for one that cannot. A NaN query reaches here because
+  // it compares false against both ends, and it would otherwise convert to an
+  // unspecified index on the arithmetic route and index one past the last span on
+  // the search route -- so the bound is taken in double, before the conversion,
+  // and read off the spans rather than off the knots.
   std::size_t span_of(double u) const {
     const std::size_t ns = spans.size();
     if (uniform) {
-      const std::size_t k = static_cast<std::size_t>((u - x.front()) * inv_h0);
-      return k < ns ? k : ns - 1;
+      const double k = (u - x.front()) * inv_h0;
+      return k >= 0.0 && k < static_cast<double>(ns)
+                 ? static_cast<std::size_t>(k)
+                 : ns - 1;
     }
     const std::size_t k =
         static_cast<std::size_t>(std::upper_bound(x.begin(), x.end(), u) - x.begin());
-    return k > 0 ? k - 1 : 0;
+    return k > 0 ? (k <= ns ? k - 1 : ns - 1) : 0;
   }
 
   void check_initialised() const {
