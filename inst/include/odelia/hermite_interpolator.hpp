@@ -166,8 +166,17 @@ public:
     }
   }
 
+  // The same read without the initialised check, for a caller reading once per
+  // quadrature point. Matches Interpolator, whose operator() is its fast read.
   template <typename U>
-  S operator()(const U& u) const { return eval(u); }
+  S operator()(const U& u) const {
+    const double up = util::to_passive(u);
+    if constexpr (std::is_same_v<U, double>) {
+      return value_at(up);
+    } else {
+      return graft(value_at(up), slope_at(up), u, up);
+    }
+  }
 
   // dy/du at u -- the exact derivative of the polynomial eval() uses. (odelia's
   // value-fitted interpolator spells the same operation `deriv`.)
