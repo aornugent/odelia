@@ -74,6 +74,19 @@ concept AdjointRates =
     { s.set_ode_aux(in) } -> std::same_as<decltype(in)>;
   };
 
+// A System that can transpose one stage for SEVERAL rate adjoints at once,
+// recording whatever the transpose is built on once and sweeping it per seed.
+// Where the recording is a model evaluation and the sweep is arithmetic -- which
+// is the case for any System whose rates are a solve -- a seed past the first is
+// nearly free, and a caller wanting several rows of one trajectory pays for one.
+template <class System>
+concept BatchedAdjointRates =
+  AdjointRates<System> &&
+  requires(System s, const std::vector<std::vector<typename System::value_type>>& in,
+           std::vector<std::vector<typename System::value_type>>& out) {
+    { s.ode_rates_adjoint_batched(in, out) } -> std::same_as<void>;
+  };
+
 // Opt-in domain check (#55). A system may declare
 //
 //   bool ode_state_valid(const state_type& y) const;

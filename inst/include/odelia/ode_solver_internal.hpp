@@ -64,6 +64,21 @@ public:
     resize(lambda_out.size());
     stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in);
   }
+  // The same step for several seeds at once; see Step::step_adjoint_batched.
+  void step_adjoint_batched(System& system, double time, double step_size,
+                            const state_type& y,
+                            const std::vector<state_type>& lambda_out,
+                            std::vector<state_type>& lambda_in) {
+    if (method == Method::rodas) {
+      util::stop("method='rodas' has no adjoint; use method='rkck'.");
+    }
+    // The stage buffers are sized for the width being swept, exactly as the
+    // single-seed form does it; every seed carries the same width.
+    resize(lambda_out.front().size());
+    stepper.step_adjoint_batched(system, time, step_size, y, lambda_out,
+                                 lambda_in);
+  }
+
 
   void step_to(System& system, double time_max_);
   void step_by(System& system, double step_size);
