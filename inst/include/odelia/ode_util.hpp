@@ -27,6 +27,15 @@ inline bool is_finite(double x) {
   return std::isfinite(x);
 }
 
+// Strip every AD layer off a value, down to the plain double. xad::value() peels
+// one layer, which is enough for AReal<double> or FReal<double> but not for a
+// nested FReal<AReal<double>>, where it yields AReal<double>; this recurses until
+// it bottoms out at double. `value` is found by argument-dependent lookup at the
+// point of use, so this header needs no XAD include.
+inline double to_passive(double x) { return x; }
+template <typename T>
+inline double to_passive(const T& x) { return to_passive(value(x)); }
+
 // Throws; never returns. The attribute lets the compiler see that callers whose
 // error branches end in util::stop() do not fall through.
 [[noreturn]] inline void stop(const std::string &msg) {
