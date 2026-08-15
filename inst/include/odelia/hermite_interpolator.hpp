@@ -87,6 +87,46 @@ public:
     set_data(y_, dydx_);
   }
 
+  // Nodes a lattice of `spacing` needs to reach one node past `upper`, which is
+  // what puts a query at exactly `upper` inside a span rather than on the last
+  // node. Arithmetic only, so a caller can bound the count before an allocation
+  // is asked for and refuse in the words of its own domain.
+  static std::size_t lattice_size(double spacing, double upper) {
+    if (!(spacing > 0.0))
+      util::stop("hermite_interpolator: lattice spacing must be positive");
+    if (!(upper >= 0.0))
+      util::stop("hermite_interpolator: lattice bound must not be negative");
+    return static_cast<std::size_t>(std::ceil(upper / spacing)) + 2;
+  }
+
+  // Lay the lattice k * spacing, or extend the one already held to `nodes`.
+  //
+  // Every position is a constant of the lattice rather than of the caller's
+  // state, which is the property a reverse pass needs: a node the caller's own
+  // values could move would carry a derivative the interpolant does not take.
+  // An extension adds nodes past the ones every existing span covers, so it is
+  // bit-identical for every query the old grid answered.
+  //
+  // Long enough is not the whole test. A grid laid by init() or restored from
+  // stored state can be long enough while sitting somewhere else entirely, so
+  // whether the held nodes ARE this lattice is read off them rather than
+  // remembered, and the two cannot drift.
+  void ensure_lattice(double spacing, std::size_t nodes) {
+    if (nodes < 2)
+      util::stop("hermite_interpolator: a lattice needs at least 2 nodes");
+    const bool held_is_lattice =
+      x.size() >= 2 && x.front() == 0.0 && x[1] == spacing &&
+      x.back() == static_cast<double>(x.size() - 1) * spacing;
+    if (held_is_lattice && x.size() >= nodes) {
+      return;
+    }
+    std::vector<double> lattice(nodes);
+    for (std::size_t k = 0; k < nodes; ++k) {
+      lattice[k] = static_cast<double>(k) * spacing;
+    }
+    set_nodes(lattice);
+  }
+
   void clear() {
     x.clear(); y.clear(); m.clear(); spans.clear();
     inv_h0 = 0.0;

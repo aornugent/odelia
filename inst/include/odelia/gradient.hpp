@@ -144,6 +144,84 @@ std::pair<double, std::vector<double>> compute_gradient(
     return {values[0], jacobian[0]};
 }
 
+// The same block recorded ONCE and swept once per seed: `input_adjoints[m]` receives
+// transpose(jacobian) * output_adjoints[m]. A caller wanting several rows of the same
+// block pays one recording rather than one per row, and where the recording is the
+// expensive part -- which is the case whenever `f` is a model evaluation rather than
+// arithmetic -- that is the whole of the cost.
+//
+// Each sweep is bit-identical to the row a fresh recording of `f` would give, because
+// clearDerivatives() returns the tape's derivative slots to zero while leaving the
+// recorded operations alone. That is what makes this substitutable for the single-seed
+// form above rather than an approximation of it.
+//
+// An empty seed is swept anyway rather than skipped: the row is then zeros, which is
+// what the caller's accumulator expects, and skipping would make the result depend on
+// which seeds happen to vanish at this state.
+template <class F>
+std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
+                                     const std::vector<double>& x,
+                                     const std::vector<std::vector<double>>& output_adjoints,
+                                     F&& f,
+                                     std::vector<std::vector<double>>& input_adjoints) {
+    using ad = xad::adj<double>;
+    using ad_type = ad::active_type;
+
+    ad::tape_type* active = ad::tape_type::getActive();
+    if (active != nullptr && active != &tape) {
+        util::stop("vector_jacobian_products: a tape is already active");
+    }
+    if (x.empty()) {
+        util::stop("vector_jacobian_products: 'x' must have at least one entry");
+    }
+    if (output_adjoints.empty()) {
+        util::stop("vector_jacobian_products: needs at least one seed");
+    }
+    const std::size_t n_out = output_adjoints.front().size();
+    if (n_out == 0) {
+        util::stop("vector_jacobian_products: a seed must have at least one entry");
+    }
+    for (const std::vector<double>& s : output_adjoints) {
+        if (s.size() != n_out) {
+            util::stop("vector_jacobian_products: every seed must have one entry per "
+                       "output; they are swept over one recording of the same block");
+        }
+    }
+
+    tape.activate();
+    tape_guard<ad::tape_type> guard{&tape};
+    tape.clearAll();
+
+    std::vector<ad_type> x_active(x.begin(), x.end());
+    tape.registerInputs(x_active);
+    tape.newRecording();
+
+    std::vector<ad_type> y_active(n_out);
+    f(x_active, y_active);
+    if (y_active.size() != n_out) {
+        util::stop("vector_jacobian_products: 'f' resized the output buffer; it is "
+                   "handed one entry per output adjoint and must write in place");
+    }
+    tape.registerOutputs(y_active);
+
+    input_adjoints.resize(output_adjoints.size());
+    for (std::size_t m = 0; m < output_adjoints.size(); ++m) {
+        // Between sweeps, or the previous seed's adjoints are still on the slots and
+        // every row after the first is the running sum of the ones before it.
+        tape.clearDerivatives();
+        for (std::size_t i = 0; i < y_active.size(); ++i) {
+            xad::derivative(y_active[i]) = output_adjoints[m][i];
+        }
+        tape.computeAdjoints();
+        input_adjoints[m].resize(x.size());
+        for (std::size_t i = 0; i < x_active.size(); ++i) {
+            input_adjoints[m][i] = xad::derivative(x_active[i]);
+        }
+    }
+
+    return tape.getMemory();
+}
+
 // One block of `f`, recorded and swept once on the tape handed in: `input_adjoints`
 // receives transpose(jacobian) * output_adjoints, and the return value is the recording's
 // size. `f` is instantiated at the active scalar here, so only doubles cross in and out.
