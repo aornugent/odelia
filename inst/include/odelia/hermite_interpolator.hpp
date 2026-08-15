@@ -141,9 +141,16 @@ public:
 
   bool is_initialised() const { return initialised; }
   std::size_t size() const { return x.size(); }
-  double min() const { return x.front(); }
-  double max() const { return x.back(); }
+  // An empty interpolant covers nothing, so its bounds are an empty interval
+  // rather than a read off an empty vector.
+  double min() const { return x.empty() ? 0.0 : x.front(); }
+  double max() const { return x.empty() ? 0.0 : x.back(); }
   const std::vector<double>& knots() const { return x; }
+  // The data as supplied. A knot slope read back out of a span is m * h * (1/h)
+  // and not bit-identical to the m that went in, so a caller storing state reads
+  // it here rather than reconstructing it.
+  const std::vector<S>& values() const { return y; }
+  const std::vector<S>& slopes() const { return m; }
 
   // Value at u. Outside the knot range the end span's line is extended (value and
   // slope of the nearest end), which keeps the read C1 across the boundary instead
