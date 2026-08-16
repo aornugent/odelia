@@ -416,14 +416,16 @@ std::size_t solve_adjoint_over_widenings(
         std::sort(cuts.begin(), cuts.end());
         std::size_t upper = segment.last;
         for (std::size_t c = cuts.size(); c-- > 0;) {
-            solver.solve_adjoint_batched(sweep_states, lambda, cuts[c], upper);
+            solver.solve_adjoint_batched(sweep_states, lambda,
+                                         parameter_adjoint, cuts[c], upper);
             upper = cuts[c];
             ++swept;
         }
         // A widening at the first recorded step leaves the lowest segment with no
         // step in it, which is what a run from an empty state gives.
         if (segment.first < upper) {
-            solver.solve_adjoint_batched(sweep_states, lambda, segment.first,
+            solver.solve_adjoint_batched(sweep_states, lambda,
+                                         parameter_adjoint, segment.first,
                                          upper);
             ++swept;
         }

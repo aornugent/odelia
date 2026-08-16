@@ -53,8 +53,11 @@ lv_system <- '
     }
 
     // The transpose of compute_rates at the state currently loaded.
+    // This System has no differentiable parameters on the rate path, so the
+    // accumulator it is handed is left as it was rather than added to.
     template <class ItIn, class ItOut>
-    ItOut ode_rates_adjoint(ItIn lambda_dydt, ItOut lambda_y) {
+    ItOut ode_rates_adjoint(ItIn lambda_dydt, ItOut lambda_y,
+                            std::vector<double>& /* parameter_adjoint */) {
       const double l0 = *lambda_dydt++;
       const double l1 = *lambda_dydt++;
       *lambda_y++ = (a - b * p) * l0 + (c * b * p) * l1;
@@ -107,7 +110,9 @@ compile_rates_adjoint_interface <- function() {
       LotkaVolterra adj(pars[0], pars[1], pars[2], pars[3]);
       adj.rate_calls = 0;
       std::vector<double> lambda_in;
-      stepper.step_adjoint(adj, time, step_size, y, lambda_out, lambda_in);
+      std::vector<double> parameter_adjoint;
+      stepper.step_adjoint(adj, time, step_size, y, lambda_out, lambda_in,
+                           parameter_adjoint);
 
       return Rcpp::List::create(Rcpp::_["y_end"] = y_end,
                                 Rcpp::_["lambda_in"] = lambda_in,
@@ -172,8 +177,10 @@ compile_rates_adjoint_interface <- function() {
       }
 
       std::vector<double> lambda(lambda_end);
-      replay.solve_adjoint(states, lambda, (size_t) split, states.size() - 1);
-      replay.solve_adjoint(states, lambda, 0, (size_t) split);
+      std::vector<double> parameter_adjoint;
+      replay.solve_adjoint(states, lambda, parameter_adjoint, (size_t) split,
+                           states.size() - 1);
+      replay.solve_adjoint(states, lambda, parameter_adjoint, 0, (size_t) split);
       return lambda;
     }
 

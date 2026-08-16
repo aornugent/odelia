@@ -82,7 +82,9 @@ compile_step_adjoint_interface <- function() {
       // puts the system back to.
       stage_log.clear();
       std::vector<double> lambda_in;
-      stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in);
+      std::vector<double> parameter_adjoint;
+      stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in,
+                           parameter_adjoint);
       Rcpp::List rebuilt(6);
       for (int j = 0; j < 6; ++j) rebuilt[j] = stage_log[7 + (5 - j)];
 
@@ -107,7 +109,9 @@ compile_step_adjoint_interface <- function() {
       stepper.step(system, time, step_size, y_end, yerr, dydt_in, dydt_out);
 
       std::vector<double> lambda_in;
-      stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in);
+      std::vector<double> parameter_adjoint;
+      stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in,
+                           parameter_adjoint);
 
       return Rcpp::List::create(Rcpp::_["y_end"] = y_end,
                                 Rcpp::_["lambda_in"] = lambda_in);
@@ -239,7 +243,9 @@ compile_step_adjoint_on <- function(rebind_body) {
       odelia::ode::Step<Decay> stepper;
       stepper.resize(1);
       std::vector<double> y(1, 1.0), lambda_out(1, 1.0), lambda_in(1);
-      stepper.step_adjoint(system, 0.0, 0.1, y, lambda_out, lambda_in);
+      std::vector<double> parameter_adjoint;
+      stepper.step_adjoint(system, 0.0, 0.1, y, lambda_out, lambda_in,
+                           parameter_adjoint);
       return lambda_in;
     }
   ', rebind_body))

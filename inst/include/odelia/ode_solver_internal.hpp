@@ -53,7 +53,8 @@ public:
   // the Rosenbrock stepper carries no reverse counterpart.
   void step_adjoint(System& system, double time, double step_size,
                     const state_type& y, const state_type& lambda_out,
-                    state_type& lambda_in) {
+                    state_type& lambda_in,
+                    std::vector<double>& parameter_adjoint) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
@@ -62,13 +63,15 @@ public:
     // stage buffers are sized once at construction. A sweep is the end of the
     // solver's forward state either way: every stage rebuild overwrites it.
     resize(lambda_out.size());
-    stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in);
+    stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in,
+                         parameter_adjoint);
   }
   // The same step for several seeds at once; see Step::step_adjoint_batched.
   void step_adjoint_batched(System& system, double time, double step_size,
                             const state_type& y,
                             const std::vector<state_type>& lambda_out,
-                            std::vector<state_type>& lambda_in) {
+                            std::vector<state_type>& lambda_in,
+                            std::vector<std::vector<double>>& parameter_adjoint) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
@@ -76,7 +79,7 @@ public:
     // single-seed form does it; every seed carries the same width.
     resize(lambda_out.front().size());
     stepper.step_adjoint_batched(system, time, step_size, y, lambda_out,
-                                 lambda_in);
+                                 lambda_in, parameter_adjoint);
   }
 
 

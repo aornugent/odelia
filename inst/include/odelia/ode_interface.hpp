@@ -105,11 +105,11 @@ concept WidensState =
 // transpose reads back the point the rates were evaluated at.
 template <typename System>
 concept AdjointRates =
-  requires(System s, double time,
+  requires(System s, double time, std::vector<double>& parameter_adjoint,
            typename std::vector<typename System::value_type>::const_iterator in,
            typename std::vector<typename System::value_type>::iterator out) {
     { s.set_ode_state_and_field(in, time) } -> std::same_as<decltype(in)>;
-    { s.ode_rates_adjoint(in, out) } -> std::same_as<decltype(out)>;
+    { s.ode_rates_adjoint(in, out, parameter_adjoint) } -> std::same_as<decltype(out)>;
     { s.aux_size() } -> std::convertible_to<size_t>;
     { s.ode_aux(out) } -> std::same_as<decltype(out)>;
     { s.set_ode_aux(in) } -> std::same_as<decltype(in)>;
@@ -124,8 +124,9 @@ template <class System>
 concept BatchedAdjointRates =
   AdjointRates<System> &&
   requires(System s, const std::vector<std::vector<typename System::value_type>>& in,
-           std::vector<std::vector<typename System::value_type>>& out) {
-    { s.ode_rates_adjoint_batched(in, out) } -> std::same_as<void>;
+           std::vector<std::vector<typename System::value_type>>& out,
+           std::vector<std::vector<double>>& parameter_adjoint) {
+    { s.ode_rates_adjoint_batched(in, out, parameter_adjoint) } -> std::same_as<void>;
   };
 
 // Opt-in domain check (#55). A system may declare

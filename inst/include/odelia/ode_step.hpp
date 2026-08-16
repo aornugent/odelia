@@ -31,7 +31,8 @@ public:
                     double time, double step_size,
                     const state_type &y,
                     const state_type &lambda_out,
-                    state_type &lambda_in);
+                    state_type &lambda_in,
+                    std::vector<double>& parameter_adjoint);
 
   // The same step transposed for several seeds at once. The six rate
   // evaluations that rebuild the stage aux run ONCE, and the System's transpose
@@ -42,7 +43,8 @@ public:
                             double time, double step_size,
                             const state_type &y,
                             const std::vector<state_type> &lambda_out,
-                            std::vector<state_type> &lambda_in);
+                            std::vector<state_type> &lambda_in,
+                            std::vector<std::vector<double>>& parameter_adjoint);
 
   void derivs(System& system, const state_type& y, state_type& dydt, double t, int index) {
     return ode::derivs(system, y, dydt, t, index);
@@ -314,7 +316,8 @@ void Step<System>::step_adjoint_batched(System& system,
                                         double time, double step_size,
                                         const state_type &y,
                                         const std::vector<state_type> &lambda_out,
-                                        std::vector<state_type> &lambda_in) {
+                                        std::vector<state_type> &lambda_in,
+                                        std::vector<std::vector<double>>& parameter_adjoint) {
   static_assert(BatchedAdjointRates<System>,
                 "step_adjoint_batched needs the System's ode_rates_adjoint_batched "
                 "hook; a System without one is swept one seed at a time");
@@ -358,7 +361,8 @@ void Step<System>::step_adjoint_batched(System& system,
                    std::vector<state_type>& lambda_stage) -> void {
     system.set_ode_state_and_field(stage.begin(), stage_t);
     system.set_ode_aux(aux[i].cbegin());
-    system.ode_rates_adjoint_batched(lambda_rate, lambda_stage);
+    system.ode_rates_adjoint_batched(lambda_rate, lambda_stage,
+                                     parameter_adjoint);
   });
   // The last stage swept is stage 0, whose state is y, so the System is already
   // back where the step started.
@@ -369,7 +373,8 @@ void Step<System>::step_adjoint(System& system,
                                 double time, double step_size,
                                 const state_type &y,
                                 const state_type &lambda_out,
-                                state_type &lambda_in) {
+                                state_type &lambda_in,
+                                std::vector<double>& parameter_adjoint) {
   using active_type = active_scalar<value_type>;
   using ad = xad::adj<value_type>;
 
@@ -421,7 +426,8 @@ void Step<System>::step_adjoint(System& system,
       // value_type here would compute all of it a second time.
       system.set_ode_state_and_field(stage.begin(), stage_t);
       system.set_ode_aux(aux[i].cbegin());
-      system.ode_rates_adjoint(lambda_rate.begin(), lambda_stage.begin());
+      system.ode_rates_adjoint(lambda_rate.begin(), lambda_stage.begin(),
+                               parameter_adjoint);
     });
     // The last stage swept is stage 0, whose state is y, so the System is
     // already back where the step started.
@@ -429,6 +435,13 @@ void Step<System>::step_adjoint(System& system,
     static_assert(Rebindable<System, active_type>,
                   "step_adjoint needs the System's rebind_from() hook to lift it to the "
                   "adjoint scalar, or ode_rates_adjoint to carry the transpose itself");
+    // This branch records the state's route to the rates and nothing else, so a
+    // caller wanting parameter rows is asking for something it cannot supply.
+    // Refused rather than left as the zeros it would otherwise add.
+    if (!parameter_adjoint.empty()) {
+      util::stop("step_adjoint: this System has no ode_rates_adjoint, so the "
+                 "stage is taped here and carries no parameter rows");
+    }
     auto twin = system.template rebind_from<active_type>();
     typename ad::tape_type tape;  // Activates here; deactivates when it goes out of scope.
     sweep_stages(time, h, y, lambda_k, lambda_in,

@@ -258,7 +258,8 @@ public:
   void solve_adjoint(const std::vector<ode::state_type<System> >& states,
                      ode::state_type<System>& lambda)
   {
-    solve_adjoint(states, lambda, 0, states.size() - 1);
+    std::vector<double> no_parameters;
+    solve_adjoint(states, lambda, no_parameters, 0, states.size() - 1);
   }
 
   // The same sweep restricted to steps k_last down to k_first + 1, so on return
@@ -266,7 +267,8 @@ public:
   // the width the System holds, so a caller whose System changes width between
   // steps sweeps one segment per width and changes the System in between.
   void solve_adjoint(const std::vector<ode::state_type<System> >& states,
-                     ode::state_type<System>& lambda, size_t k_first,
+                     ode::state_type<System>& lambda,
+                     std::vector<double>& parameter_adjoint, size_t k_first,
                      size_t k_last)
   {
     if (!has_recording()) {
@@ -283,7 +285,7 @@ public:
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
       solver.step_adjoint(system, t[k - 1], h[k], states[k - 1], lambda,
-                          lambda_in);
+                          lambda_in, parameter_adjoint);
       lambda = lambda_in;
     }
   }
@@ -294,6 +296,7 @@ public:
   // saving is, because a recording is a model evaluation and a sweep is not.
   void solve_adjoint_batched(const std::vector<ode::state_type<System> >& states,
                              std::vector<ode::state_type<System> >& lambda,
+                             std::vector<std::vector<double>>& parameter_adjoint,
                              size_t k_first, size_t k_last)
   {
     if (!has_recording()) {
@@ -315,7 +318,7 @@ public:
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
       solver.step_adjoint_batched(system, t[k - 1], h[k], states[k - 1], lambda,
-                                  lambda_in);
+                                  lambda_in, parameter_adjoint);
       lambda = lambda_in;
     }
   }
