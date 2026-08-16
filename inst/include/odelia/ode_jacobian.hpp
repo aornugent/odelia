@@ -54,6 +54,25 @@ struct rebound_system<S, U, false> {
   using type = S;
 };
 
+// A twin that can be put back to holding what the System holds without being
+// rebuilt: the values a rebind copies, written into a twin that already exists.
+template <typename Twin, typename S>
+concept SeatsFrom = requires(Twin& t, const S& s) {
+  t.seat_from(s);
+};
+
+// Which of the two a recording re-seats its twin with. A rebind of a System
+// whose copy allocates per element costs what the recording costs, and this
+// runs once per recording.
+template <typename S, typename Twin>
+void seat_twin(const S& system, Twin& twin) {
+  if constexpr (SeatsFrom<Twin, S>) {
+    twin.seat_from(system);
+  } else {
+    twin = system.template rebind_from<typename Twin::value_type>();
+  }
+}
+
 // Forward-mode AD Jacobian helper. Owns the active twin and scratch buffers so
 // that repeated evaluations (once per accepted step) reuse storage.
 template <typename System>
