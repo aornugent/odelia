@@ -3,9 +3,11 @@
 #define ODELIA_ADJOINT_HPP_
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_interface.hpp>
+#include <odelia/ode_jacobian.hpp>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
@@ -16,6 +18,34 @@ template <typename Tape>
 struct tape_guard {
   Tape* tape;
   ~tape_guard() { tape->deactivate(); }
+};
+
+// A tape held across the recordings taken on it, and built on first use.
+// Clearing between recordings keeps the capacity the largest of them grew,
+// where one built per recording regrows it every time.
+//
+// A copy gets its own rather than sharing: two holders recording on one tape
+// would each clear the other's recording, and the check that a foreign tape is
+// active would not fire, because it is not foreign.
+class scratch_tape {
+public:
+  using tape_type = typename active_scalar<double>::tape_type;
+
+  scratch_tape() = default;
+  scratch_tape(const scratch_tape&) {}
+  scratch_tape& operator=(const scratch_tape&) { tape.reset(); return *this; }
+  scratch_tape(scratch_tape&&) = default;
+  scratch_tape& operator=(scratch_tape&&) = default;
+
+  tape_type& get() {
+    if (!tape) {
+      tape = std::make_unique<tape_type>(false);
+    }
+    return *tape;
+  }
+
+private:
+  std::unique_ptr<tape_type> tape;
 };
 
 // One block of `f`, recorded and swept once on the tape handed in: `input_adjoints`
@@ -261,6 +291,48 @@ std::size_t state_and_parameter_adjoints(
         }
     }
     return recording;
+}
+
+// The transpose of one rate evaluation: `state_adjoint[m]` receives
+// transpose(d dydt / d y) * rate_adjoints[m], with the twin's parameters in the
+// same recording, so a rate the parameters reach carries their rows too.
+//
+// What is recorded is derivs() on the twin -- the call the forward pass makes --
+// so the transpose cannot drift from the rates it transposes, and a System that
+// restores a recorded field restores it here as well. Everything between the
+// state and the rates is an intermediate of that one recording, so nothing
+// between them needs a transpose written for it.
+//
+// `stage` is the recorded stage the evaluation belongs to; negative where none
+// does, which is the step's first evaluation, whose rate the step before it took.
+//
+// The twin is re-seated from the System here rather than by the caller: a
+// recording clears the tape, so a twin arriving with the last one's slots writes
+// this one's operations onto numbers already handed out, and the sweep comes back
+// wrong with nothing raised.
+template <class System, class Twin>
+std::size_t rates_adjoint(
+    xad::adj<double>::tape_type& tape, const System& system, Twin& twin,
+    const std::vector<double>& state, double time, int stage,
+    const std::vector<std::vector<double>>& rate_adjoints,
+    std::vector<std::vector<double>>& state_adjoint,
+    std::vector<std::vector<double>>& parameter_adjoint) {
+    using scalar = active_scalar<double>;
+    seat_twin(system, twin);
+    const std::size_t n_state = state.size();
+    auto rates = [&](typename std::vector<scalar>::const_iterator x,
+                     std::vector<scalar>& dydt) -> void {
+        // The state half of the recorded inputs; the twin's parameters are
+        // already written from the other half.
+        std::vector<scalar> y(x, x + static_cast<std::ptrdiff_t>(n_state));
+        if (stage < 0) {
+            ode::derivs(twin, y, dydt, time);
+        } else {
+            ode::derivs(twin, y, dydt, time, stage);
+        }
+    };
+    return state_and_parameter_adjoints(tape, twin, state, rate_adjoints, rates,
+                                        state_adjoint, parameter_adjoint);
 }
 
 }
