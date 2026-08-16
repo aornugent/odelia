@@ -40,8 +40,7 @@ public:
 
   // The step transposed for several seeds at once. The six rate evaluations that
   // rebuild the stage run ONCE, and each stage's transpose is recorded once and
-  // swept per seed -- on the System's own hook where it has one, on a tape here
-  // where it has not.
+  // swept per seed.
   template <class Twin>
   void step_adjoint_batched(System& system,
                             double time, double step_size,
@@ -50,6 +49,12 @@ public:
                             std::vector<state_type> &lambda_in,
                             std::vector<std::vector<double>>& parameter_adjoint,
                             Twin& twin);
+
+  // How many stage transposes have been swept, seeds counted separately. A row
+  // that acts once per stage is multiplied by this, and a row correct per
+  // evaluation and wrong in its multiplier is a different failure from a wrong
+  // row, which neither a tangent nor a sweep can see.
+  std::size_t stage_sweeps = 0;
 
   void derivs(System& system, const state_type& y, state_type& dydt, double t, int index) {
     return ode::derivs(system, y, dydt, t, index);
@@ -82,6 +87,9 @@ private:
   // Intermediate storage, representing state (was GSL rkck_state_t)
   size_t size;
   state_type k1, k2, k3, k4, k5, k6, ytmp;
+
+  // The tape the stage transposes record on, one for every step a sweep walks.
+  scratch_tape adjoint_tape;
 
   // Cash carp constants, from GSL.
   static const double ah[];
@@ -280,11 +288,10 @@ void Step<System>::sweep_stages(double time, double h, const state_type& y,
 // a stage's rate adjoint is complete only once the stages above it are swept. Every
 // seed rides the same trajectory, so both run ONCE however many are carried.
 //
-// A System carrying its own rate transpose is swept through it, at the state, field
-// and aux of each stage, on the caller's `twin`. Any other System has each stage
-// recorded on a tape of this function's own, on the System lifted to the adjoint
-// scalar, and swept once per seed -- the state and the twin's parameters in one
-// recording, so a stage the parameters reach carries their rows too.
+// Each stage is recorded once on the tape this stepper keeps and swept once per
+// seed -- the state and the twin's parameters in one recording, so a stage the
+// parameters reach carries their rows too. The recording is derivs(), which is
+// what the forward pass calls, so no System writes a transpose of its own.
 template <class System>
 template <class Twin>
 void Step<System>::step_adjoint_batched(System& system,
@@ -295,38 +302,26 @@ void Step<System>::step_adjoint_batched(System& system,
                                         std::vector<std::vector<double>>& parameter_adjoint,
                                         Twin& twin) {
   using active_type = active_scalar<double>;
+  static_assert(Rebindable<System, active_type>,
+                "step_adjoint_batched needs the System's rebind_from() hook to "
+                "lift it to the adjoint scalar");
   const double h = step_size;
   const std::size_t n_seed = lambda_out.size();
   if (n_seed == 0) {
     util::stop("step_adjoint_batched: needs at least one seed");
   }
 
-  std::vector<state_type> aux;
-  if constexpr (AdjointRates<System, Twin>) {
-    // Six rate evaluations, k1 among them: first-same-as-last carries k1 into
-    // step() as the previous step's dydt_out, which a reverse traversal has not
-    // rebuilt, so it is re-derived here at this step's own start state. Each
-    // stage's aux is kept for the sweep to hand back.
-    state_type* const k[] = {&k1, &k2, &k3, &k4, &k5, &k6};
-    aux.assign(6, state_type(system.aux_size()));
-    for (int i = 0; i < 6; ++i) {
-      stage_state(i, y, h);
-      if (i == 0) {
-        ode::derivs(system, ytmp, *k[i], time);
-      } else {
-        ode::derivs(system, ytmp, *k[i], stage_time(i, time, h), i - 1);
-      }
-      system.ode_aux(aux[i].begin());
+  // Six rate evaluations, k1 among them: first-same-as-last carries k1 into
+  // step() as the previous step's dydt_out, which a reverse traversal has not
+  // rebuilt, so it is re-derived here at this step's own start state.
+  state_type* const k[] = {&k1, &k2, &k3, &k4, &k5, &k6};
+  for (int i = 0; i < 6; ++i) {
+    stage_state(i, y, h);
+    if (i == 0) {
+      ode::derivs(system, ytmp, *k[i], time);
+    } else {
+      ode::derivs(system, ytmp, *k[i], stage_time(i, time, h), i - 1);
     }
-  } else {
-    static_assert(Rebindable<System, active_type>,
-                  "step_adjoint_batched needs the System's rebind_from() hook to lift "
-                  "it to the adjoint scalar, or its own rate transpose");
-    // Retake the step to refill k1..k6; step() overwrites the state it is given,
-    // so the start state is read from y throughout below.
-    state_type dydt_in(size), dydt_out(size), yerr(size), y_end(y);
-    ode::derivs(system, y, dydt_in, time);
-    step(system, time, h, y_end, yerr, dydt_in, dydt_out);
   }
 
   // The direct term of y_end = y + h * (c1 k1 + c3 k3 + c4 k4 + c6 k6), then the
@@ -344,55 +339,19 @@ void Step<System>::step_adjoint_batched(System& system,
     }
   }
 
-  if constexpr (AdjointRates<System, Twin>) {
-    sweep_stages(time, h, y, lambda_k, lambda_in,
-                 [&](int i, double stage_t, const state_type& stage,
-                     const std::vector<state_type>& lambda_rate,
-                     std::vector<state_type>& lambda_stage) -> void {
-      // Where the transpose is taken from, then this stage's aux, then the
-      // transpose. No rate evaluation: the System's transpose carries the rate
-      // chain itself, and one in value_type here would compute all of it again.
-      system.set_ode_state_for_adjoint(stage.begin(), stage_t);
-      system.set_ode_aux(aux[i].cbegin());
-      system.ode_rates_adjoint_batched(lambda_rate, lambda_stage,
-                                       parameter_adjoint, twin);
-    });
-    // The last stage swept is stage 0, whose state is y, so the System is already
-    // back where the step started.
-  } else {
-    // One tape for the six stages, constructed inactive so a tape already active
-    // here belongs to someone else and the recording stops on it.
-    typename active_type::tape_type tape(false);
-    sweep_stages(time, h, y, lambda_k, lambda_in,
-                 [&](int i, double stage_t, const state_type& stage,
-                     const std::vector<state_type>& lambda_rate,
-                     std::vector<state_type>& lambda_stage) -> void {
-      // Re-seated from the System before every recording. A recording clears the
-      // tape, so a twin arriving with the last one's slots writes this one's
-      // operations onto numbers already handed out, and the sweep comes back
-      // wrong with nothing raised.
-      twin = system.template rebind_from<active_type>();
-      auto rates = [&](typename std::vector<active_type>::const_iterator x,
-                       std::vector<active_type>& dydt) -> void {
-        // The state half of the recorded inputs; the twin's parameters are
-        // already written from the other half.
-        std::vector<active_type> stage_values(
-            x, x + static_cast<std::ptrdiff_t>(size));
-        if (i == 0) {
-          ode::derivs(twin, stage_values, dydt, stage_t);
-        } else {
-          ode::derivs(twin, stage_values, dydt, stage_t, i - 1);
-        }
-      };
-      state_and_parameter_adjoints(tape, twin, stage, lambda_rate, rates,
-                                   lambda_stage, parameter_adjoint);
-    });
+  sweep_stages(time, h, y, lambda_k, lambda_in,
+               [&](int i, double stage_t, const state_type& stage,
+                   const std::vector<state_type>& lambda_rate,
+                   std::vector<state_type>& lambda_stage) -> void {
+    ode::rates_adjoint(adjoint_tape.get(), system, twin, stage, stage_t, i - 1,
+                       lambda_rate, lambda_stage, parameter_adjoint);
+    stage_sweeps += n_seed;
+  });
 
-    // Retaking the step walked the System through the stage states and left it at
-    // the last of them, so put it back where the step started. A caller sweeping
-    // steps backwards reads the System between calls.
-    ode::internal::set_ode_state(system, y, time);
-  }
+  // Rebuilding the stages walked the System through their states and left it at
+  // the last of them, so put it back where the step started. A caller sweeping
+  // steps backwards reads the System between calls.
+  ode::internal::set_ode_state(system, y, time);
 }
 
 template <class System>

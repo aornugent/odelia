@@ -320,6 +320,14 @@ public:
     }
   }
 
+  // How many stage transposes the sweeps since the last clear have taken, seeds
+  // counted separately. A row that enters once per stage is multiplied by this,
+  // and a row correct per evaluation and wrong in its multiplier is a different
+  // failure from a wrong row: no gradient check can see it, because a tangent
+  // and a sweep apply the same multiplier.
+  std::size_t stage_sweeps() const { return solver.stage_sweeps(); }
+  void clear_stage_sweeps() { solver.clear_stage_sweeps(); }
+
   // Hand the recorded replay schedule (L1) to this solver. The active twin holds no
   // recording of its own (rebind copies values, not the schedule), so the schedule is
   // handed over per gradient call -- the L1 analogue of the System's set_recording for

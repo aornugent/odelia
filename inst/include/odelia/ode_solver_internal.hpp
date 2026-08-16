@@ -72,6 +72,11 @@ public:
                                  lambda_in, parameter_adjoint, twin);
   }
 
+  // Stage transposes swept since the count was last cleared, seeds counted
+  // separately.
+  std::size_t stage_sweeps() const { return stepper.stage_sweeps; }
+  void clear_stage_sweeps() { stepper.stage_sweeps = 0; }
+
 
   void step_to(System& system, double time_max_);
   void step_by(System& system, double step_size);

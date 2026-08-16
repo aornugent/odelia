@@ -171,52 +171,41 @@ fixed order, so a 30-parameter System is one `return {&a, &b, …}` rather than 
 Nothing forces a System to be differentiable — one without these still simulates.
 (`LorenzSystem` is the worked example.)
 
-### Carrying your own rate transpose: the `AdjointRates` hooks
+### The twin a stage recording is taken on: `rebind_from`, and `seat_from`
 
 A reverse sweep needs, at each stage, the transpose of the rate evaluation: the adjoints of
-`dydt` taken back to the adjoints of `y`, one row per seed. By default
-`Step::step_adjoint_batched` builds that itself — it seats the System at the adjoint scalar and
-records the stage once, then sweeps that one recording per seed, so the caller's sweep stays in
-`value_type`. The state and the twin's `ad_parameters()` are recorded together, so the stage
-carries parameter rows as well as state rows. That needs nothing from the System but
-`rebind_from`, and a `static_assert` on `Rebindable` says so where it is missing.
-
-A System that already knows its own transpose supplies it instead:
-
-```cpp
-template <typename It> It set_ode_state_for_adjoint(It it, double time);
-template <class Twin>
-void ode_rates_adjoint_batched(const std::vector<std::vector<double>>& lambda_dydt,
-                               std::vector<std::vector<double>>& lambda_y,
-                               std::vector<std::vector<double>>& parameter_adjoint,
-                               Twin& twin);
-```
-
-Satisfying `AdjointRates` (in `ode_interface.hpp`) switches the step onto them with
-`if constexpr` — a compile-time choice, so a System that satisfies neither is refused at the
-`static_assert` rather than falling back. The concept also requires the aux family, because
-that is how a stage's operating point is carried across: the sweep hands each stage's aux back
-before taking the transpose, so the transpose reads the point the rates were evaluated at
-rather than re-deriving it.
-
-`set_ode_state_for_adjoint` is what `set_ode_state` does **up to** the rate evaluation, and it
-exists because the transpose stands in for that evaluation: a System put at the stage by
-`set_ode_state` would compute the whole rate chain in `double` and then compute it again
-inside the transpose. A System whose `set_ode_state` only loads state can forward one to the
-other.
+`dydt` taken back to the adjoints of `y`, one row per seed. `Step::step_adjoint_batched` builds
+that itself. It rebuilds the six stage states in `value_type`, then for each of them records
+`derivs()` once on the System lifted to the adjoint scalar and sweeps that one recording per
+seed, so the caller's sweep stays in `value_type`. What is recorded is the call the forward
+pass makes, so the transpose cannot drift from the rates it transposes, and a System that
+restores a recorded field restores it there as well. The state and the twin's
+`ad_parameters()` are recorded together, so the stage carries parameter rows as well as state
+rows. That needs nothing from the System but `rebind_from`, and a `static_assert` on
+`Rebindable` says so where it is missing.
 
 `twin` is the System at the adjoint scalar, owned by the caller and handed to every stage. Each
 recording clears the tape, so a twin arriving with the previous recording's slots writes this
 recording's operations onto numbers already handed out and the sweep comes back wrong with
-nothing raised — one seed's rows exact and another's not. A System supplying its own transpose
-writes its values into the twin before recording; the tape branch re-seats it with
-`rebind_from`.
+nothing raised — one seed's rows exact and another's not. It is therefore re-seated before
+every recording, and there are six of those per step. A System that can be re-seated in place
+declares
 
-Two things the branch does not change. `lambda_dydt` and `lambda_y` are in `value_type`, so
-odelia opens no tape on this path — which is the point, and why a System with an analytic or
-hand-assembled transpose pays nothing for the machinery it does not use. And the stage
-traversal is shared: both branches walk the same six stages through the same tableau weights,
-so a bit-identity test on the rebuilt stage states covers them both.
+```cpp
+template <class S2> void seat_from(const System<…, S2>& src);
+```
+
+which writes the values `rebind_from` copies into a twin that already exists. Satisfying
+`SeatsFrom` (in `ode_jacobian.hpp`) switches `seat_twin` onto it with `if constexpr` — a
+compile-time choice; a System without it is rebound instead. The two leave the twin holding the
+same thing, so the choice is a cost one: for a System whose copy allocates per element, a
+rebind per recording costs what the recording costs.
+
+`Step::stage_sweeps` counts the stage transposes taken, seeds counted separately, and
+`Solver::stage_sweeps()` reads it through. A row that enters once per stage is multiplied by
+that count, and a row correct per evaluation and wrong in its multiplier is a different failure
+from a wrong row: no gradient check can see it, because a tangent and a sweep apply the same
+multiplier.
 
 **The adjoint is RKCK only.** `method = "rodas"` has no reverse counterpart and
 `Solver::step_adjoint_batched` stops rather than stepping — a Rosenbrock stage is a linear
