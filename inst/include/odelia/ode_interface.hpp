@@ -96,31 +96,20 @@ concept WidensState =
     s.widened_state(w, time, in, out);
   };
 
-// A System that carries the transpose of its own rate evaluation:
-// ode_rates_adjoint takes the adjoint of dydt to the adjoint of y.
+// A System that carries the transpose of its own rate evaluation, for several
+// rate adjoints at once: ode_rates_adjoint_batched takes the adjoints of dydt to
+// the adjoints of y, recording whatever the transpose is built on once and
+// sweeping it per seed. Where the recording is a model evaluation and the sweep
+// is arithmetic -- which is the case for any System whose rates are a solve -- a
+// seed past the first is nearly free, and a caller wanting several rows of one
+// trajectory pays for one.
+//
 // set_ode_state_for_adjoint puts the System where that transpose is taken from,
 // doing only what the transpose does not redo -- a System that rebuilds its
 // field inside its own recording leaves it here, and one that does not builds it
 // here, and neither can be told which the other is. The aux members carry a
 // stage's operating point across, so the transpose reads back the point the
 // rates were evaluated at.
-template <typename System>
-concept AdjointRates =
-  requires(System s, double time, std::vector<double>& parameter_adjoint,
-           typename std::vector<typename System::value_type>::const_iterator in,
-           typename std::vector<typename System::value_type>::iterator out) {
-    { s.set_ode_state_for_adjoint(in, time) } -> std::same_as<decltype(in)>;
-    { s.ode_rates_adjoint(in, out, parameter_adjoint) } -> std::same_as<decltype(out)>;
-    { s.aux_size() } -> std::convertible_to<size_t>;
-    { s.ode_aux(out) } -> std::same_as<decltype(out)>;
-    { s.set_ode_aux(in) } -> std::same_as<decltype(in)>;
-  };
-
-// A System that can transpose one stage for SEVERAL rate adjoints at once,
-// recording whatever the transpose is built on once and sweeping it per seed.
-// Where the recording is a model evaluation and the sweep is arithmetic -- which
-// is the case for any System whose rates are a solve -- a seed past the first is
-// nearly free, and a caller wanting several rows of one trajectory pays for one.
 //
 // `twin` is the System at the adjoint scalar, owned by the caller and handed to
 // every stage. The System writes its own values into it before each recording:
@@ -129,13 +118,19 @@ concept AdjointRates =
 // sweep comes back wrong -- one seed's rows exact and another's not, with
 // nothing raised.
 template <class System, class Twin>
-concept BatchedAdjointRates =
-  AdjointRates<System> &&
-  requires(System s, const std::vector<std::vector<typename System::value_type>>& in,
-           std::vector<std::vector<typename System::value_type>>& out,
-           std::vector<std::vector<double>>& parameter_adjoint, Twin& twin) {
-    { s.ode_rates_adjoint_batched(in, out, parameter_adjoint, twin) }
+concept AdjointRates =
+  requires(System s, double time,
+           const std::vector<std::vector<typename System::value_type>>& rates_in,
+           std::vector<std::vector<typename System::value_type>>& state_out,
+           std::vector<std::vector<double>>& parameter_adjoint, Twin& twin,
+           typename std::vector<typename System::value_type>::const_iterator in,
+           typename std::vector<typename System::value_type>::iterator out) {
+    { s.set_ode_state_for_adjoint(in, time) } -> std::same_as<decltype(in)>;
+    { s.ode_rates_adjoint_batched(rates_in, state_out, parameter_adjoint, twin) }
       -> std::same_as<void>;
+    { s.aux_size() } -> std::convertible_to<size_t>;
+    { s.ode_aux(out) } -> std::same_as<decltype(out)>;
+    { s.set_ode_aux(in) } -> std::same_as<decltype(in)>;
   };
 
 // Opt-in domain check (#55). A system may declare

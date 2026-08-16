@@ -266,33 +266,29 @@ public:
   // lambda is the adjoint of states[k_first]. Every state it visits has to be
   // the width the System holds, so a caller whose System changes width between
   // steps sweeps one segment per width and changes the System in between.
+  //
+  // One seed, packed into a batch of one and unpacked on the way back.
   void solve_adjoint(const std::vector<ode::state_type<System> >& states,
                      ode::state_type<System>& lambda,
                      std::vector<double>& parameter_adjoint, size_t k_first,
                      size_t k_last)
   {
-    if (!has_recording()) {
-      util::stop("no recorded steps to sweep; run the adaptive pass first");
+    // An empty accumulator starts from zero rather than meaning the rows are not
+    // wanted: they come back either way, and a caller that ignores them has
+    // ignored something it was handed.
+    if (parameter_adjoint.empty()) {
+      parameter_adjoint.assign(sweep_twin().ad_parameters().size(), 0.0);
     }
-    const std::vector<double> t = times();
-    const std::vector<double> h = step_sizes();
-    util::check_length(states.size(), t.size());
-    util::check_length(lambda.size(), system.ode_size());
-    if (k_first >= k_last || k_last >= t.size()) {
-      util::stop("the adjoint segment is not a range of recorded steps");
-    }
-    ode::state_type<System> lambda_in(lambda.size());
-    for (size_t k = k_last; k > k_first; --k) {
-      util::check_length(states[k - 1].size(), system.ode_size());
-      solver.step_adjoint(system, t[k - 1], h[k], states[k - 1], lambda,
-                          lambda_in, parameter_adjoint);
-      lambda = lambda_in;
-    }
+    std::vector<ode::state_type<System> > seed(1, lambda);
+    std::vector<std::vector<double>> rows(1, std::move(parameter_adjoint));
+    solve_adjoint_batched(states, seed, rows, k_first, k_last);
+    parameter_adjoint = std::move(rows[0]);
+    lambda = std::move(seed[0]);
   }
 
   // The same segment, carrying one lambda per seed. Every seed sees the same
   // trajectory, so the stage states are rebuilt once per step however many are
-  // carried and the System's transpose is recorded once -- which is where the
+  // carried and each stage's transpose is recorded once -- which is where the
   // saving is, because a recording is a model evaluation and a sweep is not.
   void solve_adjoint_batched(const std::vector<ode::state_type<System> >& states,
                              std::vector<ode::state_type<System> >& lambda,
@@ -314,20 +310,12 @@ public:
     if (k_first >= k_last || k_last >= t.size()) {
       util::stop("the adjoint segment is not a range of recorded steps");
     }
-    static_assert(Rebindable<System, active_scalar>,
-                  "a batched adjoint sweep records on the System at the adjoint "
-                  "scalar; this System has no rebind_from()");
-    // One twin for the whole segment: its width is the width being swept, so a
-    // segment at another width builds its own.
-    if (!adjoint_twin || adjoint_twin->ode_size() != system.ode_size()) {
-      adjoint_twin = std::make_unique<adjoint_twin_type>(
-          system.template rebind_from<active_scalar>());
-    }
+    adjoint_twin_type& twin = sweep_twin();
     std::vector<ode::state_type<System> > lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
       solver.step_adjoint_batched(system, t[k - 1], h[k], states[k - 1], lambda,
-                                  lambda_in, parameter_adjoint, *adjoint_twin);
+                                  lambda_in, parameter_adjoint, twin);
       lambda = lambda_in;
     }
   }
@@ -362,13 +350,26 @@ public:
   std::unique_ptr<xad::Tape<double>> tape;
 
   // The System at the adjoint scalar the stage transposes record on, built on
-  // the first batched sweep and handed to every stage of it. Rebuilt when the
-  // System changes width; the System puts its own values into it per recording,
-  // which is what a stage transpose is handed rather than a rebind of its own.
+  // the first sweep and handed to every stage of it. Rebuilt when the System
+  // changes width; the System puts its own values into it per recording, which
+  // is what a stage transpose is handed rather than a rebind of its own.
   using adjoint_twin_type =
       typename rebound_system<System, active_scalar,
                               Rebindable<System, active_scalar>>::type;
   mutable std::unique_ptr<adjoint_twin_type> adjoint_twin;
+
+  // One twin for the whole segment: its width is the width being swept, so a
+  // segment at another width builds its own.
+  adjoint_twin_type& sweep_twin() {
+    static_assert(Rebindable<System, active_scalar>,
+                  "an adjoint sweep records on the System at the adjoint scalar; "
+                  "this System has no rebind_from()");
+    if (!adjoint_twin || adjoint_twin->ode_size() != system.ode_size()) {
+      adjoint_twin = std::make_unique<adjoint_twin_type>(
+          system.template rebind_from<active_scalar>());
+    }
+    return *adjoint_twin;
+  }
 
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?

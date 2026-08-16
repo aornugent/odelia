@@ -1,4 +1,4 @@
-# Tests for the sweep through a System's own ode_rates_adjoint, and for
+# Tests for the sweep through a System's own rate transpose, and for
 # Solver::solve_adjoint over the recorded steps. The tape path is covered by
 # test-step-adjoint.R; here no tape is opened, so the snippet needs no link
 # against the shared library.
@@ -10,11 +10,28 @@ lv_include_dir <- function() {
 # Predator and prey, with the interaction flux published to aux. Its rate
 # transpose is written out by hand, so nothing here is recorded.
 lv_system <- '
+  template <typename T>
   class LotkaVolterra {
   public:
-    using value_type = double;
-    LotkaVolterra(double a_, double b_, double c_, double d_)
+    using value_type = T;
+    LotkaVolterra(T a_, T b_, T c_, T d_)
       : a(a_), b(b_), c(c_), d(d_) { reset(); }
+
+    // A sweep seats the System at the adjoint scalar, so it asks for this pair
+    // even where the transpose is written out by hand and the twin goes unread.
+    template <class S2> using rebind = LotkaVolterra<S2>;
+
+    template <class S2>
+    rebind<S2> rebind_from() const {
+      return rebind<S2>(S2(odelia::util::to_passive(a)),
+                        S2(odelia::util::to_passive(b)),
+                        S2(odelia::util::to_passive(c)),
+                        S2(odelia::util::to_passive(d)));
+    }
+
+    // No differentiable parameters on the rate path: the four coefficients are
+    // fixed for the sweep, so a trait row here would be empty rather than zero.
+    std::vector<T*> ad_parameters() { return {}; }
 
     size_t ode_size() const { return 2; }
     double ode_time() const { return time; }
@@ -50,29 +67,33 @@ lv_system <- '
     template <typename It> It ode_aux(It it) const { *it++ = flux; return it; }
     template <typename It> It set_ode_aux(It it) {
       flux = *it++;
-      aux_seen.push_back(flux);
+      aux_seen.push_back(odelia::util::to_passive(flux));
       return it;
     }
 
-    // The transpose of compute_rates at the state currently loaded.
-    // This System has no differentiable parameters on the rate path, so the
-    // accumulator it is handed is left as it was rather than added to.
-    template <class ItIn, class ItOut>
-    ItOut ode_rates_adjoint(ItIn lambda_dydt, ItOut lambda_y,
-                            std::vector<double>& /* parameter_adjoint */) {
-      const double l0 = *lambda_dydt++;
-      const double l1 = *lambda_dydt++;
-      *lambda_y++ = (a - b * p) * l0 + (c * b * p) * l1;
-      *lambda_y++ = (-b * n) * l0 + (c * b * n - d) * l1;
-      return lambda_y;
+    // The transpose of compute_rates at the state currently loaded, one row per
+    // seed. Nothing is recorded, so the twin is untouched and the accumulator is
+    // left as it was rather than added to.
+    template <class Twin>
+    void ode_rates_adjoint_batched(const std::vector<std::vector<T>>& lambda_dydt,
+                                   std::vector<std::vector<T>>& lambda_y,
+                                   std::vector<std::vector<double>>& /* parameter_adjoint */,
+                                   Twin& /* twin */) {
+      lambda_y.assign(lambda_dydt.size(), std::vector<T>(2));
+      for (size_t m = 0; m < lambda_dydt.size(); ++m) {
+        const T l0 = lambda_dydt[m][0];
+        const T l1 = lambda_dydt[m][1];
+        lambda_y[m][0] = (a - b * p) * l0 + (c * b * p) * l1;
+        lambda_y[m][1] = (-b * n) * l0 + (c * b * n - d) * l1;
+      }
     }
 
     int rate_calls = 0;
     std::vector<double> aux_seen;
 
   private:
-    double a, b, c, d;
-    double n = 0, p = 0, flux = 0, dndt = 0, dpdt = 0;
+    T a, b, c, d;
+    T n = 0, p = 0, flux = 0, dndt = 0, dpdt = 0;
     double time = 0;
   };
 '
@@ -88,8 +109,10 @@ compile_rates_adjoint_interface <- function() {
     ', lv_system, '
 
     // The choice is made on the System, not at run time.
-    static_assert(odelia::ode::AdjointRates<LotkaVolterra>);
-    static_assert(!odelia::ode::AdjointRates<LorenzSystem<double> >);
+    using lv_twin = LotkaVolterra<odelia::ode::active_scalar<double> >;
+    static_assert(odelia::ode::AdjointRates<LotkaVolterra<double>, lv_twin>);
+    static_assert(!odelia::ode::AdjointRates<LorenzSystem<double>,
+                                             LorenzSystem<double> >);
 
     // [[Rcpp::export]]
     bool rates_adjoint_is_chosen_by_type() { return true; }
@@ -100,8 +123,8 @@ compile_rates_adjoint_interface <- function() {
     Rcpp::List lv_step_and_adjoint(std::vector<double> pars, double time,
                                    double step_size, std::vector<double> y,
                                    std::vector<double> lambda_out) {
-      LotkaVolterra system(pars[0], pars[1], pars[2], pars[3]);
-      odelia::ode::Step<LotkaVolterra> stepper;
+      LotkaVolterra<double> system(pars[0], pars[1], pars[2], pars[3]);
+      odelia::ode::Step<LotkaVolterra<double> > stepper;
       stepper.resize(y.size());
 
       std::vector<double> dydt_in(y.size()), dydt_out(y.size()), yerr(y.size());
@@ -109,7 +132,7 @@ compile_rates_adjoint_interface <- function() {
       odelia::ode::derivs(system, y, dydt_in, time);
       stepper.step(system, time, step_size, y_end, yerr, dydt_in, dydt_out);
 
-      LotkaVolterra adj(pars[0], pars[1], pars[2], pars[3]);
+      LotkaVolterra<double> adj(pars[0], pars[1], pars[2], pars[3]);
       adj.rate_calls = 0;
       std::vector<double> lambda_in;
       std::vector<double> parameter_adjoint;
@@ -128,14 +151,14 @@ compile_rates_adjoint_interface <- function() {
     Rcpp::List lv_solve_adjoint(std::vector<double> pars, std::vector<double> y0,
                                 double t_end, std::vector<double> lambda_end) {
       odelia::ode::OdeControl ctl;
-      LotkaVolterra system(pars[0], pars[1], pars[2], pars[3]);
-      odelia::ode::Solver<LotkaVolterra> solver(system, ctl);
+      LotkaVolterra<double> system(pars[0], pars[1], pars[2], pars[3]);
+      odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
       const std::vector<double> h = solver.step_sizes();
 
       // Replay the recorded sizes so a state is collected at each accepted step.
-      odelia::ode::Solver<LotkaVolterra> replay(system, ctl);
+      odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
       replay.set_state(y0, 0.0);
       replay.advance_fixed_steps(h);
       std::vector<std::vector<double> > states;
@@ -162,13 +185,13 @@ compile_rates_adjoint_interface <- function() {
                                                   std::vector<double> lambda_end,
                                                   int split) {
       odelia::ode::OdeControl ctl;
-      LotkaVolterra system(pars[0], pars[1], pars[2], pars[3]);
-      odelia::ode::Solver<LotkaVolterra> solver(system, ctl);
+      LotkaVolterra<double> system(pars[0], pars[1], pars[2], pars[3]);
+      odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
       const std::vector<double> h = solver.step_sizes();
 
-      odelia::ode::Solver<LotkaVolterra> replay(system, ctl);
+      odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
       replay.set_state(y0, 0.0);
       replay.advance_fixed_steps(h);
       std::vector<std::vector<double> > states;
@@ -193,13 +216,13 @@ compile_rates_adjoint_interface <- function() {
                                   std::vector<double> y0, double t_end,
                                   std::vector<double> y_start) {
       odelia::ode::OdeControl ctl;
-      LotkaVolterra system(pars[0], pars[1], pars[2], pars[3]);
-      odelia::ode::Solver<LotkaVolterra> solver(system, ctl);
+      LotkaVolterra<double> system(pars[0], pars[1], pars[2], pars[3]);
+      odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
       const std::vector<double> h = solver.step_sizes();
 
-      odelia::ode::Solver<LotkaVolterra> replay(system, ctl);
+      odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
       replay.set_state(y_start, 0.0);
       replay.advance_fixed_steps(h);
       return replay.state();

@@ -49,24 +49,9 @@ public:
 
   void step(System& system);
 
-  // The adjoint of one step, from the state that step started at. RKCK only:
-  // the Rosenbrock stepper carries no reverse counterpart.
-  void step_adjoint(System& system, double time, double step_size,
-                    const state_type& y, const state_type& lambda_out,
-                    state_type& lambda_in,
-                    std::vector<double>& parameter_adjoint) {
-    if (method == Method::rodas) {
-      util::stop("method='rodas' has no adjoint; use method='rkck'.");
-    }
-    // The System can be a different width from the one the forward pass left,
-    // because a caller sweeping a segment narrows it between segments, and the
-    // stage buffers are sized once at construction. A sweep is the end of the
-    // solver's forward state either way: every stage rebuild overwrites it.
-    resize(lambda_out.size());
-    stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in,
-                         parameter_adjoint);
-  }
-  // The same step for several seeds at once; see Step::step_adjoint_batched.
+  // The adjoint of one step, from the state that step started at, for several
+  // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
+  // counterpart.
   template <class Twin>
   void step_adjoint_batched(System& system, double time, double step_size,
                             const state_type& y,
@@ -77,8 +62,11 @@ public:
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
-    // The stage buffers are sized for the width being swept, exactly as the
-    // single-seed form does it; every seed carries the same width.
+    // The System can be a different width from the one the forward pass left,
+    // because a caller sweeping a segment narrows it between segments, and the
+    // stage buffers are sized once at construction. Every seed carries that same
+    // width. A sweep is the end of the solver's forward state either way: every
+    // stage rebuild overwrites it.
     resize(lambda_out.front().size());
     stepper.step_adjoint_batched(system, time, step_size, y, lambda_out,
                                  lambda_in, parameter_adjoint, twin);
