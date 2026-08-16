@@ -450,6 +450,42 @@ std::size_t solve_adjoint_over_widenings(
     return swept;
 }
 
+// Step `forward` over the recording's segments from `from_segment` on, at the
+// sizes the run took, widening where the run widened. `first` is the recorded
+// step the walk begins at, which the caller has already put the System on.
+//
+// The step sizes are replayed rather than the times: a size differenced back out
+// of two recorded times is not the size that was taken, since fl(fl(t + h) - t)
+// is not h, and a walk that chose its own would be differentiating a controller
+// the model does not contain.
+template <class Solver, class Widening>
+void advance_over_widenings(
+    Solver& forward, const std::vector<recorded_widening<Widening>>& widenings,
+    const std::vector<double>& step_sizes, std::size_t from_segment,
+    std::size_t first) {
+    const std::vector<state_segment> segments =
+        state_segments(widenings, step_sizes.size());
+    if (from_segment >= segments.size()) {
+        util::stop("advance_over_widenings: the recording has no such segment");
+    }
+    for (std::size_t j = from_segment; j < segments.size(); ++j) {
+        // The first entry is the size no step reached, which is how a recorded
+        // run reads back.
+        std::vector<double> sizes(1, std::numeric_limits<double>::quiet_NaN());
+        for (std::size_t k = first + 1; k <= segments[j].last; ++k) {
+            sizes.push_back(step_sizes[k]);
+        }
+        if (sizes.size() > 1) {
+            forward.advance_fixed_steps(sizes);
+        }
+        if (j + 1 < segments.size()) {
+            forward.get_system_ref().widen(widenings[j].event);
+            forward.set_state_from_system();
+            first = segments[j].last;
+        }
+    }
+}
+
 // One block of `f`, recorded and swept once on the tape handed in: `input_adjoints`
 // receives transpose(jacobian) * output_adjoints, and the return value is the recording's
 // size. `f` is instantiated at the active scalar here, so only doubles cross in and out.
