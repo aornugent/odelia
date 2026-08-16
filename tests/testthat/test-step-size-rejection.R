@@ -14,11 +14,10 @@
 compile_step_size_rejection_interface <- function() {
   ensure_ode_interface_loaded()
 
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  include_dir <- odelia_include_dir()
   odelia_so <- .odelia_test_cache$odelia_so
   withr::local_envvar(
-    PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)),
+    PKG_CPPFLAGS = odelia_cppflags(include_dir),
     PKG_LIBS = shQuote(normalizePath(odelia_so, winslash = "/", mustWork = TRUE))
   )
   Rcpp::sourceCpp(code = '

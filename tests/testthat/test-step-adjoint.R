@@ -5,8 +5,7 @@
 compile_step_adjoint_interface <- function() {
   ensure_ode_interface_loaded()
 
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  include_dir <- odelia_include_dir()
   odelia_so <- .odelia_test_cache$odelia_so
   pkg_libs <- if (is.character(odelia_so) &&
                   length(odelia_so) == 1 &&
@@ -18,10 +17,11 @@ compile_step_adjoint_interface <- function() {
     Sys.getenv("PKG_LIBS", unset = "")
   }
   withr::local_envvar(
-    PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)),
+    PKG_CPPFLAGS = odelia_cppflags(include_dir),
     PKG_LIBS = pkg_libs
   )
   Rcpp::sourceCpp(code = '
+    // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>
     #include <vector>
     #include <odelia/ode_step.hpp>
@@ -173,14 +173,8 @@ testthat::test_that("step_adjoint of a zero end adjoint is zero", {
   expect_equal(r$lambda_in, c(0.0, 0.0, 0.0))
 })
 
-# The header include path, for compiles that need no link against the shared library.
-odelia_include_dir <- function() {
-  dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
-}
-
 testthat::test_that("the adjoint scalar is named at namespace scope", {
-  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(odelia_include_dir())))
+  withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags())
 
   # Reached through the interface header alone, with no Solver named and none
   # instantiated: the assertions are on types only.
@@ -222,7 +216,7 @@ testthat::test_that("the adjoint scalar is named at namespace scope", {
 # declaration. Empty gives a System with no hook; one returning Decay gives a hook
 # that hands back the wrong scalar. Both must be refused at the call.
 compile_step_adjoint_on <- function(rebind_body) {
-  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(odelia_include_dir())))
+  withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags())
   Rcpp::sourceCpp(code = sprintf('
     // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>

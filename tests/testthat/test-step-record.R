@@ -5,8 +5,7 @@
 compile_step_record_interface <- function() {
   ensure_ode_interface_loaded()
 
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  include_dir <- odelia_include_dir()
   odelia_so <- .odelia_test_cache$odelia_so
   pkg_libs <- if (is.character(odelia_so) &&
                   length(odelia_so) == 1 &&
@@ -18,10 +17,11 @@ compile_step_record_interface <- function() {
     Sys.getenv("PKG_LIBS", unset = "")
   }
   withr::local_envvar(
-    PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)),
+    PKG_CPPFLAGS = odelia_cppflags(include_dir),
     PKG_LIBS = pkg_libs
   )
   Rcpp::sourceCpp(code = '
+    // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>
     #include <vector>
     #include <odelia/ode_solver.hpp>

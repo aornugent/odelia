@@ -4,9 +4,8 @@
 # against the odelia shared library.
 
 compile_ode_element_interface <- function() {
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
-  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)))
+  include_dir <- odelia_include_dir()
+  withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags(include_dir))
   Rcpp::sourceCpp(code = '
     // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>
@@ -112,9 +111,8 @@ testthat::test_that("every helper advances the iterator by the size it reports",
 # A program that calls one helper on one element with one iterator. Compiling it is
 # the assertion: the constraint either admits the call or rejects it.
 compile_helper_call <- function(element, member, iterator) {
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
-  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)))
+  include_dir <- odelia_include_dir()
+  withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags(include_dir))
   Rcpp::sourceCpp(code = sprintf('
     // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>

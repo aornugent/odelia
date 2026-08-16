@@ -1,7 +1,6 @@
 .odelia_test_cache <- new.env(parent = emptyenv())
 .odelia_test_cache$ode_loaded <- FALSE
 .odelia_test_cache$leaf_loaded <- FALSE
-.odelia_test_cache$supplied_derivative_loaded <- FALSE
 .odelia_test_cache$odelia_so <- NA_character_
 
 resolve_test_path <- function(installed_rel, source_rel) {
@@ -25,6 +24,23 @@ resolve_test_path <- function(installed_rel, source_rel) {
       source_rel
     )
   )
+}
+
+odelia_include_dir <- function() {
+  dirname(dirname(resolve_test_path(
+    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+}
+
+# What a sourceCpp snippet must compile with to agree with the shipped library.
+# Both defines are src/Makevars' and must stay equal to it: XAD reaches its
+# active tape through a variable whose storage class XAD_NO_THREADLOCAL sets,
+# and the storage class does not change the mangled name, so a snippet built
+# without it references the same symbol in the other class. That is a link
+# error where the snippet links against the library and a silently separate
+# tape where it does not.
+odelia_cppflags <- function(include_dir = odelia_include_dir()) {
+  paste0("-I", shQuote(include_dir),
+         " -DXAD_NO_THREADLOCAL -DXAD_USE_STRONG_INLINE")
 }
 
 # Detect whether the currently loaded DLL came from pkgload/load_all,
@@ -67,7 +83,7 @@ ensure_leaf_thermal_interfaces <- function(rebuild = FALSE) {
 
   ensure_ode_interface_loaded(rebuild = rebuild)
 
-  include_dir <- dirname(dirname(resolve_test_path("include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  include_dir <- odelia_include_dir()
   leaf_cpp <- resolve_test_path(
     "examples/leaf_thermal/src/leaf_thermal_interface.cpp",
     "inst/examples/leaf_thermal/src/leaf_thermal_interface.cpp"
@@ -87,7 +103,7 @@ ensure_leaf_thermal_interfaces <- function(rebuild = FALSE) {
   # Windows has no global symbol namespace - DLL imports must be resolved at
   # link time. Linking the sourceCpp build directly against the odelia library
   # via PKG_LIBS (honoured by R CMD SHLIB) works on every platform.
-  pkg_cppflags <- paste0("-I", include_dir)
+  pkg_cppflags <- odelia_cppflags(include_dir)
   odelia_so <- .odelia_test_cache$odelia_so
   pkg_libs <- if (is.character(odelia_so) &&
                   length(odelia_so) == 1 &&
@@ -130,58 +146,5 @@ ensure_leaf_thermal_interfaces <- function(rebuild = FALSE) {
   )
 
   .odelia_test_cache$leaf_loaded <- TRUE
-  invisible(TRUE)
-}
-
-# Compile and source the supplied_derivative example interface on demand. The demo
-# lives in inst/examples rather than src/, so it is built with sourceCpp here the
-# same way the leaf interface is (link against the odelia library for the XAD Tape
-# symbols; skip gracefully in a load_all session where they are unavailable).
-ensure_supplied_derivative_interface <- function(rebuild = FALSE) {
-  if (!rebuild && isTRUE(.odelia_test_cache$supplied_derivative_loaded)) {
-    return(invisible(TRUE))
-  }
-
-  ensure_ode_interface_loaded(rebuild = rebuild)
-
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
-  sd_cpp <- resolve_test_path(
-    "examples/supplied_derivative_interface.cpp",
-    "inst/examples/supplied_derivative_interface.cpp"
-  )
-
-  odelia_so <- .odelia_test_cache$odelia_so
-  pkg_libs <- if (is.character(odelia_so) &&
-                  length(odelia_so) == 1 &&
-                  !is.na(odelia_so) &&
-                  nzchar(odelia_so) &&
-                  file.exists(odelia_so)) {
-    shQuote(normalizePath(odelia_so, winslash = "/", mustWork = FALSE))
-  } else {
-    Sys.getenv("PKG_LIBS", unset = "")
-  }
-  withr::local_envvar(
-    PKG_CPPFLAGS = paste0("-I", include_dir),
-    PKG_LIBS = pkg_libs
-  )
-
-  source_cpp_result <- tryCatch(
-    {
-      Rcpp::sourceCpp(sd_cpp, rebuild = rebuild, verbose = FALSE)
-      NULL
-    },
-    error = function(e) e
-  )
-
-  if (inherits(source_cpp_result, "error")) {
-    msg <- conditionMessage(source_cpp_result)
-    if (grepl("active_tape_", msg, fixed = TRUE)) {
-      testthat::skip("supplied_derivative sourceCpp symbols are unavailable in this load_all session; run installed-package tests for this context.")
-    }
-    stop(source_cpp_result)
-  }
-
-  .odelia_test_cache$supplied_derivative_loaded <- TRUE
   invisible(TRUE)
 }

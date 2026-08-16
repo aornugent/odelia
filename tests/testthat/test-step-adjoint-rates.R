@@ -4,8 +4,7 @@
 # against the shared library.
 
 lv_include_dir <- function() {
-  dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  odelia_include_dir()
 }
 
 # Predator and prey, with the interaction flux published to aux. Its rate
@@ -74,7 +73,7 @@ lv_system <- '
 '
 
 compile_rates_adjoint_interface <- function() {
-  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(lv_include_dir())))
+  withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags(lv_include_dir()))
   Rcpp::sourceCpp(code = paste0('
     // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>

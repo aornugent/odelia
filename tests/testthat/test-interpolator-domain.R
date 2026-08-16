@@ -2,9 +2,8 @@
 # is disabled. Header-only like test-spline.R, so only the include path is needed.
 
 compile_interpolator_domain_interface <- function() {
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
-  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)))
+  include_dir <- odelia_include_dir()
+  withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags(include_dir))
   Rcpp::sourceCpp(code = '
     #include <Rcpp.h>
     #include <vector>

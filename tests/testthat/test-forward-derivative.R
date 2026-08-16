@@ -3,10 +3,10 @@
 # tape instantiations in the odelia shared library are reached.
 
 compile_forward_derivative_interface <- function() {
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
-  withr::local_envvar(PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)))
+  include_dir <- odelia_include_dir()
+  withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags(include_dir))
   Rcpp::sourceCpp(code = '
+    // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>
     #include <cmath>
     #include <odelia/gradient.hpp>
