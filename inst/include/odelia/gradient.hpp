@@ -222,6 +222,73 @@ std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
     return tape.getMemory();
 }
 
+// A transpose taken with respect to a System's state AND the parameters its
+// active twin lists: one recording over both, swept once per seed.
+//
+// `evaluate` is handed the state half of the recorded inputs and the output
+// buffer, with the twin's parameters ALREADY written from the other half. That
+// order is why the two halves are one recording rather than two calls: a
+// quantity the state determines reads the parameters while deriving it, so a
+// state written first derives it at the previous values. Writing the parameters
+// here rather than in `evaluate` is what keeps that from being a rule each
+// caller has to remember.
+//
+// The sweep splits back along the same seam. `state_adjoint[m]` is assigned the
+// state half of seed m; the parameter half is ADDED to `parameter_adjoint[m]`,
+// because a parameter is reached once per step and its gradient is the sum over
+// every step swept. The caller therefore owns clearing it, once per sweep.
+template <class Twin, class Evaluate>
+std::size_t state_and_parameter_adjoints(
+    xad::adj<double>::tape_type& tape, Twin& twin,
+    const std::vector<double>& state,
+    const std::vector<std::vector<double>>& output_adjoints, Evaluate&& evaluate,
+    std::vector<std::vector<double>>& state_adjoint,
+    std::vector<std::vector<double>>& parameter_adjoint) {
+    using scalar = active_scalar<double>;
+    const std::vector<scalar*> parameters = twin.ad_parameters();
+    const std::size_t n_state = state.size();
+    const std::size_t n_parameter = parameters.size();
+    const std::size_t n_seed = output_adjoints.size();
+
+    if (parameter_adjoint.size() < n_seed) {
+        util::stop("state_and_parameter_adjoints: one row of parameter adjoints "
+                   "per seed, to accumulate into");
+    }
+    for (std::size_t m = 0; m < n_seed; ++m) {
+        util::check_length(parameter_adjoint[m].size(), n_parameter);
+    }
+
+    std::vector<double> in(state);
+    in.reserve(n_state + n_parameter);
+    for (const scalar* p : parameters) {
+        in.push_back(util::to_passive(*p));
+    }
+
+    auto record = [&](const std::vector<scalar>& x,
+                      std::vector<scalar>& y) -> void {
+        std::size_t at = n_state;
+        for (scalar* p : parameters) {
+            *p = x[at++];
+        }
+        evaluate(x.begin(), y);
+    };
+
+    std::vector<std::vector<double>> in_adjoint;
+    const std::size_t recording =
+        vector_jacobian_products(tape, in, output_adjoints, record, in_adjoint);
+
+    state_adjoint.assign(n_seed, std::vector<double>(n_state, 0.0));
+    for (std::size_t m = 0; m < n_seed; ++m) {
+        for (std::size_t j = 0; j < n_state; ++j) {
+            state_adjoint[m][j] = in_adjoint[m][j];
+        }
+        for (std::size_t p = 0; p < n_parameter; ++p) {
+            parameter_adjoint[m][p] += in_adjoint[m][n_state + p];
+        }
+    }
+    return recording;
+}
+
 // One block of `f`, recorded and swept once on the tape handed in: `input_adjoints`
 // receives transpose(jacobian) * output_adjoints, and the return value is the recording's
 // size. `f` is instantiated at the active scalar here, so only doubles cross in and out.
