@@ -14,7 +14,7 @@
 // adjoint fit -- the tangent layer never contends with the outer tape.
 //
 // Obtaining the twin requires the System to expose
-//     template <class U> rebind<U> rebind_from() const;
+//     template <class U> Self<U> rebind_from() const;
 // which returns a copy of itself with the scalar type swapped to U (parameters
 // carried over via xad::value + U(...)). This is the same double->AD lift the
 // gradient driver uses; a clear error fires below if it is missing.

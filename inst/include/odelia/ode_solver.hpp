@@ -17,12 +17,6 @@ namespace ode {
 // declared but never constructed -- so `Solver<System>` compiles without forcing
 // every System to carry AD scaffolding.
 namespace detail {
-template <class S, class Scalar, class = void>
-struct rebind_or_self { using type = S; };
-template <class S, class Scalar>
-struct rebind_or_self<S, Scalar, std::void_t<typename S::template rebind<Scalar>>> {
-  using type = typename S::template rebind<Scalar>;
-};
 }
 
 // This is a wrapper class that is meant to simplify the
@@ -350,7 +344,7 @@ public:
   // solver as a plain member shares the reuse. mutable: scratch, reusable through a
   // const solver.
   using active_scalar      = ode::active_scalar<double>;
-  using active_system_type = typename detail::rebind_or_self<System, active_scalar>::type;
+  using active_system_type = typename rebound_system<System, active_scalar>::type;
   mutable std::shared_ptr<Solver<active_system_type>> active_solver;
 
   // Reverse-mode tape, created on the first gradient and reused (only ever exercised

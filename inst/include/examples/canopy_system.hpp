@@ -50,11 +50,10 @@ public:
 
   // Copy the configuration onto another scalar so the driver can build the active
   // version; the recording is handed in per call (set_recording), not carried here.
-  template <class S2> using rebind = CanopySystem<S2>;
 
   template <class S2>
-  rebind<S2> rebind_from() const {
-    return rebind<S2>(xad::value(gain), y0_init, turnover, extinction, shade_conc,
+  CanopySystem<S2> rebind_from() const {
+    return CanopySystem<S2>(xad::value(gain), y0_init, turnover, extinction, shade_conc,
                       ref_depth, tol, max_depth);
   }
 

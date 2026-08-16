@@ -27,13 +27,12 @@ public:
   // build the active (double -> AD) version of any System the same way, so a new
   // System gets gradients just by providing these two members. Only values cross,
   // so the copy starts with no tape state; the driver seeds the active inputs after.
-  template <class S2> using rebind = LorenzSystem<S2>;
 
   template <class S2>
-  rebind<S2> rebind_from() const {
+  LorenzSystem<S2> rebind_from() const {
     // read the parameters and initial state back to plain double (xad::value), build
     // the S2 copy from them, and set its initial state.
-    rebind<S2> out(xad::value(sigma), xad::value(R), xad::value(b));
+    LorenzSystem<S2> out(xad::value(sigma), xad::value(R), xad::value(b));
     const double ic[] = {xad::value(y0_init), xad::value(y1_init), xad::value(y2_init)};
     out.set_initial_state(ic, t0);
     return out;

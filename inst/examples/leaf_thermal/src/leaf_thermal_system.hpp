@@ -43,13 +43,12 @@ public:
   // the gradient driver can build its active (AD) version generically (see
   // LorenzSystem for the pattern). Only values cross; the driver seeds the active
   // inputs afterwards.
-  template <class S2> using rebind = LeafThermalSystem<S2>;
 
   template <class S2>
-  rebind<S2> rebind_from() const {
+  LeafThermalSystem<S2> rebind_from() const {
     const LeafThermalPars p{xad::value(k_H), xad::value(g_tr_max),
                             xad::value(m_tr), xad::value(T_tr_mid)};
-    rebind<S2> out(p, drivers);
+    LeafThermalSystem<S2> out(p, drivers);
     const double ic = xad::value(T_LC_init);
     out.set_initial_state(&ic, t0);
     return out;
