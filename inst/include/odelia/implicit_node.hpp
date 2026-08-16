@@ -52,6 +52,36 @@ S record_with_derivatives(double value,
   return out;
 }
 
+// The quantity a solve left at a root of R(p; u) = 0, on the tape carrying the
+// derivative the implicit function theorem gives:
+//     dp/du = -(dR/du) / (dR/dp).
+// Both slopes are supplied, because the solve is the caller's and none of it was
+// recorded. What this owns is the quotient, its sign, and the refusal where
+// dR/dp is not invertible.
+//
+// Outputs that depend on p record against the value returned here, each carrying
+// only its own dy/dp, so the quotient is formed once however many outputs and
+// inputs there are. An output the root's own condition makes stationary -- an
+// objective at an interior optimum -- records against its inputs and not against
+// this, which is the envelope theorem written as an omission rather than as a
+// term that has to come out to zero.
+template <class S>
+S implicit_root(double p, double residual_slope,
+                std::vector<input_and_derivative<S>> against) {
+  // Zero is the only threshold available: how small a slope is too small depends
+  // on R's units, which the caller has and this does not. At a fold it
+  // approaches zero and the quotient is garbage rather than large.
+  if (!util::is_finite(residual_slope) || residual_slope == 0.0) {
+    util::stop("implicit_root: dR/dp is " + util::format_double(residual_slope) +
+               " at the operating point, so the implicit function theorem does "
+               "not apply there (a fold?)");
+  }
+  for (input_and_derivative<S>& term : against) {
+    term.derivative /= -residual_slope;
+  }
+  return record_with_derivatives<S>(p, against);
+}
+
 // The value y* defined implicitly by a scalar equation F(y; p) = 0, made
 // differentiable. y* is solved in double, off the tape, by whatever root-find the
 // caller already has; this returns it on the tape carrying the derivative the

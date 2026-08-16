@@ -56,7 +56,7 @@ compile_implicit_value_interface <- function() {
     };
 
     // [[Rcpp::export]]
-    double implicit_root(double a, double b) {
+    double cubic_root(double a, double b) {
       CubicBalance<double> sys{a, b};
       return sys.solve();
     }
@@ -109,6 +109,34 @@ compile_implicit_value_interface <- function() {
           Rcpp::_["d_dv"] = xad::derivative(v));
     }
 
+    // A root p of R(p; u, v) = 0 with both slopes supplied, and one output that
+    // depends on p recorded against it. Nothing here relates any of it to u or v
+    // except those slopes, so what comes back can only be the quotient the
+    // theorem gives and the chain through p.
+    // [[Rcpp::export]]
+    Rcpp::List implicit_root_gradient(double p, double residual_slope,
+                                      double dR_du, double dR_dv, double dy_dp) {
+      tape_type tape;
+      adouble u(1.5), v(-0.25);
+      tape.registerInput(u);
+      tape.registerInput(v);
+      tape.newRecording();
+
+      adouble root = odelia::implicit_root<adouble>(p, residual_slope,
+                                                    {{u, dR_du}, {v, dR_dv}});
+      adouble y = odelia::record_with_derivatives<adouble>(7.5, {{root, dy_dp}});
+      tape.registerOutput(y);
+      xad::derivative(y) = 1.0;
+      tape.computeAdjoints();
+      return Rcpp::List::create(
+          Rcpp::_["root"] = xad::value(root),
+          Rcpp::_["identical"] = odelia::util::identical(xad::value(root), p),
+          Rcpp::_["y"] = xad::value(y),
+          Rcpp::_["y_identical"] = odelia::util::identical(xad::value(y), 7.5),
+          Rcpp::_["d_du"] = xad::derivative(u),
+          Rcpp::_["d_dv"] = xad::derivative(v));
+    }
+
     // A residual that touches zero rather than crossing it, so dF/dy is zero at
     // the operating point and the quotient the theorem asks for does not exist.
     // [[Rcpp::export]]
@@ -157,8 +185,8 @@ testthat::test_that("implicit_value returns the operating point and its IFT deri
   # costs rather than asserting it away.
   eps <- c(1e-3, 1e-4, 1e-5)
   fd <- vapply(eps, function(h) {
-    c((implicit_root(a + h, b) - implicit_root(a - h, b)) / (2 * h),
-      (implicit_root(a, b + h) - implicit_root(a, b - h)) / (2 * h))
+    c((cubic_root(a + h, b) - cubic_root(a - h, b)) / (2 * h),
+      (cubic_root(a, b + h) - cubic_root(a, b - h)) / (2 * h))
   }, numeric(2))
 
   residual <- vapply(seq_along(eps), function(i) {
@@ -174,6 +202,44 @@ testthat::test_that("implicit_value returns the operating point and its IFT deri
   for (i in seq_along(eps)) {
     testthat::expect_lt(residual[[i]], 5 * eps[[i]]^2)
   }
+})
+
+testthat::test_that("implicit_root turns supplied slopes into the theorem's quotient", {
+  compile_implicit_value_interface()
+
+  p <- -1.75
+  slope <- -0.8
+  got <- implicit_root_gradient(p, slope, 2.0, -3.5, 1.0)
+
+  # The root comes back as the number the solve left, so an input the residual
+  # does not reach can introduce no shift.
+  testthat::expect_true(got$identical)
+  testthat::expect_equal(got$d_du, -2.0 / slope)
+  testthat::expect_equal(got$d_dv, 3.5 / slope)
+
+  # An output recorded against the root picks the quotient up through its own
+  # slope, which is the whole reason the root is a value rather than a table of
+  # per-input quotients: one root, any number of outputs.
+  chained <- implicit_root_gradient(p, slope, 2.0, -3.5, 4.25)
+  testthat::expect_true(chained$y_identical)
+  testthat::expect_equal(chained$d_du, 4.25 * (-2.0 / slope))
+  testthat::expect_equal(chained$d_dv, 4.25 * (3.5 / slope))
+})
+
+testthat::test_that("implicit_root stops where the theorem does not apply", {
+  compile_implicit_value_interface()
+
+  # dR/dp of zero is the fold: the quotient is garbage rather than large, and a
+  # non-finite one has nothing to divide by at all.
+  testthat::expect_error(implicit_root_gradient(1.0, 0.0, 2.0, -3.5, 1.0),
+                         "does not apply")
+  testthat::expect_error(implicit_root_gradient(1.0, NaN, 2.0, -3.5, 1.0),
+                         "does not apply")
+
+  # And a supplied slope that is not finite is still refused by the graft it
+  # records through, after the quotient rather than before it.
+  testthat::expect_error(implicit_root_gradient(1.0, -0.8, NaN, -3.5, 1.0),
+                         "is not finite")
 })
 
 testthat::test_that("implicit_value stops where the theorem does not apply", {
