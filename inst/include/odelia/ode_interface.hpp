@@ -66,6 +66,36 @@ concept ReplaysField =
     s.set_ode_state(in, stage);  // load state against a recorded stage, not a time
   };
 
+// A System whose state vector gains entries at times the RUN schedules. The
+// entries are the model's -- what they mean, and how many one widening adds, is
+// never read here; `widening` is opaque and only ever handed back.
+//
+// Three members because three different things happen to the state. widen() and
+// narrow() move the System itself, and narrow() is not derivable from a width:
+// which entries to drop, and what to rebuild afterwards, is the model's. Between
+// them they must round-trip, and in reverse order across several widenings,
+// which no signature here can say.
+//
+// widened_state() is the map alone -- the narrow state in, the wide state out,
+// nothing else rebuilt -- so it can be evaluated at an active scalar and taped.
+// It loads the state it is given, which is why nothing here names a state
+// loader. It leaves the System holding what it added, so a caller evaluating it
+// more than once narrows between calls.
+//
+// A widening whose TIME depends on the parameters is a different map: its
+// adjoint carries a term through that time which nothing here computes. A System
+// satisfying this asserts its widenings are scheduled, not triggered.
+template <typename System>
+concept WidensState =
+  requires(System s, const typename System::widening& w, double time,
+           typename std::vector<typename System::value_type>::const_iterator in,
+           std::vector<typename System::value_type>& out) {
+    typename System::widening;
+    s.widen(w);
+    s.narrow(w);
+    s.widened_state(w, time, in, out);
+  };
+
 // A System that carries the transpose of its own rate evaluation:
 // ode_rates_adjoint takes the adjoint of dydt to the adjoint of y.
 // set_ode_state_and_field puts the System at the point that transpose is taken

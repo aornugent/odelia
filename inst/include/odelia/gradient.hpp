@@ -308,6 +308,146 @@ std::size_t state_and_parameter_adjoints(
     return recording;
 }
 
+// A widening the run took, and the recorded step it follows. The index is taken
+// where the widening happens rather than passed in, so it cannot disagree with
+// the recording it indexes.
+template <class Widening>
+struct recorded_widening {
+  std::size_t after_step;
+  Widening event;
+};
+
+// A range of the recording over which the state has one width.
+struct state_segment {
+  std::size_t first, last;
+};
+
+// The recording cut into one range per width, lowest first. There is one more
+// range than there are widenings, so the lowest runs down to the initial state
+// whether or not a widening sits at the first recorded step.
+//
+// This is where a recording and the widenings claimed for it are checked against
+// each other, and it is the check the shape exists for: the ranges have to
+// partition the recording, or a sweep silently covers less of it than the
+// trajectory it is transposing. Inferring the widenings from the state's width
+// instead -- which is what a caller without a declared list must do -- cannot
+// fail this test, because it defines the answer.
+template <class Widening>
+std::vector<state_segment> state_segments(
+    const std::vector<recorded_widening<Widening>>& widenings,
+    std::size_t n_recorded) {
+    if (n_recorded < 2) {
+        util::stop("state_segments: no recorded steps to sweep");
+    }
+    std::vector<state_segment> ret;
+    ret.reserve(widenings.size() + 1);
+    std::size_t first = 0;
+    for (std::size_t j = 0; j < widenings.size(); ++j) {
+        const std::size_t at = widenings[j].after_step;
+        if (at + 1 >= n_recorded) {
+            util::stop("state_segments: a widening follows a step the recording "
+                       "does not have");
+        }
+        if (j > 0 && at <= widenings[j - 1].after_step) {
+            util::stop("state_segments: the widenings are not in the order the "
+                       "run took them");
+        }
+        ret.push_back({first, at});
+        first = at;
+    }
+    ret.push_back({first, n_recorded - 1});
+    return ret;
+}
+
+// Carry lambda back over a recording whose state widened, one segment per width,
+// highest first. At the foot of every segment but the lowest sits a widening: the
+// System is narrowed across it and the map that widened it is transposed there,
+// so the rows it carries reach `parameter_adjoint` by the same route a step's do.
+//
+// `states[k]` is what the run held at times()[k]. The widened state between a
+// widening and the step after it is what no record holds, so it is rebuilt here.
+// `extra_splits` names steps at which a segment stops and resumes; a split
+// outside every segment's interior cuts nothing. Returns how many ranges were
+// swept, which is not the segment count -- an empty lowest segment is swept zero
+// times, and a split adds one.
+template <class Solver, class Widening>
+std::size_t solve_adjoint_over_widenings(
+    Solver& solver, const std::vector<std::vector<double>>& states,
+    const std::vector<recorded_widening<Widening>>& widenings,
+    std::vector<std::vector<double>>& lambda,
+    std::vector<std::vector<double>>& parameter_adjoint,
+    const std::vector<std::size_t>& extra_splits = {}) {
+    using scalar = active_scalar<double>;
+    auto& system = solver.get_system_ref();
+    const std::vector<state_segment> segments =
+        state_segments(widenings, states.size());
+
+    // The run left the System at its final width. Narrow to the lowest segment's,
+    // newest widening first, because each narrowing drops what the one after it
+    // was applied on top of.
+    for (std::size_t j = widenings.size(); j-- > 0;) {
+        system.narrow(widenings[j].event);
+    }
+
+    // Then back up, keeping the widened state each widening produced. A sweep
+    // starting inside a segment runs from that state, and no record holds it.
+    std::vector<std::vector<double>> sweep_states = states;
+    for (std::size_t j = 0; j < widenings.size(); ++j) {
+        const std::size_t at = widenings[j].after_step;
+        util::check_length(system.ode_size(), states[at].size());
+        system.set_recorded_state(states[at].begin(), solver.times()[at]);
+        system.widen(widenings[j].event);
+        sweep_states[at].assign(system.ode_size(), 0.0);
+        system.ode_state(sweep_states[at].begin());
+        util::check_length(sweep_states[at].size(), states[at + 1].size());
+    }
+
+    std::size_t swept = 0;
+    for (std::size_t j = segments.size(); j-- > 0;) {
+        const state_segment& segment = segments[j];
+        // Stopped and resumed at each requested step inside this segment, highest
+        // first, so the pieces compose in the order the whole sweep would take.
+        std::vector<std::size_t> cuts;
+        for (const std::size_t s : extra_splits) {
+            if (s > segment.first && s < segment.last) {
+                cuts.push_back(s);
+            }
+        }
+        std::sort(cuts.begin(), cuts.end());
+        std::size_t upper = segment.last;
+        for (std::size_t c = cuts.size(); c-- > 0;) {
+            solver.solve_adjoint_batched(sweep_states, lambda, cuts[c], upper);
+            upper = cuts[c];
+            ++swept;
+        }
+        // A widening at the first recorded step leaves the lowest segment with no
+        // step in it, which is what a run from an empty state gives.
+        if (segment.first < upper) {
+            solver.solve_adjoint_batched(sweep_states, lambda, segment.first,
+                                         upper);
+            ++swept;
+        }
+        if (j == 0) {
+            break;
+        }
+
+        const recorded_widening<Widening>& w = widenings[j - 1];
+        system.narrow(w.event);
+        const double time = solver.times()[w.after_step];
+        auto twin = system.template rebind_from<scalar>();
+        auto widen = [&](typename std::vector<scalar>::const_iterator x,
+                         std::vector<scalar>& y) -> void {
+            twin.widened_state(w.event, time, x, y);
+        };
+        std::vector<std::vector<double>> narrowed;
+        typename scalar::tape_type tape(false);
+        state_and_parameter_adjoints(tape, twin, states[w.after_step], lambda,
+                                     widen, narrowed, parameter_adjoint);
+        lambda = std::move(narrowed);
+    }
+    return swept;
+}
+
 // One block of `f`, recorded and swept once on the tape handed in: `input_adjoints`
 // receives transpose(jacobian) * output_adjoints, and the return value is the recording's
 // size. `f` is instantiated at the active scalar here, so only doubles cross in and out.
