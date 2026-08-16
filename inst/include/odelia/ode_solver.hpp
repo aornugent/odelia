@@ -61,7 +61,7 @@ public:
   Solver& operator=(const Solver& o) {
     collect = o.collect; system = o.system; control_ = o.control_;
     solver = o.solver; replay_schedule_ = o.replay_schedule_; history = o.history;
-    tape.reset(); active_solver.reset();
+    tape.reset(); active_solver.reset(); adjoint_twin.reset();
     return *this;
   }
   Solver(Solver&&) = default;
@@ -314,11 +314,20 @@ public:
     if (k_first >= k_last || k_last >= t.size()) {
       util::stop("the adjoint segment is not a range of recorded steps");
     }
+    static_assert(Rebindable<System, active_scalar>,
+                  "a batched adjoint sweep records on the System at the adjoint "
+                  "scalar; this System has no rebind_from()");
+    // One twin for the whole segment: its width is the width being swept, so a
+    // segment at another width builds its own.
+    if (!adjoint_twin || adjoint_twin->ode_size() != system.ode_size()) {
+      adjoint_twin = std::make_unique<adjoint_twin_type>(
+          system.template rebind_from<active_scalar>());
+    }
     std::vector<ode::state_type<System> > lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
       solver.step_adjoint_batched(system, t[k - 1], h[k], states[k - 1], lambda,
-                                  lambda_in, parameter_adjoint);
+                                  lambda_in, parameter_adjoint, *adjoint_twin);
       lambda = lambda_in;
     }
   }
@@ -351,6 +360,15 @@ public:
   // Reverse-mode tape, created on the first gradient and reused (only ever exercised
   // on the active solver).
   std::unique_ptr<xad::Tape<double>> tape;
+
+  // The System at the adjoint scalar the stage transposes record on, built on
+  // the first batched sweep and handed to every stage of it. Rebuilt when the
+  // System changes width; the System puts its own values into it per recording,
+  // which is what a stage transpose is handed rather than a rebind of its own.
+  using adjoint_twin_type =
+      typename rebound_system<System, active_scalar,
+                              Rebindable<System, active_scalar>>::type;
+  mutable std::unique_ptr<adjoint_twin_type> adjoint_twin;
 
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?

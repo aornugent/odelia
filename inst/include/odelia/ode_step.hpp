@@ -36,15 +36,17 @@ public:
 
   // The same step transposed for several seeds at once. The six rate
   // evaluations that rebuild the stage aux run ONCE, and the System's transpose
-  // is handed every seed together. Only for a System that carries its own
-  // transpose: the generic tape branch has no batched form because nothing
-  // takes it.
+  // is handed every seed together, on the caller's `twin`. Only for a System
+  // that carries its own transpose: the generic tape branch has no batched form
+  // because nothing takes it.
+  template <class Twin>
   void step_adjoint_batched(System& system,
                             double time, double step_size,
                             const state_type &y,
                             const std::vector<state_type> &lambda_out,
                             std::vector<state_type> &lambda_in,
-                            std::vector<std::vector<double>>& parameter_adjoint);
+                            std::vector<std::vector<double>>& parameter_adjoint,
+                            Twin& twin);
 
   void derivs(System& system, const state_type& y, state_type& dydt, double t, int index) {
     return ode::derivs(system, y, dydt, t, index);
@@ -312,13 +314,15 @@ void Step<System>::sweep_stages_batched(double time, double h, const state_type&
 // recorded on a tape of this function's own, on the System lifted to the adjoint
 // scalar, so the caller's reverse pass stays in value_type.
 template <class System>
+template <class Twin>
 void Step<System>::step_adjoint_batched(System& system,
                                         double time, double step_size,
                                         const state_type &y,
                                         const std::vector<state_type> &lambda_out,
                                         std::vector<state_type> &lambda_in,
-                                        std::vector<std::vector<double>>& parameter_adjoint) {
-  static_assert(BatchedAdjointRates<System>,
+                                        std::vector<std::vector<double>>& parameter_adjoint,
+                                        Twin& twin) {
+  static_assert(BatchedAdjointRates<System, Twin>,
                 "step_adjoint_batched needs the System's ode_rates_adjoint_batched "
                 "hook; a System without one is swept one seed at a time");
   const double h = step_size;
@@ -362,7 +366,7 @@ void Step<System>::step_adjoint_batched(System& system,
     system.set_ode_state_for_adjoint(stage.begin(), stage_t);
     system.set_ode_aux(aux[i].cbegin());
     system.ode_rates_adjoint_batched(lambda_rate, lambda_stage,
-                                     parameter_adjoint);
+                                     parameter_adjoint, twin);
   });
   // The last stage swept is stage 0, whose state is y, so the System is already
   // back where the step started.

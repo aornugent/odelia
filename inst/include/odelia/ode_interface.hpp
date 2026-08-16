@@ -121,13 +121,21 @@ concept AdjointRates =
 // Where the recording is a model evaluation and the sweep is arithmetic -- which
 // is the case for any System whose rates are a solve -- a seed past the first is
 // nearly free, and a caller wanting several rows of one trajectory pays for one.
-template <class System>
+//
+// `twin` is the System at the adjoint scalar, owned by the caller and handed to
+// every stage. The System writes its own values into it before each recording:
+// what a recording writes into it points at slots the next one clears, so a twin
+// used as it arrives carries a cleared recording's slots into this one and the
+// sweep comes back wrong -- one seed's rows exact and another's not, with
+// nothing raised.
+template <class System, class Twin>
 concept BatchedAdjointRates =
   AdjointRates<System> &&
   requires(System s, const std::vector<std::vector<typename System::value_type>>& in,
            std::vector<std::vector<typename System::value_type>>& out,
-           std::vector<std::vector<double>>& parameter_adjoint) {
-    { s.ode_rates_adjoint_batched(in, out, parameter_adjoint) } -> std::same_as<void>;
+           std::vector<std::vector<double>>& parameter_adjoint, Twin& twin) {
+    { s.ode_rates_adjoint_batched(in, out, parameter_adjoint, twin) }
+      -> std::same_as<void>;
   };
 
 // Opt-in domain check (#55). A system may declare
