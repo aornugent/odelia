@@ -98,17 +98,18 @@ concept WidensState =
 
 // A System that carries the transpose of its own rate evaluation:
 // ode_rates_adjoint takes the adjoint of dydt to the adjoint of y.
-// set_ode_state_and_field puts the System at the point that transpose is taken
-// at, which is what set_ode_state does up to the rate evaluation the transpose
-// stands in for; a System whose set_ode_state only loads state can forward one
-// to the other. The aux members carry a stage's operating point across, so the
-// transpose reads back the point the rates were evaluated at.
+// set_ode_state_for_adjoint puts the System where that transpose is taken from,
+// doing only what the transpose does not redo -- a System that rebuilds its
+// field inside its own recording leaves it here, and one that does not builds it
+// here, and neither can be told which the other is. The aux members carry a
+// stage's operating point across, so the transpose reads back the point the
+// rates were evaluated at.
 template <typename System>
 concept AdjointRates =
   requires(System s, double time, std::vector<double>& parameter_adjoint,
            typename std::vector<typename System::value_type>::const_iterator in,
            typename std::vector<typename System::value_type>::iterator out) {
-    { s.set_ode_state_and_field(in, time) } -> std::same_as<decltype(in)>;
+    { s.set_ode_state_for_adjoint(in, time) } -> std::same_as<decltype(in)>;
     { s.ode_rates_adjoint(in, out, parameter_adjoint) } -> std::same_as<decltype(out)>;
     { s.aux_size() } -> std::convertible_to<size_t>;
     { s.ode_aux(out) } -> std::same_as<decltype(out)>;

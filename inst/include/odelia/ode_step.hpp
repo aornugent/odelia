@@ -359,7 +359,7 @@ void Step<System>::step_adjoint_batched(System& system,
                [&](int i, double stage_t, const state_type& stage,
                    const std::vector<state_type>& lambda_rate,
                    std::vector<state_type>& lambda_stage) -> void {
-    system.set_ode_state_and_field(stage.begin(), stage_t);
+    system.set_ode_state_for_adjoint(stage.begin(), stage_t);
     system.set_ode_aux(aux[i].cbegin());
     system.ode_rates_adjoint_batched(lambda_rate, lambda_stage,
                                      parameter_adjoint);
@@ -421,10 +421,10 @@ void Step<System>::step_adjoint(System& system,
                  [&](int i, double stage_t, const state_type& stage,
                      const state_type& lambda_rate,
                      state_type& lambda_stage) -> void {
-      // State and field, then this stage's aux, then the transpose. No rate
-      // evaluation: ode_rates_adjoint carries the rate chain itself, and one in
-      // value_type here would compute all of it a second time.
-      system.set_ode_state_and_field(stage.begin(), stage_t);
+      // Where the transpose is taken from, then this stage's aux, then the
+      // transpose. No rate evaluation: ode_rates_adjoint carries the rate chain
+      // itself, and one in value_type here would compute all of it a second time.
+      system.set_ode_state_for_adjoint(stage.begin(), stage_t);
       system.set_ode_aux(aux[i].cbegin());
       system.ode_rates_adjoint(lambda_rate.begin(), lambda_stage.begin(),
                                parameter_adjoint);

@@ -21,15 +21,17 @@ lv_system <- '
     size_t aux_size() const { return 1; }
     void reset() { n = 10.0; p = 5.0; time = 0.0; compute_rates(); }
 
-    // Loads the state, and nothing a rate evaluation would derive.
-    template <typename It> It set_ode_state_and_field(It it, double time_) {
+    // Loads the state, and nothing a rate evaluation would derive. This System
+    // derives nothing outside its rates, so where the transpose is taken from is
+    // the state alone.
+    template <typename It> It set_ode_state_for_adjoint(It it, double time_) {
       time = time_;
       n = *it++;
       p = *it++;
       return it;
     }
     template <typename It> It set_ode_state(It it, double time_) {
-      it = set_ode_state_and_field(it, time_);
+      it = set_ode_state_for_adjoint(it, time_);
       compute_rates();
       return it;
     }
