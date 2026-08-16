@@ -118,10 +118,10 @@ size_t Step<System>::order() const {
   return 5;
 }
 
-// Record the per-RK-stage field values on a Replayable System; a no-op otherwise.
+// Record the per-RK-stage field value on a System that keeps one; a no-op otherwise.
 template <typename System>
 void record_stage(System& system, int rk_step) {
-  if constexpr (Replayable<System>) {
+  if constexpr (ReplaysField<System>) {
     system.record_stage(rk_step);
   }
 }

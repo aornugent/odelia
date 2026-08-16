@@ -36,24 +36,35 @@ public:
   enum { value = sizeof(test<T>(0)) == sizeof(true_type) };
 };
 
-// A System that records the node positions its adaptive solve chose, then replays
-// them on a later pass so the active scalar propagates through a schedule that no
-// longer moves. The hooks are detected at compile time; an absent hook is a
-// zero-cost no-op, so a System that does not record is unaffected. has_recorded_field()
-// is required by the concept so a System that provides the hooks but not the query is
-// rejected here, at the boundary, rather than deep inside derivs.
-//
-// Two replay depths. With only positions recorded, the field is recomputed with the
-// active scalar on the fixed positions (its derivative flows). With field values
-// also recorded, they are reused as fixed doubles (the derivative through the field
-// is then zero). has_recorded_field() reports which of the two applies.
+// A System that records the node positions its adaptive solve chose, so a later
+// pass runs on a schedule that no longer moves and the active scalar propagates
+// through it. The field is then recomputed at those fixed positions, and its
+// derivative flows. The hook is detected at compile time; a System that records
+// nothing is unaffected and pays nothing.
 template <typename System>
-concept Replayable = requires(System s, int stage) {
-  s.record_stage(stage);     // per RK stage: record a field value, when values are kept
+concept RecordsSteps = requires(System s) {
   s.record_ode_step();       // per accepted ODE step: commit the node positions
-  s.replay_step();           // per step on the replay pass: restore this step's record
-  { s.has_recorded_field() } -> std::convertible_to<bool>;  // are field values recorded?
 };
+
+// And a System that keeps a field value per RK stage as well, reading it back by
+// stage index instead of recomputing it. Those values are reused as fixed doubles,
+// so the derivative through the field is zero rather than flowing;
+// has_recorded_field() reports which of the two depths applies.
+//
+// Separate from RecordsSteps because recording the steps and rebuilding the field
+// is the ordinary case. Asking for it as one concept made such a System declare
+// three members it did not mean, and an empty body is how a hook stops being a
+// contract and becomes a formality nobody reads -- including, eventually, the
+// engine that was supposed to call it.
+template <typename System>
+concept ReplaysField =
+  requires(System s, int stage,
+           typename std::vector<typename System::value_type>::const_iterator in) {
+    s.record_stage(stage);     // per RK stage: record this stage's field value
+    s.replay_step();           // per step on the replay pass: restore its record
+    { s.has_recorded_field() } -> std::convertible_to<bool>;
+    s.set_ode_state(in, stage);  // load state against a recorded stage, not a time
+  };
 
 // A System that carries the transpose of its own rate evaluation:
 // ode_rates_adjoint takes the adjoint of dydt to the adjoint of y.
@@ -234,7 +245,7 @@ set_ode_state(T& obj, const StateType& y, double /* time */) {
 }
 
 template <typename T, typename StateType>
-  requires Replayable<T>
+  requires ReplaysField<T>
 void set_ode_state(T& obj, const StateType& y, int index) {
   obj.set_ode_state(y.begin(), index);
 }
@@ -249,14 +260,14 @@ void derivs(T& obj, const StateType& y, StateType& dydt,
   obj.ode_rates(dydt.begin());
 }
 
-// ODE stepping. A Replayable System that has recorded field values reads the field
-// for this RK stage by index; otherwise it sets state at the current time and
-// recomputes (the second branch also covers every non-Replayable System). The choice
-// compiles away for a System that isn't Replayable. See the Replayable concept above.
+// ODE stepping. A System that has recorded field values reads the field for this RK
+// stage by index; otherwise it sets state at the current time and recomputes (the
+// second branch also covers every System that keeps no field). The choice compiles
+// away for a System that does not replay one.
 template <typename T, typename StateType>
 void derivs(T& obj, const StateType& y, StateType& dydt,
             const double time, const int index) {
-  if constexpr (Replayable<T>) {
+  if constexpr (ReplaysField<T>) {
     if (obj.has_recorded_field()) {
       internal::set_ode_state(obj, y, index);
     } else {

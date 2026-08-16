@@ -169,22 +169,22 @@ void SolverInternal<System>::reset(System& system) {
   set_state_from_system(system);
 }
 
-// Record this ODE step's node positions on a Replayable System during the adaptive
+// Record this ODE step's node positions on a System that records them, during the
 // pass; a no-op for any System that doesn't record.
 template <typename System>
 void record_ode_step(System& system) {
-  if constexpr (Replayable<System>) {
+  if constexpr (RecordsSteps<System>) {
     system.record_ode_step();
   }
 }
 
-// On the replay pass, let a Replayable System restore what it recorded for this step;
+// On the replay pass, let a System that recorded a field restore this step's values;
 // a no-op otherwise. Called from step_to. What restoring does -- reuse recorded field
 // values, or nothing so the field is recomputed with the active scalar -- is the
 // System's own choice.
 template <typename System>
 void replay_step(System& system) {
-  if constexpr (Replayable<System>) {
+  if constexpr (ReplaysField<System>) {
     system.replay_step();
   }
 }
