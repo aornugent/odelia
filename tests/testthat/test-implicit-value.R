@@ -1,18 +1,19 @@
-# Tests for odelia::implicit_value -- the value defined implicitly by a scalar
-# equation, made differentiable through the implicit function theorem.
+# Tests for the two ways a value computed away from the tape gets onto it:
+# record_with_derivatives, which takes the derivatives as supplied numbers, and
+# implicit_value, which derives them from a residual through the implicit
+# function theorem and records the result through the first.
 #
-# implicit_value records on a tape, and the XAD Tape<T,N> template methods are
+# Both record on a tape, and the XAD Tape<T,N> template methods are
 # explicitly instantiated only in the odelia shared library, so these snippets link
 # against it rather than compiling header-only.
 
 compile_implicit_value_interface <- function() {
   ensure_ode_interface_loaded()
 
-  include_dir <- dirname(dirname(resolve_test_path(
-    "include/odelia/ode_solver.hpp", "inst/include/odelia/ode_solver.hpp")))
+  include_dir <- odelia_include_dir()
   odelia_so <- .odelia_test_cache$odelia_so
   withr::local_envvar(
-    PKG_CPPFLAGS = paste0("-I", shQuote(include_dir)),
+    PKG_CPPFLAGS = odelia_cppflags(include_dir),
     PKG_LIBS = shQuote(normalizePath(odelia_so, winslash = "/", mustWork = TRUE))
   )
   Rcpp::sourceCpp(code = '
@@ -84,6 +85,30 @@ compile_implicit_value_interface <- function() {
           Rcpp::_["d_db"] = xad::derivative(sys.b));
     }
 
+    // A value the tape never saw computed, entering it against two inputs it
+    // never touched. Nothing here relates `value` to u or v, so the derivatives
+    // that come back can only be the supplied ones.
+    // [[Rcpp::export]]
+    Rcpp::List record_with_derivatives_gradient(double value, double du,
+                                                double dv) {
+      tape_type tape;
+      adouble u(1.5), v(-0.25);
+      tape.registerInput(u);
+      tape.registerInput(v);
+      tape.newRecording();
+
+      adouble y = odelia::record_with_derivatives<adouble>(value,
+                                                           {{u, du}, {v, dv}});
+      tape.registerOutput(y);
+      xad::derivative(y) = 1.0;
+      tape.computeAdjoints();
+      return Rcpp::List::create(
+          Rcpp::_["value"] = xad::value(y),
+          Rcpp::_["identical"] = odelia::util::identical(xad::value(y), value),
+          Rcpp::_["d_du"] = xad::derivative(u),
+          Rcpp::_["d_dv"] = xad::derivative(v));
+    }
+
     // A residual that touches zero rather than crossing it, so dF/dy is zero at
     // the operating point and the quotient the theorem asks for does not exist.
     // [[Rcpp::export]]
@@ -97,6 +122,24 @@ compile_implicit_value_interface <- function() {
       return xad::value(y);
     }', verbose = FALSE)
 }
+
+testthat::test_that("record_with_derivatives returns the value and carries what it was given", {
+  compile_implicit_value_interface()
+
+  got <- record_with_derivatives_gradient(4.75, 2.0, -3.5)
+
+  # Each term is an input minus its own passive copy, which is zero in value, so
+  # what comes back is the number handed in rather than one near it.
+  testthat::expect_true(got$identical)
+  testthat::expect_equal(got$d_du, 2.0)
+  testthat::expect_equal(got$d_dv, -3.5)
+
+  # A non-finite derivative poisons the VALUE and not only the tape, because NaN
+  # times zero is not a number. It is refused here, where the two are still
+  # separable; downstream they are one expression.
+  testthat::expect_error(record_with_derivatives_gradient(4.75, NaN, 1.0),
+                         "is not finite")
+})
 
 testthat::test_that("implicit_value returns the operating point and its IFT derivative", {
   compile_implicit_value_interface()

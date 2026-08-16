@@ -4,10 +4,49 @@
 
 #include <cmath>
 #include <type_traits>
+#include <vector>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
+
+// One input a value responds to, and how. Kept as a pair so the two cannot be
+// assembled from separate lists and paired by position.
+template <class S>
+struct input_and_derivative {
+  S input;
+  double derivative;
+};
+
+// `value`, carrying derivatives that were never recorded: the result is `value`
+// itself, and its derivative with respect to each input is the one supplied.
+// Each term is an input minus its own passive copy, which is zero in value and
+// carries the derivative, so the number returned is untouched and only the tape
+// sees the terms.
+//
+// This is how a quantity computed away from the tape gets onto it -- a
+// root-find, a submodel's own solve, anything whose derivative is known by some
+// means other than recording the steps that produced it. At a plain double the
+// terms all vanish and this is the value.
+template <class S>
+S record_with_derivatives(double value,
+                          const std::vector<input_and_derivative<S>>& against) {
+  S out = value;
+  for (const input_and_derivative<S>& term : against) {
+    // A non-finite derivative poisons the VALUE and not only what is recorded
+    // against it, because NaN times zero is not a number. Tested here, where the
+    // two are still separable; downstream they are one expression.
+    if (!util::is_finite(term.derivative)) {
+      util::stop("record_with_derivatives: the derivative supplied for input " +
+                 util::to_string(static_cast<int>(&term - against.data())) +
+                 " of " + util::to_string(static_cast<int>(against.size())) +
+                 " is not finite (" + util::format_double(term.derivative) +
+                 "), so the value it belongs to cannot be recorded");
+    }
+    out += term.derivative * (term.input - util::to_passive(term.input));
+  }
+  return out;
+}
 
 // The value y* defined implicitly by a scalar equation F(y; p) = 0, made
 // differentiable. y* is solved in double, off the tape, by whatever root-find the
@@ -58,12 +97,11 @@ S implicit_value(double y_star, Equation&& F) {
       util::stop("implicit_value: dF/dy is zero at the operating point, so the "
                  "implicit function theorem does not apply there (a fold?)");
     }
-    // corr's value is ~0, since y* is the root; its derivative is (dF/dp)/(dF/dy).
-    // Subtracting its own passive value leaves the returned value exactly y* and
-    // the derivative -corr' = dy*/dp. to_passive strips every layer, so this
-    // composes at a nested scalar too.
+    // corr's value is ~0, since y* is the root; its derivative is (dF/dp)/(dF/dy),
+    // so y* against it with a coefficient of -1 is the theorem's own quotient.
+    // to_passive strips every layer, so this composes at a nested scalar too.
     const S corr = F(S(y_star)) / dFdy;
-    return S(y_star) - corr + util::to_passive(corr);
+    return record_with_derivatives<S>(y_star, {{corr, -1.0}});
   }
 }
 
