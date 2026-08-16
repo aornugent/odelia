@@ -375,11 +375,22 @@ void narrow_all(System& system,
 // And widen it back through all of them, which is the width the run left it at.
 // Every walk here descends from that width and leaves the System lower, so each
 // of them ends with this rather than leaving the next caller to notice.
+//
+// `applied` is how many widenings the System currently carries, because a walk
+// that stopped at one segment carries that many and the way back starts by
+// undoing exactly those. The caller knows the number; nothing here can read it
+// off a width.
 template <class System, class Widening>
 void widen_all(System& system,
                const std::vector<recorded_widening<Widening>>& widenings,
                const std::vector<std::vector<double>>& states,
-               const std::vector<double>& times) {
+               const std::vector<double>& times, std::size_t applied = 0) {
+    if (applied > widenings.size()) {
+        util::stop("widen_all: more widenings applied than the run took");
+    }
+    for (std::size_t j = applied; j-- > 0;) {
+        system.narrow(widenings[j].event);
+    }
     for (std::size_t j = 0; j < widenings.size(); ++j) {
         const std::size_t at = widenings[j].after_step;
         util::check_length(system.ode_size(), states[at].size());
