@@ -233,10 +233,24 @@ std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
 // here rather than in `evaluate` is what keeps that from being a rule each
 // caller has to remember.
 //
-// The sweep splits back along the same seam. `state_adjoint[m]` is assigned the
-// state half of seed m; the parameter half is ADDED to `parameter_adjoint[m]`,
-// because a parameter is reached once per step and its gradient is the sum over
-// every step swept. The caller therefore owns clearing it, once per sweep.
+// The sweep splits back along the same seam, and the two halves are handled
+// differently. `state_adjoint` is REPLACED: it is resized to one row per seed and
+// each row assigned, so rows a shorter batch does not reach do not survive as
+// stale numbers. `parameter_adjoint` is ADDED to, because a parameter is reached
+// once per step and its gradient is the sum over every step swept, so it is the
+// caller's to clear once per sweep and may carry rows past the seeds handed in.
+//
+// Those two are therefore different objects, and one being the other would mean
+// resizing the accumulator between the check on its rows and the writes into
+// them. Refused rather than documented.
+//
+// `twin` must be rebound for this call and not carried over from a previous one.
+// Its parameters are written from the recorded inputs, so a twin that was written
+// that way before arrives holding scalars from a recording this one has cleared,
+// and the sweep comes back wrong -- not obviously wrong: one seed's rows can stay
+// exact while another's do not. Nothing here can see the difference, which is why
+// it is stated. A caller wanting to amortise the rebind has to make the twin's
+// scalars fresh some other way.
 template <class Twin, class Evaluate>
 std::size_t state_and_parameter_adjoints(
     xad::adj<double>::tape_type& tape, Twin& twin,
@@ -250,6 +264,11 @@ std::size_t state_and_parameter_adjoints(
     const std::size_t n_parameter = parameters.size();
     const std::size_t n_seed = output_adjoints.size();
 
+    if (&state_adjoint == &parameter_adjoint) {
+        util::stop("state_and_parameter_adjoints: the state adjoints are "
+                   "replaced and the parameter adjoints accumulated, so they "
+                   "cannot be the same vector");
+    }
     if (parameter_adjoint.size() < n_seed) {
         util::stop("state_and_parameter_adjoints: one row of parameter adjoints "
                    "per seed, to accumulate into");

@@ -33,17 +33,21 @@ S record_with_derivatives(double value,
                           const std::vector<input_and_derivative<S>>& against) {
   S out = value;
   for (const input_and_derivative<S>& term : against) {
-    // A non-finite derivative poisons the VALUE and not only what is recorded
-    // against it, because NaN times zero is not a number. Tested here, where the
-    // two are still separable; downstream they are one expression.
-    if (!util::is_finite(term.derivative)) {
-      util::stop("record_with_derivatives: the derivative supplied for input " +
+    // Either half being non-finite poisons the VALUE and not only what is
+    // recorded against it: NaN times zero is not a number, and an infinite input
+    // minus its own passive copy is NaN rather than zero. Tested here, where the
+    // halves are still separable; downstream they are one expression.
+    const double at = util::to_passive(term.input);
+    if (!util::is_finite(term.derivative) || !util::is_finite(at)) {
+      util::stop("record_with_derivatives: input " +
                  util::to_string(static_cast<int>(&term - against.data())) +
                  " of " + util::to_string(static_cast<int>(against.size())) +
-                 " is not finite (" + util::format_double(term.derivative) +
-                 "), so the value it belongs to cannot be recorded");
+                 " has value " + util::format_double(at) + " and derivative " +
+                 util::format_double(term.derivative) +
+                 ", one of which is not finite, so the value they belong to "
+                 "cannot be recorded");
     }
-    out += term.derivative * (term.input - util::to_passive(term.input));
+    out += term.derivative * (term.input - at);
   }
   return out;
 }
