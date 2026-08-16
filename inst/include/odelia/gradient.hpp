@@ -496,7 +496,12 @@ std::size_t solve_adjoint_over_widenings(
         util::check_length(sweep_states[at].size(), states[at + 1].size());
     }
 
+    // One tape for every widening this walk crosses. Clearing it returns it to an
+    // empty recording and keeps the capacity, where one built per widening
+    // regrows it; the twin below is rebuilt per widening because it must be, and
+    // that is the distinction the primitive it is handed to states.
     std::size_t swept = 0;
+    typename scalar::tape_type tape(false);
     for (std::size_t j = segments.size(); j-- > 0;) {
         const state_segment& segment = segments[j];
         // Stopped and resumed at each requested step inside this segment, highest
@@ -536,7 +541,6 @@ std::size_t solve_adjoint_over_widenings(
             twin.widened_state(w.event, time, x, y);
         };
         std::vector<std::vector<double>> narrowed;
-        typename scalar::tape_type tape(false);
         state_and_parameter_adjoints(tape, twin, states[w.after_step], lambda,
                                      widen, narrowed, parameter_adjoint);
         lambda = std::move(narrowed);
