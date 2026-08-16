@@ -1,3 +1,33 @@
+## odelia 0.4.0
+
+**A C1 interpolant carrying a value and a slope at every knot
+(`odelia/hermite_interpolator.hpp`).** The value and the slope come from one
+polynomial, so `slope(u)` is the exact derivative of `eval(u)` and a caller
+wanting both gets a consistent pair from one span load. Each span reads only its
+own two knots, so moving one knot changes the interpolant in two spans rather
+than everywhere: a value-fitted cubic solves its slopes from the whole knot set,
+and a knot perturbation there reaches about forty spans.
+
+The build is in two halves. `set_nodes` validates ascent, scans for uniform
+spacing and lays out the spans; `set_data` fills the coefficients. A caller whose
+positions are fixed for a run sets the nodes once and the data per step, and the
+layout is not re-derived. `init` does both, and the two routes agree bit for bit.
+
+`eval` and `slope` take a double position or an active one. At an active position
+the span is indexed at the passive part and the query's own derivative arrives
+through the slope, so `d(value)/d(u)` is recorded.
+
+**A lattice on the same class (`lattice_size`, `ensure_lattice`).** A caller whose
+node positions must be constants of the run was assembling that itself.
+`lattice_size` is arithmetic only and static, so a caller can bound the node count
+before an allocation is asked for and refuse in the words of its own domain --
+what ran away is never the interpolant's to say. `ensure_lattice` lays
+`k * spacing` or extends what is held, and reads whether the held nodes *are* the
+lattice off them rather than remembering it.
+
+**`util::to_passive`**, which reduces a value to the double under it whatever AD
+layers it carries.
+
 ## odelia 0.3.0
 
 **Invariant-aware step rejection (#55).** A system may now declare the domain its
