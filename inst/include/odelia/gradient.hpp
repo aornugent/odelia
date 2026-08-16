@@ -359,6 +359,61 @@ std::vector<state_segment> state_segments(
     return ret;
 }
 
+// Narrow the System through every widening, newest first, because each was
+// applied on top of the one before it.
+template <class System, class Widening>
+void narrow_all(System& system,
+                const std::vector<recorded_widening<Widening>>& widenings,
+                const std::vector<std::vector<double>>& states) {
+    for (std::size_t j = widenings.size(); j-- > 0;) {
+        system.narrow(widenings[j].event);
+        util::check_length(system.ode_size(),
+                           states[widenings[j].after_step].size());
+    }
+}
+
+// And widen it back through all of them, which is the width the run left it at.
+// Every walk here descends from that width and leaves the System lower, so each
+// of them ends with this rather than leaving the next caller to notice.
+template <class System, class Widening>
+void widen_all(System& system,
+               const std::vector<recorded_widening<Widening>>& widenings,
+               const std::vector<std::vector<double>>& states,
+               const std::vector<double>& times) {
+    for (std::size_t j = 0; j < widenings.size(); ++j) {
+        const std::size_t at = widenings[j].after_step;
+        util::check_length(system.ode_size(), states[at].size());
+        system.set_recorded_state(states[at].begin(), times[at]);
+        system.widen(widenings[j].event);
+    }
+}
+
+// The state a segment's first step ran from, and the time it ran at. It is what
+// the run reached between a widening and the step after it, so no record holds
+// it and it is replayed. The System is left at that segment's width, because a
+// caller reading this state wants to run from it.
+template <class System, class Widening>
+double state_at_segment(System& system,
+                        const std::vector<recorded_widening<Widening>>& widenings,
+                        const std::vector<std::vector<double>>& states,
+                        const std::vector<double>& times, std::size_t segment,
+                        std::vector<double>& base, std::size_t& start) {
+    if (segment > widenings.size()) {
+        util::stop("state_at_segment: the recording has no such segment");
+    }
+    system.set_ode_state_and_field(states[0].begin(), times[0]);
+    start = 0;
+    for (std::size_t j = 0; j < segment; ++j) {
+        const std::size_t at = widenings[j].after_step;
+        system.set_recorded_state(states[at].begin(), times[at]);
+        system.widen(widenings[j].event);
+        start = at;
+    }
+    base.assign(system.ode_size(), 0.0);
+    system.ode_state(base.begin());
+    return times[start];
+}
+
 // Carry lambda back over a recording whose state widened, one segment per width,
 // highest first. At the foot of every segment but the lowest sits a widening: the
 // System is narrowed across it and the map that widened it is transposed there,
@@ -382,20 +437,48 @@ std::size_t solve_adjoint_over_widenings(
     const std::vector<state_segment> segments =
         state_segments(widenings, states.size());
 
+    // narrow() has to be widen()'s inverse, and across several widenings it has
+    // to be so in reverse order -- it drops what was added last, and nothing in
+    // the signature says which that is. The state is the only witness: a wrong
+    // entry dropped leaves the width right and the values wrong, which is the
+    // shape every defect in this corpus takes.
+    //
+    // Widening and immediately narrowing the same event IS an exact identity,
+    // so it costs one round trip per sweep to say so. Narrowing and widening
+    // back is not, because what the run's own widening added has since moved.
+    if (!widenings.empty()) {
+        std::vector<double> before(system.ode_size());
+        system.ode_state(before.begin());
+        system.widen(widenings.back().event);
+        system.narrow(widenings.back().event);
+        std::vector<double> after(system.ode_size());
+        if (after.size() != before.size()) {
+            util::stop("solve_adjoint_over_widenings: narrow did not undo the "
+                       "width widen added");
+        }
+        system.ode_state(after.begin());
+        for (std::size_t i = 0; i < before.size(); ++i) {
+            if (!util::identical(before[i], after[i])) {
+                util::stop("solve_adjoint_over_widenings: narrow returned a "
+                           "different state from the one widen was given, so it "
+                           "is dropping something other than what widen added");
+            }
+        }
+    }
+
     // The run left the System at its final width. Narrow to the lowest segment's,
     // newest widening first, because each narrowing drops what the one after it
     // was applied on top of.
-    for (std::size_t j = widenings.size(); j-- > 0;) {
-        system.narrow(widenings[j].event);
-    }
+    narrow_all(system, widenings, states);
 
     // Then back up, keeping the widened state each widening produced. A sweep
     // starting inside a segment runs from that state, and no record holds it.
+    const std::vector<double> times = solver.times();
     std::vector<std::vector<double>> sweep_states = states;
     for (std::size_t j = 0; j < widenings.size(); ++j) {
         const std::size_t at = widenings[j].after_step;
         util::check_length(system.ode_size(), states[at].size());
-        system.set_recorded_state(states[at].begin(), solver.times()[at]);
+        system.set_recorded_state(states[at].begin(), times[at]);
         system.widen(widenings[j].event);
         sweep_states[at].assign(system.ode_size(), 0.0);
         system.ode_state(sweep_states[at].begin());
