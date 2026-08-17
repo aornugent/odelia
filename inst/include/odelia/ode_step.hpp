@@ -61,21 +61,30 @@ public:
   static const bool first_same_as_last = true;
 
 private:
-  // Y_i for stage i, into `out`: y at stage 0, and y plus the tableau's
-  // combination of the earlier stage rates above that. step()'s own arithmetic,
-  // term for term, at whatever scalar the caller holds its rates in.
+  // The tableau, written once and used at whatever scalar the caller holds its
+  // rates in: the forward step and the recording its transpose is taken from
+  // both step through these, so the two cannot come apart.
+  //
+  // Y_i for stage i, into `out`: y at stage 0, and y plus the combination of the
+  // earlier stage rates above that.
   template <class S>
   void stage_state(int i, const std::vector<S>& y,
                    const std::vector<std::vector<S>>& k, double h,
                    std::vector<S>& out) const;
+  // And the state the step ends at, y + h * (c1 k1 + c3 k3 + c4 k4 + c6 k6).
+  // k2 and k5 reach it only through the later stages. `out` may be `y`.
+  template <class S>
+  void step_end(const std::vector<S>& y, const std::vector<std::vector<S>>& k,
+                double h, std::vector<S>& out) const;
   double stage_time(int i, double time, double h) const;
   const double* stage_row(int i) const;
 
   // Intermediate storage, representing state (was GSL rkck_state_t)
   size_t size;
-  state_type k1, k2, k3, k4, k5, k6, ytmp;
+  std::vector<state_type> k{6};
+  state_type ytmp;
 
-  // The tape the stage transposes record on, one for every step a sweep walks.
+  // The tape a step is recorded on, reused by every step a sweep walks.
   scratch_tape adjoint_tape;
 
   // Cash carp constants, from GSL.
@@ -98,12 +107,9 @@ private:
 template <class System>
 void Step<System>::resize(size_t size_) {
   size = size_;
-  k1.resize(size);
-  k2.resize(size);
-  k3.resize(size);
-  k4.resize(size);
-  k5.resize(size);
-  k6.resize(size);
+  for (state_type& stage_rate : k) {
+    stage_rate.resize(size);
+  }
   ytmp.resize(size);
 }
 
@@ -122,8 +128,6 @@ void record_stage(System& system, int rk_step) {
 }
 
 
-// Think carefully about ownership of data, draw a diagram, and go
-// from there.
 template <class System>
 void Step<System>::step(System& system,
                         double time, double step_size,
@@ -131,66 +135,25 @@ void Step<System>::step(System& system,
                         state_type &yerr,
                         const state_type &dydt_in,
                         state_type &dydt_out) {
-  const double h = step_size; // Historical reasons.
+  const double h = step_size;
 
-  // k1 step:
-  std::copy(dydt_in.begin(), dydt_in.end(), k1.begin());
-  for (size_t i = 0; i < size; ++i) {
-    ytmp[i] = y[i] + b21 * h * k1[i];
+  // First-same-as-last: k1 is the previous step's dydt_out, so the step costs
+  // five rate evaluations and one more to hand the next step its own k1.
+  std::copy(dydt_in.begin(), dydt_in.end(), k[0].begin());
+  for (int i = 1; i < 6; ++i) {
+    stage_state(i, y, k, h, ytmp);
+    derivs(system, ytmp, k[i], stage_time(i, time, h), i - 1);
+    record_stage(system, i - 1);
   }
 
-  // k2 step:
-  derivs(system, ytmp, k2, time + ah[0] * h, 0);
-  record_stage(system, 0);
-  
-  for (size_t i = 0; i < size; ++i) {
-    ytmp[i] = y[i] + h * (b3[0] * k1[i] + b3[1] * k2[i]);
-  }
-
-  // k3 step:
-  derivs(system, ytmp, k3, time + ah[1] * h, 1);
-  record_stage(system, 1);
-
-  for (size_t i = 0; i < size; ++i) {
-    ytmp[i] = y[i] + h * (b4[0] * k1[i] + b4[1] * k2[i] + b4[2] * k3[i]);
-  }
-
-  // k4 step:
-  derivs(system, ytmp, k4, time + ah[2] * h, 2);
-  record_stage(system, 2);
-
-  for (size_t i = 0; i < size; ++i) {
-    ytmp[i] = y[i] + h * (b5[0] * k1[i] + b5[1] * k2[i] + b5[2] * k3[i] +
-			  b5[3] * k4[i]);
-  }
-
-  // k5 step
-  derivs(system, ytmp, k5, time + ah[3] * h, 3);
-  record_stage(system, 3);
-
-  for (size_t i = 0; i < size; ++i) {
-    ytmp[i] = y[i] + h * (b6[0] * k1[i] + b6[1] * k2[i] + b6[2] * k3[i] +
-			  b6[3] * k4[i] + b6[4] * k5[i]);
-  }
-
-  // k6 step and final sum
-  derivs(system, ytmp, k6, time + ah[4] * h, 4);
-  record_stage(system, 4);
-
-  for (size_t i = 0; i < size; ++i) {
-    // GSL does this in two steps, but not sure why.
-    const value_type d_i = c1 * k1[i] + c3 * k3[i] + c4 * k4[i] + c6 * k6[i];
-    y[i] += h * d_i;
-  }
-
-  // Evaluate dydt_out.
+  step_end(y, k, h, y);
   derivs(system, y, dydt_out, time + h, 5);
   record_stage(system, 5);
 
   // Difference between 4th and 5th order, for error calculations
-  for (size_t i = 0; i < size; ++i) {
-    yerr[i] = h * (ec[1] * k1[i] + ec[3] * k3[i] + ec[4] * k4[i] +
-		   ec[5] * k5[i] + ec[6] * k6[i]);
+  for (size_t q = 0; q < size; ++q) {
+    yerr[q] = h * (ec[1] * k[0][q] + ec[3] * k[2][q] + ec[4] * k[3][q] +
+                   ec[5] * k[4][q] + ec[6] * k[5][q]);
   }
 }
 
@@ -215,8 +178,8 @@ void Step<System>::stage_state(int i, const std::vector<S>& y,
     std::copy(y.begin(), y.end(), out.begin());
     return;
   }
-  // Stage 1 keeps step()'s grouping of the single term: b21 * h * k1 and
-  // h * (b21 * k1) round differently.
+  // Stage 1 keeps its single term grouped as b21 * h * k1: h * (b21 * k1)
+  // rounds differently, and the reference numbers were blessed on this one.
   if (i == 1) {
     for (size_t q = 0; q < size; ++q) {
       out[q] = y[q] + b21 * h * k[0][q];
@@ -225,13 +188,25 @@ void Step<System>::stage_state(int i, const std::vector<S>& y,
   }
   const double* const b = stage_row(i);
   for (size_t q = 0; q < size; ++q) {
-    // Summed in ascending stage, then one h, as step() sums it. Cash-Karp's
-    // rows are dense, so this is a sum over every earlier stage rather than a
-    // term for the immediate predecessor.
+    // Summed in ascending stage, then one h. Cash-Karp's rows are dense, so
+    // this is a sum over every earlier stage rather than a term for the
+    // immediate predecessor.
     S combination = b[0] * k[0][q];
     for (int m = 1; m < i; ++m) {
       combination += b[m] * k[m][q];
     }
+    out[q] = y[q] + h * combination;
+  }
+}
+
+template <class System>
+template <class S>
+void Step<System>::step_end(const std::vector<S>& y,
+                            const std::vector<std::vector<S>>& k, double h,
+                            std::vector<S>& out) const {
+  for (size_t q = 0; q < size; ++q) {
+    const S combination =
+      c1 * k[0][q] + c3 * k[2][q] + c4 * k[3][q] + c6 * k[5][q];
     out[q] = y[q] + h * combination;
   }
 }
@@ -267,22 +242,17 @@ void Step<System>::step_adjoint_batched(System& system,
                         typename std::vector<scalar>::const_iterator x,
                         std::vector<scalar>& y_end) -> void {
     const std::vector<scalar> y0(x, x + static_cast<std::ptrdiff_t>(size));
-    std::vector<std::vector<scalar>> k(6, std::vector<scalar>(size));
+    std::vector<std::vector<scalar>> rate(6, std::vector<scalar>(size));
     std::vector<scalar> stage(size);
     // k1 is re-derived at this step's own start state: first-same-as-last hands
     // step() the previous step's dydt_out, which a reverse traversal has not
     // rebuilt.
-    ode::derivs(active_system, y0, k[0], time);
+    ode::derivs(active_system, y0, rate[0], time);
     for (int i = 1; i < 6; ++i) {
-      stage_state(i, y0, k, h, stage);
-      ode::derivs(active_system, stage, k[i], stage_time(i, time, h), i - 1);
+      stage_state(i, y0, rate, h, stage);
+      ode::derivs(active_system, stage, rate[i], stage_time(i, time, h), i - 1);
     }
-    // y_end = y + h * (c1 k1 + c3 k3 + c4 k4 + c6 k6). k2 and k5 reach it only
-    // through the later stages.
-    for (size_t q = 0; q < size; ++q) {
-      const scalar d_q = c1 * k[0][q] + c3 * k[2][q] + c4 * k[3][q] + c6 * k[5][q];
-      y_end[q] = y0[q] + h * d_q;
-    }
+    step_end(y0, rate, h, y_end);
   };
 
   ode::state_and_parameter_adjoints(adjoint_tape.get(), system, y, lambda_out,
