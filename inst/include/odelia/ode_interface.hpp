@@ -27,15 +27,11 @@ using state_type = std::vector<typename System::value_type>;
 template <typename T = double>
 using active_scalar = typename xad::adj<T>::active_type;
 
-// By default, we assume that systems are time homogeneous
+// A System that carries its own clock. One that does not is time homogeneous,
+// and the calls below hand it no time rather than refusing it.
 template <typename T>
-class needs_time {
-  typedef char true_type;
-  typedef long false_type;
-  template <typename C> static true_type test(decltype(&C::ode_time)) ;
-  template <typename C> static false_type test(...);
-public:
-  enum { value = sizeof(test<T>(0)) == sizeof(true_type) };
+concept HasOdeTime = requires(const T& t) {
+  { t.ode_time() } -> std::convertible_to<double>;
 };
 
 // A System that can hand back a copy of itself on scalar U. The rebound type must
@@ -107,9 +103,16 @@ concept ReplaysField =
 //
 // widened_state() is the map alone -- the narrow state in, the wide state out,
 // nothing else rebuilt -- so it can be evaluated at an active scalar and taped.
-// It loads the state it is given, which is why nothing here names a state
-// loader. It leaves the System holding what it added, so a caller evaluating it
-// more than once narrows between calls.
+// It leaves the System holding what it added, so a caller evaluating it more
+// than once narrows between calls.
+//
+// set_recorded_state() is how the walk puts the System back on a state the run
+// recorded. It is separate from the ordinary loader because a run carries more
+// than it records: a quantity the rates evaluate a second time is at that second
+// value when the state is recorded, and a loader that stops at the first leaves
+// the walk linearising something the trajectory never held. Which quantity that
+// is, and how to bring it up to date, is the model's; that there is one is the
+// solver's, and it is named here because the walk below calls it.
 //
 // A widening whose TIME depends on the parameters is a different map: its
 // adjoint carries a term through that time which nothing here computes. A System
@@ -123,41 +126,34 @@ concept WidensState =
     s.widen(w);
     s.narrow(w);
     s.widened_state(w, time, in, out);
+    s.set_recorded_state(in, time);
   };
 
-// Opt-in domain check (#55). A system may declare
+// Opt-in domain check. A system may declare
 //
 //   bool ode_state_valid(const state_type& y) const;
 //
 // and the adaptive stepper will reject any step landing on a state it refuses,
 // shrinking and retrying instead of committing it. Systems that do not declare it
-// are unaffected: state_valid() below resolves to the constant-true overload, so
-// nothing is called and nothing costs anything.
+// are unaffected: state_valid() below takes its other branch, so nothing is
+// called and nothing costs anything.
 //
 // The predicate is handed the state *vector* rather than reading the system. The
 // stepper's final derivs() does leave the system sitting on y, so either would
 // work, but a predicate over a vector is testable without constructing a system
 // and is honest about what it is judging.
-template <typename System>
-class has_state_check {
-  typedef char true_type;
-  typedef long false_type;
-  template <typename C> static true_type test(decltype(&C::ode_state_valid)) ;
-  template <typename C> static false_type test(...);
-public:
-  enum { value = sizeof(test<System>(0)) == sizeof(true_type) };
+template <typename System, typename StateType>
+concept ChecksState = requires(const System& s, const StateType& y) {
+  { s.ode_state_valid(y) } -> std::convertible_to<bool>;
 };
 
 template <typename System, typename StateType>
-typename std::enable_if<has_state_check<System>::value, bool>::type
-state_valid(const System& system, const StateType& y) {
-  return system.ode_state_valid(y);
-}
-
-template <typename System, typename StateType>
-typename std::enable_if<!has_state_check<System>::value, bool>::type
-state_valid(const System& /* system */, const StateType& /* y */) {
-  return true;
+bool state_valid(const System& system, const StateType& y) {
+  if constexpr (ChecksState<System, StateType>) {
+    return system.ode_state_valid(y);
+  } else {
+    return true;
+  }
 }
 
 // The recursive interface. Each helper walks a container of elements, threading
@@ -247,28 +243,22 @@ It set_ode_aux(ForwardIterator first, ForwardIterator last, It it) {
 }
 
 template <typename T>
-typename std::enable_if<needs_time<T>::value, double>::type
-ode_time(const T& obj) {
-  return obj.ode_time();
-}
-
-template <typename T>
-typename std::enable_if<!needs_time<T>::value, double>::type
-ode_time(const T& /* obj */) {
-  return 0.0;
+double ode_time(const T& obj) {
+  if constexpr (HasOdeTime<T>) {
+    return obj.ode_time();
+  } else {
+    return 0.0;
+  }
 }
 
 namespace internal {
 template <typename T, typename StateType>
-typename std::enable_if<needs_time<T>::value, void>::type
-set_ode_state(T& obj, const StateType& y, double time) {
-  obj.set_ode_state(y.begin(), time);
-}
-
-template <typename T, typename StateType>
-typename std::enable_if<!needs_time<T>::value, void>::type
-set_ode_state(T& obj, const StateType& y, double /* time */) {
-  obj.set_ode_state(y.begin());
+void set_ode_state(T& obj, const StateType& y, double time) {
+  if constexpr (HasOdeTime<T>) {
+    obj.set_ode_state(y.begin(), time);
+  } else {
+    obj.set_ode_state(y.begin());
+  }
 }
 
 template <typename T, typename StateType>
@@ -314,30 +304,25 @@ std::vector<double> r_derivs(T& obj, const std::vector<double>& y, const double 
   return dydt;
 }
 
+// Two arities rather than one, because R binds each separately: a System with a
+// clock is set at a time and one without is not offered one.
 template <typename T>
-typename std::enable_if<needs_time<T>::value, void>::type
-r_set_ode_state(T& obj, const std::vector<double>& y, double time) {
+  requires HasOdeTime<T>
+void r_set_ode_state(T& obj, const std::vector<double>& y, double time) {
   util::check_length(y.size(), obj.ode_size());
   obj.set_ode_state(y.begin(), time);
 }
 
 template <typename T>
-typename std::enable_if<!needs_time<T>::value, void>::type
-r_set_ode_state(T& obj, const std::vector<double>& y) {
+  requires (!HasOdeTime<T>)
+void r_set_ode_state(T& obj, const std::vector<double>& y) {
   util::check_length(y.size(), obj.ode_size());
   obj.set_ode_state(y.begin());
 }
 
 template <typename T>
-typename std::enable_if<needs_time<T>::value, double>::type
-r_ode_time(const T& obj) {
-  return obj.ode_time();
-}
-
-template <typename T>
-typename std::enable_if<!needs_time<T>::value, double>::type
-r_ode_time(const T& /* obj */) {
-  return 0.0;
+double r_ode_time(const T& obj) {
+  return ode_time(obj);
 }
 
 template <typename T>

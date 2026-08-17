@@ -301,8 +301,8 @@ struct Logistic {
 
 // Same dynamics, but declaring the domain. Inherited rather than switched on a
 // template parameter so that the silent copy genuinely lacks the method and
-// has_state_check<> resolves to false for it -- an `if constexpr` inside one
-// struct would still leave the member there for the trait to find.
+// ChecksState resolves to false for it -- an `if constexpr` inside one
+// struct would still leave the member there for the concept to find.
 struct LogisticChecked : Logistic<OnLeave::nothing> {
   static int refusals;
   bool ode_state_valid(const std::vector<double>& state) const {
@@ -325,9 +325,10 @@ odelia::ode::OdeControl loose_control() {
 
 // A declared domain must be enforced on the committed state.
 void test_predicate_rejects_out_of_domain_step() {
-  check(odelia::ode::has_state_check<LogisticChecked>::value,
-        "has_state_check finds a declared ode_state_valid");
-  check(!odelia::ode::has_state_check<Logistic<OnLeave::nothing>>::value,
+  using domain = std::vector<double>;
+  check(odelia::ode::ChecksState<LogisticChecked, domain>,
+        "ChecksState finds a declared ode_state_valid");
+  check(!odelia::ode::ChecksState<Logistic<OnLeave::nothing>, domain>,
         "and does not invent one that is absent");
 
   Logistic<OnLeave::nothing> unguarded;

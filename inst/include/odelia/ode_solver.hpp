@@ -82,6 +82,10 @@ public:
   // which no step reached.
   std::vector<double> step_sizes() const { return solver.get_step_sizes(); }
 
+  // The System this solver steps, so a caller taking the solver can constrain on
+  // it rather than on what get_system_ref() happens to return.
+  using system_type = System;
+
   System get_system() const { return system; }
   System& get_system_ref() { return system; }
 

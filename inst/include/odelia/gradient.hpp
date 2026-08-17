@@ -193,6 +193,7 @@ std::vector<state_segment> state_segments(
 // Narrow the System through every widening, newest first, because each was
 // applied on top of the one before it.
 template <class System, class Widening>
+  requires WidensState<System>
 void narrow_all(System& system,
                 const std::vector<recorded_widening<Widening>>& widenings,
                 const std::vector<std::vector<double>>& states) {
@@ -212,6 +213,7 @@ void narrow_all(System& system,
 // undoing exactly those. The caller knows the number; nothing here can read it
 // off a width.
 template <class System, class Widening>
+  requires WidensState<System>
 void widen_all(System& system,
                const std::vector<recorded_widening<Widening>>& widenings,
                const std::vector<std::vector<double>>& states,
@@ -235,6 +237,7 @@ void widen_all(System& system,
 // it and it is replayed. The System is left at that segment's width, because a
 // caller reading this state wants to run from it.
 template <class System, class Widening>
+  requires WidensState<System>
 double state_at_segment(System& system,
                         const std::vector<recorded_widening<Widening>>& widenings,
                         const std::vector<std::vector<double>>& states,
@@ -243,7 +246,7 @@ double state_at_segment(System& system,
     if (segment > widenings.size()) {
         util::stop("state_at_segment: the recording has no such segment");
     }
-    system.set_ode_state_and_field(states[0].begin(), times[0]);
+    system.set_recorded_state(states[0].begin(), times[0]);
     start = 0;
     for (std::size_t j = 0; j < segment; ++j) {
         const std::size_t at = widenings[j].after_step;
@@ -268,6 +271,7 @@ double state_at_segment(System& system,
 // swept, which is not the segment count -- an empty lowest segment is swept zero
 // times, and a split adds one.
 template <class Solver, class Widening>
+  requires WidensState<typename Solver::system_type>
 std::size_t solve_adjoint_over_widenings(
     Solver& solver, const std::vector<std::vector<double>>& states,
     const std::vector<recorded_widening<Widening>>& widenings,
@@ -387,6 +391,7 @@ std::size_t solve_adjoint_over_widenings(
 // is not h, and a walk that chose its own would be differentiating a controller
 // the model does not contain.
 template <class Solver, class Widening>
+  requires WidensState<typename Solver::system_type>
 void advance_over_widenings(
     Solver& forward, const std::vector<recorded_widening<Widening>>& widenings,
     const std::vector<double>& step_sizes, std::size_t from_segment,
