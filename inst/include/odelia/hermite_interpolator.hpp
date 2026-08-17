@@ -119,27 +119,35 @@ public:
 
   // dy/du at u -- the exact derivative of the polynomial eval() uses, as a value.
   //
-  // The position is read passively, and unlike eval() nothing grafts the query's
-  // derivative back on, because d(slope)/d(u) is the curvature and no span carries
-  // one. An active query is therefore refused rather than answered with a silent
-  // zero: eval() and value_and_slope() are the readers that take one.
+  // The position is read passively and an active query is refused rather than
+  // answered with a silent zero. Grafting the query's derivative here would need
+  // the span's second derivative, and that number is a derivative of the fit: the
+  // read is C1 and not C2, so a curvature taken from it describes the interpolant
+  // rather than what was interpolated.
   template <typename U>
   S slope(const U& u) const {
     static_assert(std::is_same_v<U, double>,
                   "hermite_interpolator::slope reads the position at its value, so "
                   "an active query's derivative has nowhere to go and would come "
-                  "back as exactly zero. Use eval() or value_and_slope(), which "
-                  "graft it.");
+                  "back as exactly zero. eval() is the reader that takes one.");
     check_initialised();
     return slope_at(u);
   }
 
   // Both from one knot lookup and one span load, so a caller wanting the pair at
   // many positions pays one lookup each rather than two.
+  //
+  // Passive query only, for the reason slope() is: the pair's second half has no
+  // route for the query's derivative, so grafting it onto the first half alone
+  // would answer half the query and leave the other half reading exactly zero.
   template <typename U>
   void value_and_slope(const U& u, S& value, S& dydu) const {
+    static_assert(std::is_same_v<U, double>,
+                  "hermite_interpolator::value_and_slope reads the position at its "
+                  "value, so an active query's derivative would reach the value and "
+                  "not the slope. eval() is the reader that takes one.");
     check_initialised();
-    const double up = util::to_passive(u);
+    const double up = u;
     if (up <= x.front()) {
       value = y.front() + m.front() * (up - x.front());
       dydu = m.front();
@@ -151,12 +159,6 @@ public:
       const double t = (up - s.x0) * s.inv_h;
       value = s.y0 + t * (s.c1 + t * (s.c2 + t * s.c3));
       dydu = (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
-    }
-    if constexpr (!std::is_same_v<U, double>) {
-      // The span is indexed at the passive position, so d(value)/d(u) is not
-      // recorded by the read itself; the slope carries it. Without this a height
-      // adjoint through the interpolant measures as exactly zero.
-      value = graft(value, dydu, u, up);
     }
   }
 
