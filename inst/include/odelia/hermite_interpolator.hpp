@@ -25,9 +25,10 @@ namespace interpolator {
 // and set_data fills the coefficients. A caller whose positions are fixed for a run
 // calls set_nodes once and set_data per stage.
 //
-// eval and slope take either a double position or an active one. At an active
-// position the value is read at its passive part and the query's own derivative is
-// grafted on through the slope, so d(value)/d(u) is recorded.
+// eval takes either a double position or an active one; at an active position the
+// value is read at its passive part and the query's own derivative is grafted on
+// through the slope, so d(value)/d(u) is recorded. slope and value_and_slope take a
+// double, because a query's derivative reaches a value and not a slope.
 template <typename S>
 class hermite_interpolator {
 public:
@@ -110,7 +111,12 @@ public:
     if constexpr (std::is_same_v<U, double>) {
       return value_at(up);
     } else {
-      return graft(value_at(up), slope_at(up), u, up);
+      // One span load for both halves. The graft needs the slope too, and taking
+      // them separately resolves the same position twice on the read this class
+      // exists for.
+      S value, dydu;
+      value_and_slope(up, value, dydu);
+      return graft(value, dydu, u, up);
     }
   }
 
@@ -156,18 +162,23 @@ public:
       dydu = m.back();
     } else {
       const Span& s = spans[span_of(up)];
-      const double t = (up - s.x0) * s.inv_h;
-      value = s.y0 + t * (s.c1 + t * (s.c2 + t * s.c3));
-      dydu = (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
+      const double t = s.local(up);
+      value = s.value(t);
+      dydu = s.slope(t);
     }
   }
 
 private:
   // One span's whole polynomial, contiguous: a query touches a single cache line
-  // rather than one per coefficient array.
+  // rather than one per coefficient array. The cubic and its derivative are written
+  // here, beside the coefficients they read, so the three readers share one spelling
+  // of each instead of restating it and needing a test that they agree.
   struct Span {
     double x0 = 0.0, inv_h = 0.0;
     S y0{}, c1{}, c2{}, c3{};
+    double local(double u) const { return (u - x0) * inv_h; }
+    S value(double t) const { return y0 + t * (c1 + t * (c2 + t * c3)); }
+    S slope(double t) const { return (c1 + t * (2.0 * c2 + t * 3.0 * c3)) * inv_h; }
   };
 
   // The query's derivative, materialised while its operands are alive. A deduced
@@ -187,16 +198,14 @@ private:
     if (u <= x.front()) return y.front() + m.front() * (u - x.front());
     if (u >= x.back())  return y.back()  + m.back()  * (u - x.back());
     const Span& s = spans[span_of(u)];
-    const double t = (u - s.x0) * s.inv_h;
-    return s.y0 + t * (s.c1 + t * (s.c2 + t * s.c3));
+    return s.value(s.local(u));
   }
 
   S slope_at(double u) const {
     if (u <= x.front()) return m.front();
     if (u >= x.back())  return m.back();
     const Span& s = spans[span_of(u)];
-    const double t = (u - s.x0) * s.inv_h;
-    return (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
+    return s.slope(s.local(u));
   }
 
   std::size_t span_of(double u) const {
