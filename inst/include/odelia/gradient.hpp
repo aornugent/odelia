@@ -86,10 +86,25 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
             util::stop("DifferentiationTargets: initial-state index out of range");
     }
 
-    // The tape is created once and reused across the rows of this Jacobian.
+    // The tape is created once and reused across the rows of this Jacobian, and
+    // across calls, so an optimiser loop amortises it.
     if (!solver.tape) {
         solver.tape = std::make_unique<ad::tape_type>(false);
     }
+    // NOT cleared, and the asymmetry with adjoint.hpp is the point. There,
+    // clearAll() is right because the System is lifted per recording, so every
+    // scalar arrives holding no slot. Here the lifted System is CACHED on the
+    // solver and outlives the recording, so its members carry this recording's
+    // slots into the next one -- and clearAll(), by returning the slot counter to
+    // zero, is what makes those stale slots alias live variables. computeJacobian
+    // calls newRecording() instead, which discards the operations and leaves the
+    // counter above every slot already handed out, so a carried scalar can never
+    // be given its number a second time.
+    //
+    // The cost is a leak bounded by what the System owns rather than by what the
+    // recording writes: the variable count climbs by the System's live scalars per
+    // call while every number stays right. That is the trade the cached System
+    // buys, and clearing here instead makes two consecutive gradients disagree.
     solver.tape->activate();
     tape_guard<ad::tape_type> guard{solver.tape.get()};
 
@@ -106,6 +121,9 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
             std::size_t k = 0;
             for (int i : targets.params) *params[i] = x[k++];
             for (int j : targets.ics)    *ics[j]    = x[k++];
+            // Seed first, then reset: reset() is what carries the initial state
+            // into the stepper's buffers. Reset first and every initial-state row
+            // comes back as exactly zero with nothing raised.
             solver.reset();
             solver.run();
             auto outputs = functional(solver);
@@ -349,7 +367,7 @@ std::size_t solve_adjoint_over_widenings(
         std::sort(cuts.begin(), cuts.end());
         std::size_t upper = segment.last;
         for (std::size_t c = cuts.size(); c-- > 0;) {
-            solver.solve_adjoint_batched(sweep_states, lambda,
+            solver.solve_adjoint(sweep_states, lambda,
                                          parameter_adjoint, cuts[c], upper);
             upper = cuts[c];
             ++swept;
@@ -357,7 +375,7 @@ std::size_t solve_adjoint_over_widenings(
         // A widening at the first recorded step leaves the lowest segment with no
         // step in it, which is what a run from an empty state gives.
         if (segment.first < upper) {
-            solver.solve_adjoint_batched(sweep_states, lambda,
+            solver.solve_adjoint(sweep_states, lambda,
                                          parameter_adjoint, segment.first,
                                          upper);
             ++swept;
@@ -439,8 +457,6 @@ T sum_of_squares(const std::vector<std::vector<T>>& predicted,
 struct least_squares {
   std::vector<size_t>              obs_indices;   // indices into the recorded steps
   std::vector<std::vector<double>> observations;  // measured data, per observation
-
-  std::size_t codomain() const { return 1; }
 
   template<typename Solver>
   typename Solver::value_type operator()(Solver& solver) const {

@@ -117,11 +117,21 @@ public:
   template <typename U>
   S operator()(const U& u) const { return eval(u); }
 
-  // dy/du at u -- the exact derivative of the polynomial eval() uses.
+  // dy/du at u -- the exact derivative of the polynomial eval() uses, as a value.
+  //
+  // The position is read passively, and unlike eval() nothing grafts the query's
+  // derivative back on, because d(slope)/d(u) is the curvature and no span carries
+  // one. An active query is therefore refused rather than answered with a silent
+  // zero: eval() and value_and_slope() are the readers that take one.
   template <typename U>
   S slope(const U& u) const {
+    static_assert(std::is_same_v<U, double>,
+                  "hermite_interpolator::slope reads the position at its value, so "
+                  "an active query's derivative has nowhere to go and would come "
+                  "back as exactly zero. Use eval() or value_and_slope(), which "
+                  "graft it.");
     check_initialised();
-    return slope_at(util::to_passive(u));
+    return slope_at(u);
   }
 
   // Both from one knot lookup and one span load, so a caller wanting the pair at

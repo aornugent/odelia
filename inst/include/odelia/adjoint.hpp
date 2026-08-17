@@ -310,12 +310,14 @@ std::size_t state_and_parameter_adjoints(
 // state and the rates is an intermediate of that one recording, so nothing
 // between them needs a transpose written for it.
 //
-// `stage` is the recorded stage the evaluation belongs to; negative where none
-// does, which is the step's first evaluation, whose rate the step before it took.
+// The rate is taken at the time, not at a recorded stage. The System recorded on
+// is lifted for this recording and holds no recorded field, so there is no stage
+// for it to read back -- a stage argument here would name a capability the lifted
+// copy cannot have.
 template <class System>
 std::size_t rates_adjoint(
     xad::adj<double>::tape_type& tape, const System& system,
-    const std::vector<double>& state, double time, int stage,
+    const std::vector<double>& state, double time,
     const std::vector<std::vector<double>>& rate_adjoints,
     std::vector<std::vector<double>>& state_adjoint,
     std::vector<std::vector<double>>& parameter_adjoint) {
@@ -327,11 +329,7 @@ std::size_t rates_adjoint(
         // The state half of the recorded inputs; the parameters are already
         // written from the other half.
         std::vector<scalar> y(x, x + static_cast<std::ptrdiff_t>(n_state));
-        if (stage < 0) {
-            ode::derivs(active_system, y, dydt, time);
-        } else {
-            ode::derivs(active_system, y, dydt, time, stage);
-        }
+        ode::derivs(active_system, y, dydt, time);
     };
     return state_and_parameter_adjoints(tape, system, state, rate_adjoints, rates,
                                         state_adjoint, parameter_adjoint);

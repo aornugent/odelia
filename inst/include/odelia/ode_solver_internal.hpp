@@ -52,21 +52,21 @@ public:
   // The adjoint of one step, from the state that step started at, for several
   // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
   // counterpart.
-  void step_adjoint_batched(System& system, double time, double step_size,
-                            const state_type& y,
-                            const std::vector<state_type>& lambda_out,
-                            std::vector<state_type>& lambda_in,
-                            std::vector<std::vector<double>>& parameter_adjoint) {
+  void step_adjoint(System& system, double time, double step_size,
+                    const state_type& y,
+                    const std::vector<state_type>& lambda_out,
+                    std::vector<state_type>& lambda_in,
+                    std::vector<std::vector<double>>& parameter_adjoint) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
     // The System can be a different width from the one the forward pass left,
-    // because a caller sweeping a segment narrows it between segments, and the
-    // stage buffers are sized once at construction. Every seed carries that same
-    // width. A sweep is the end of the solver's forward state either way.
+    // because a caller sweeping a segment narrows it between segments. Every seed
+    // carries that same width, and the stage buffers are sized to it here. A sweep
+    // is the end of the solver's forward state either way.
     resize(lambda_out.front().size());
-    stepper.step_adjoint_batched(system, time, step_size, y, lambda_out,
-                                 lambda_in, parameter_adjoint);
+    stepper.step_adjoint(system, time, step_size, y, lambda_out,
+                         lambda_in, parameter_adjoint);
   }
 
   // Rate evaluations recorded since the count was last cleared.
@@ -537,7 +537,7 @@ void SolverInternal<System>::set_time(double t) {
       !util::almost_equal(prev_steps.back().first, t, ulp))
   {
     util::stop("Time does not match previous (delta = " +
-               util::to_string(prev_steps.back().first - t) +
+               util::format_double(prev_steps.back().first - t) +
                "). Reset solver first.");
   }
   time = t;

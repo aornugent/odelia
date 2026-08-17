@@ -63,7 +63,7 @@ public:
     rebuild(xs, ys);
 
     auto within_tol = [&](S y_true, S y_pred) {
-      const double t = xad::value(y_true), p = xad::value(y_pred);
+      const double t = util::to_passive(y_true), p = util::to_passive(y_pred);
       return std::fabs(t - p) < atol || std::fabs(1.0 - p / t) < rtol;
     };
 
@@ -128,14 +128,6 @@ public:
     y.push_back(yi);
   }
 
-  // adds point in sorted position (slower than above)
-  void add_point_sorted(double xi, S yi) {
-    auto x_upper = std::upper_bound(x.begin(), x.end(), xi); // find smallest number larger than xi
-    x.insert(x_upper, xi);                                   // add xi below that number
-    auto y_upper = std::upper_bound(y.begin(), y.end(), yi);
-    y.insert(y_upper, yi);
-  }
-
   // Remove all the contents, being ready to be refilled.
   void clear() {
     x.clear();
@@ -178,8 +170,9 @@ public:
     return spline(u);
   }
 
-  // Analytic first derivative dy/du at u (exact derivative of the interpolating
-  // polynomial; see Spline::deriv). Useful for exact/smooth gradients.
+  // Analytic dy/du at u: the interpolating polynomial's own derivative, read at a
+  // passive position. phylloptim's root-finders and leaf model call this, so it is
+  // not reachable from this repository's callers alone.
   S deriv(double u) const {
     check_active();
     return spline.deriv(u);

@@ -105,7 +105,7 @@ int Canopy_record(SEXP solver_xp, double Tmax) {
   d->reset();
   d->get_system_ref().start_recording();
   d->advance_adaptive({0.0, Tmax});
-  return static_cast<int>(d->recorded_steps().size() - 1);
+  return static_cast<int>(d->times().size() - 1);
 }
 
 // Differentiate the replayed final state w.r.t. `gain`, reusing the cached active
@@ -118,7 +118,7 @@ Rcpp::List Canopy_replay_gradient(SEXP solver_xp, bool reuse_light = false) {
     util::stop("Canopy_replay_gradient: call Canopy_record() first");
   }
   auto& rec = d->get_system_ref();
-  const std::vector<double> times = d->recorded_steps();
+  const std::vector<double> times = d->times();
 
   auto& active = solver::active_solver<SystemType, ActiveSystemType>(*d);
   active.set_schedule(times);   // the recorded L1 schedule to replay

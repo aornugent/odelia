@@ -11,14 +11,6 @@
 namespace odelia {
 namespace ode {
 
-// AD is opt-in: a System is differentiable only if it provides `rebind` (the double
-// -> active mould). For a plain double System that never takes a gradient, resolve
-// the active System's type to the System itself -- a harmless placeholder that is
-// declared but never constructed -- so `Solver<System>` compiles without forcing
-// every System to carry AD scaffolding.
-namespace detail {
-}
-
 // This is a wrapper class that is meant to simplify the
 // difficuly of ownership semantics around the solver and system.
 // It is mostly just be a generic wrapper around ode::Solver<System>
@@ -42,11 +34,11 @@ public:
     collect = true;
   }
 
-  // Copyable: the tape and the cached active System are rebuildable amortization scratch
-  // (RIF-3), not part of the Solver's value, so a copy starts with them empty and
-  // rebuilds them lazily on its first gradient. plant copies Solvers on the non-AD
-  // path (SCM snapshots, RcppR6 bindings), where that scratch is irrelevant; the
-  // implicit copy ctor is deleted only because of the unique_ptr<Tape> member.
+  // Copyable: the tape and the cached active solver are rebuildable scratch, not
+  // part of the Solver's value, so a copy starts with them empty and rebuilds them
+  // on its first gradient. plant copies Solvers on the non-AD path, where that
+  // scratch is irrelevant; the implicit copy constructor is unavailable only
+  // because of the unique_ptr<Tape> member.
   Solver(const Solver& o)
     : collect(o.collect), system(o.system), control_(o.control_),
       solver(o.solver), replay_schedule_(o.replay_schedule_) {
@@ -246,58 +238,31 @@ public:
   // pass has resolved a schedule on this solver, and what it is. The schedule is the
   // grid a replay-gradient advances over (advance_fixed).
   bool has_recording() const { return times().size() > 1; }
-  std::vector<double> recorded_steps() const { return times(); }
 
-  // Carry lambda back over the recorded steps, last to first. states[k] is the
-  // state the run held at recorded_steps()[k], so step k ran from states[k - 1]
-  // with step_sizes()[k]; on return lambda is the adjoint of states[0]. Only
-  // accepted steps are recorded, and a rejected step never enters the solution,
-  // so the recorded list is the whole of what the sweep visits.
-  void solve_adjoint(const std::vector<ode::state_type<System> >& states,
-                     ode::state_type<System>& lambda)
-  {
-    std::vector<double> no_parameters;
-    solve_adjoint(states, lambda, no_parameters, 0, states.size() - 1);
-  }
-
-  // The same sweep restricted to steps k_last down to k_first + 1, so on return
-  // lambda is the adjoint of states[k_first]. Every state it visits has to be
-  // the width the System holds, so a caller whose System changes width between
-  // steps sweeps one segment per width and changes the System in between.
+  // Carry lambda back over recorded steps k_last down to k_first + 1, so on return
+  // lambda is the adjoint of states[k_first]. states[k] is the state the run held
+  // at times()[k], so step k ran from states[k - 1] with step_sizes()[k]. Only
+  // accepted steps are recorded, and a rejected step never enters the solution, so
+  // the recorded list is the whole of what a sweep visits.
   //
-  // One seed, packed into a batch of one and unpacked on the way back.
+  // Every state visited has to be the width the System holds, so a caller whose
+  // System changes width between steps sweeps one segment per width and changes the
+  // System in between.
+  //
+  // One lambda per seed, and every seed sees the same trajectory -- so each step is
+  // recorded once however many are carried, and swept per seed. That is where the
+  // saving is, because a recording is a model evaluation and a sweep is not. A
+  // caller wanting a single row passes a batch of one.
   void solve_adjoint(const std::vector<ode::state_type<System> >& states,
-                     ode::state_type<System>& lambda,
-                     std::vector<double>& parameter_adjoint, size_t k_first,
-                     size_t k_last)
-  {
-    // An empty accumulator starts from zero rather than meaning the rows are not
-    // wanted: they come back either way, and a caller that ignores them has
-    // ignored something it was handed.
-    if (parameter_adjoint.empty()) {
-      parameter_adjoint.assign(system.ad_parameters().size(), 0.0);
-    }
-    std::vector<ode::state_type<System> > seed(1, lambda);
-    std::vector<std::vector<double>> rows(1, std::move(parameter_adjoint));
-    solve_adjoint_batched(states, seed, rows, k_first, k_last);
-    parameter_adjoint = std::move(rows[0]);
-    lambda = std::move(seed[0]);
-  }
-
-  // The same segment, carrying one lambda per seed. Every seed sees the same
-  // trajectory, so each step is recorded once however many are carried and swept
-  // per seed -- which is where the saving is, because a recording is a model
-  // evaluation and a sweep is not.
-  void solve_adjoint_batched(const std::vector<ode::state_type<System> >& states,
-                             std::vector<ode::state_type<System> >& lambda,
-                             std::vector<std::vector<double>>& parameter_adjoint,
-                             size_t k_first, size_t k_last)
+                     std::vector<ode::state_type<System> >& lambda,
+                     std::vector<std::vector<double>>& parameter_adjoint,
+                     size_t k_first, size_t k_last)
   {
     if (!has_recording()) {
       util::stop("no recorded steps to sweep; run the adaptive pass first");
     }
     if (lambda.empty()) {
-      util::stop("solve_adjoint_batched: needs at least one seed");
+      util::stop("solve_adjoint: needs at least one seed");
     }
     const std::vector<double> t = times();
     const std::vector<double> h = step_sizes();
@@ -311,8 +276,8 @@ public:
     std::vector<ode::state_type<System> > lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
-      solver.step_adjoint_batched(system, t[k - 1], h[k], states[k - 1], lambda,
-                                  lambda_in, parameter_adjoint);
+      solver.step_adjoint(system, t[k - 1], h[k], states[k - 1], lambda,
+                          lambda_in, parameter_adjoint);
       lambda = lambda_in;
     }
   }
