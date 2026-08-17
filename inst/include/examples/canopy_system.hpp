@@ -39,7 +39,11 @@ class CanopySystem {
 public:
   using value_type = T;
 
-  CanopySystem(T gain_, double y0_ = 1.0,
+  // Every scalar's CanopySystem is one class, so assign_from reaches the
+  // source's members.
+  template <typename> friend class CanopySystem;
+
+  CanopySystem(T gain_ = T(0.0), double y0_ = 1.0,
                double turnover_ = 1.0, double extinction_ = 1.0, double shade_conc_ = 40.0,
                double ref_depth_ = 0.5, double tol_ = 1e-4, int max_depth_ = 12)
     : gain(gain_), y0_init(y0_), turnover(turnover_), extinction(extinction_),
@@ -51,10 +55,26 @@ public:
   // Copy the configuration onto another scalar so the driver can build the active
   // version; the recording is handed in per call (set_recording), not carried here.
 
+  // The one map: the configuration, values only. The recording is handed in per
+  // call (set_recording) rather than carried here, so it is not part of it.
+  template <class S1>
+  void assign_from(const CanopySystem<S1>& src) {
+    gain       = T(xad::value(src.gain));
+    y0_init    = src.y0_init;
+    turnover   = src.turnover;
+    extinction = src.extinction;
+    shade_conc = src.shade_conc;
+    ref_depth  = src.ref_depth;
+    tol        = src.tol;
+    max_depth  = src.max_depth;
+    reset();
+  }
+
   template <class S2>
   CanopySystem<S2> rebind_from() const {
-    return CanopySystem<S2>(xad::value(gain), y0_init, turnover, extinction, shade_conc,
-                      ref_depth, tol, max_depth);
+    CanopySystem<S2> out;
+    out.assign_from(*this);
+    return out;
   }
 
   // ---- ODE interface -------------------------------------------------------

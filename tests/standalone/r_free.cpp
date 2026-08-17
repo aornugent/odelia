@@ -300,7 +300,7 @@ struct Logistic {
 };
 
 // Same dynamics, but declaring the domain. Inherited rather than switched on a
-// template parameter so that the silent twin genuinely lacks the method and
+// template parameter so that the silent copy genuinely lacks the method and
 // has_state_check<> resolves to false for it -- an `if constexpr` inside one
 // struct would still leave the member there for the trait to find.
 struct LogisticChecked : Logistic<OnLeave::nothing> {
@@ -344,7 +344,7 @@ void test_predicate_rejects_out_of_domain_step() {
         "the predicate actually refused at least one step (test is not vacuous)");
   check(y >= 0.0 && y <= 1.0, "the committed state stays inside [0, 1]");
   check(s1.time() == 1.0, "and the solve still reaches the requested time");
-  std::printf("       (%d refusal(s); unguarded twin finished at y = %g)\n",
+  std::printf("       (%d refusal(s); unguarded copy finished at y = %g)\n",
               LogisticChecked::refusals, s0.state()[0]);
 }
 

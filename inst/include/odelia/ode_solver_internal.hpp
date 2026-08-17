@@ -52,13 +52,13 @@ public:
   // The adjoint of one step, from the state that step started at, for several
   // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
   // counterpart.
-  template <class Twin>
+  template <class ActiveSystem>
   void step_adjoint_batched(System& system, double time, double step_size,
                             const state_type& y,
                             const std::vector<state_type>& lambda_out,
                             std::vector<state_type>& lambda_in,
                             std::vector<std::vector<double>>& parameter_adjoint,
-                            Twin& twin) {
+                            ActiveSystem& active_system) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
@@ -69,7 +69,7 @@ public:
     // stage rebuild overwrites it.
     resize(lambda_out.front().size());
     stepper.step_adjoint_batched(system, time, step_size, y, lambda_out,
-                                 lambda_in, parameter_adjoint, twin);
+                                 lambda_in, parameter_adjoint, active_system);
   }
 
   // Stage transposes swept since the count was last cleared, seeds counted

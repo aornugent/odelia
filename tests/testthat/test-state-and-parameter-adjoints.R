@@ -40,7 +40,7 @@ compile_sap_interface <- function() {
     // [[Rcpp::export]]
     Rcpp::List sap_products(std::vector<double> state,
                             std::vector<double> prior, int n_calls,
-                            bool fresh_twin) {
+                            bool fresh_copy) {
       std::vector<std::vector<double>> seeds{{1.0, 0.0}, {0.0, 1.0}};
       std::vector<std::vector<double>> state_adjoint;
       std::vector<std::vector<double>> parameter_adjoint(2, prior);
@@ -50,7 +50,7 @@ compile_sap_interface <- function() {
       TinySystem kept;
       for (int k = 0; k < n_calls; ++k) {
         TinySystem made;
-        TinySystem& sys = fresh_twin ? made : kept;
+        TinySystem& sys = fresh_copy ? made : kept;
         auto evaluate = [&](std::vector<adouble>::const_iterator x,
                             std::vector<adouble>& y) -> void {
           y[0] = sys.a * x[0] + sys.b * x[1];
@@ -142,14 +142,14 @@ testthat::test_that("the parameter half accumulates and the state half does not"
                            matrix(c(10, 10, 20, 20), nrow = 2))
 })
 
-testthat::test_that("the twin has to be rebound per call, and that is not advisory", {
+testthat::test_that("the active System has to be rebound per call, and that is not advisory", {
   compile_sap_interface()
 
   rows <- function(x) do.call(rbind, x)
   fresh <- sap_products(c(5, 7), c(0, 0), 3L, TRUE)
   kept <- sap_products(c(5, 7), c(0, 0), 3L, FALSE)
 
-  # A twin carried across calls has its parameters written from inputs of a
+  # A active System carried across calls has its parameters written from inputs of a
   # recording that has since been cleared. Nothing detects it, so this pins that
   # the requirement is load-bearing rather than a precaution: were reuse to become
   # safe, this fails and the contract above it is what needs rewriting.

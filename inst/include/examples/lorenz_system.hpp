@@ -14,7 +14,11 @@ class LorenzSystem {
 public:
   using value_type = T; 
   
-  LorenzSystem(T sigma_, T R_, T b_)
+  // Every scalar's LorenzSystem is one class, so assign_from reaches the source's
+  // members.
+  template <typename> friend class LorenzSystem;
+
+  LorenzSystem(T sigma_ = T(0.0), T R_ = T(0.0), T b_ = T(0.0))
     : y0_init(1.0), y1_init(1.0), y2_init(1.0),
       t0(0.0),
       sigma(sigma_), R(R_), b(b_),
@@ -28,13 +32,22 @@ public:
   // System gets gradients just by providing these two members. Only values cross,
   // so the copy starts with no tape state; the driver seeds the active inputs after.
 
+  // The one map: the parameters and the initial state, read back to plain double
+  // (xad::value) so only values cross. rebind_from is a line over it.
+  template <class S1>
+  void assign_from(const LorenzSystem<S1>& src) {
+    sigma = T(xad::value(src.sigma));
+    R     = T(xad::value(src.R));
+    b     = T(xad::value(src.b));
+    const double ic[] = {xad::value(src.y0_init), xad::value(src.y1_init),
+                         xad::value(src.y2_init)};
+    set_initial_state(ic, src.t0);
+  }
+
   template <class S2>
   LorenzSystem<S2> rebind_from() const {
-    // read the parameters and initial state back to plain double (xad::value), build
-    // the S2 copy from them, and set its initial state.
-    LorenzSystem<S2> out(xad::value(sigma), xad::value(R), xad::value(b));
-    const double ic[] = {xad::value(y0_init), xad::value(y1_init), xad::value(y2_init)};
-    out.set_initial_state(ic, t0);
+    LorenzSystem<S2> out;
+    out.assign_from(*this);
     return out;
   }
 

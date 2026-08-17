@@ -7,7 +7,6 @@
 #include <vector>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_interface.hpp>
-#include <odelia/ode_jacobian.hpp>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
@@ -208,10 +207,10 @@ std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
 }
 
 // A transpose taken with respect to a System's state AND the parameters its
-// active twin lists: one recording over both, swept once per seed.
+// active-scalar lists: one recording over both, swept once per seed.
 //
 // `evaluate` is handed the state half of the recorded inputs and the output
-// buffer, with the twin's parameters ALREADY written from the other half. That
+// buffer, with the active_system's parameters ALREADY written from the other half. That
 // order is why the two halves are one recording rather than two calls: a
 // quantity the state determines reads the parameters while deriving it, so a
 // state written first derives it at the previous values. Writing the parameters
@@ -229,22 +228,22 @@ std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
 // resizing the accumulator between the check on its rows and the writes into
 // them. Refused rather than documented.
 //
-// `twin` must be rebound for this call and not carried over from a previous one.
-// Its parameters are written from the recorded inputs, so a twin that was written
+// `active_system` must be assigned for this call and not carried over from a previous one.
+// Its parameters are written from the recorded inputs, so an active System that was written
 // that way before arrives holding scalars from a recording this one has cleared,
 // and the sweep comes back wrong -- not obviously wrong: one seed's rows can stay
 // exact while another's do not. Nothing here can see the difference, which is why
-// it is stated. A caller wanting to amortise the rebind has to make the twin's
-// scalars fresh some other way.
-template <class Twin, class Evaluate>
+// it is stated. A caller wanting to amortise the copy has to make its scalars fresh
+// some other way.
+template <class ActiveSystem, class Evaluate>
 std::size_t state_and_parameter_adjoints(
-    xad::adj<double>::tape_type& tape, Twin& twin,
+    xad::adj<double>::tape_type& tape, ActiveSystem& active_system,
     const std::vector<double>& state,
     const std::vector<std::vector<double>>& output_adjoints, Evaluate&& evaluate,
     std::vector<std::vector<double>>& state_adjoint,
     std::vector<std::vector<double>>& parameter_adjoint) {
     using scalar = active_scalar<double>;
-    const std::vector<scalar*> parameters = twin.ad_parameters();
+    const std::vector<scalar*> parameters = active_system.ad_parameters();
     const std::size_t n_state = state.size();
     const std::size_t n_parameter = parameters.size();
     const std::size_t n_seed = output_adjoints.size();
@@ -294,10 +293,10 @@ std::size_t state_and_parameter_adjoints(
 }
 
 // The transpose of one rate evaluation: `state_adjoint[m]` receives
-// transpose(d dydt / d y) * rate_adjoints[m], with the twin's parameters in the
+// transpose(d dydt / d y) * rate_adjoints[m], with the active_system's parameters in the
 // same recording, so a rate the parameters reach carries their rows too.
 //
-// What is recorded is derivs() on the twin -- the call the forward pass makes --
+// What is recorded is derivs() on the active_system -- the call the forward pass makes --
 // so the transpose cannot drift from the rates it transposes, and a System that
 // restores a recorded field restores it here as well. Everything between the
 // state and the rates is an intermediate of that one recording, so nothing
@@ -306,32 +305,32 @@ std::size_t state_and_parameter_adjoints(
 // `stage` is the recorded stage the evaluation belongs to; negative where none
 // does, which is the step's first evaluation, whose rate the step before it took.
 //
-// The twin is re-seated from the System here rather than by the caller: a
-// recording clears the tape, so a twin arriving with the last one's slots writes
+// The active System is assigned from the System here rather than by the caller: a
+// recording clears the tape, so one arriving with the last recording's slots writes
 // this one's operations onto numbers already handed out, and the sweep comes back
 // wrong with nothing raised.
-template <class System, class Twin>
+template <class System, class ActiveSystem>
 std::size_t rates_adjoint(
-    xad::adj<double>::tape_type& tape, const System& system, Twin& twin,
+    xad::adj<double>::tape_type& tape, const System& system, ActiveSystem& active_system,
     const std::vector<double>& state, double time, int stage,
     const std::vector<std::vector<double>>& rate_adjoints,
     std::vector<std::vector<double>>& state_adjoint,
     std::vector<std::vector<double>>& parameter_adjoint) {
     using scalar = active_scalar<double>;
-    seat_twin(system, twin);
+    active_system.assign_from(system);
     const std::size_t n_state = state.size();
     auto rates = [&](typename std::vector<scalar>::const_iterator x,
                      std::vector<scalar>& dydt) -> void {
-        // The state half of the recorded inputs; the twin's parameters are
+        // The state half of the recorded inputs; the active_system's parameters are
         // already written from the other half.
         std::vector<scalar> y(x, x + static_cast<std::ptrdiff_t>(n_state));
         if (stage < 0) {
-            ode::derivs(twin, y, dydt, time);
+            ode::derivs(active_system, y, dydt, time);
         } else {
-            ode::derivs(twin, y, dydt, time, stage);
+            ode::derivs(active_system, y, dydt, time, stage);
         }
     };
-    return state_and_parameter_adjoints(tape, twin, state, rate_adjoints, rates,
+    return state_and_parameter_adjoints(tape, active_system, state, rate_adjoints, rates,
                                         state_adjoint, parameter_adjoint);
 }
 

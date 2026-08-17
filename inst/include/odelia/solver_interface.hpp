@@ -176,7 +176,7 @@ gradient_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
                    const std::vector<double>& schedule, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  active.set_schedule(schedule);  // hand the recorded L1 schedule to the active twin
+  active.set_schedule(schedule);  // hand the recorded L1 schedule to the active active_system
   return ode::compute_gradient(active, ind, std::forward<Functional>(functional));
 }
 
@@ -186,7 +186,7 @@ jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
                    const std::vector<double>& schedule, Functional&& functional) {
   auto d = get_solver<SystemType>(solver_xp);
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  active.set_schedule(schedule);  // hand the recorded L1 schedule to the active twin
+  active.set_schedule(schedule);  // hand the recorded L1 schedule to the active active_system
   return ode::compute_jacobian(active, ind, std::forward<Functional>(functional));
 }
 
@@ -221,7 +221,7 @@ Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
   // solver holds no fit state.
   auto& active = active_solver<SystemType, ActiveSystemType>(*d);
   auto functional = least_squares_from_r(observations, obs_indices);
-  // `times` from R is the recorded schedule the active twin replays; least_squares
+  // `times` from R is the recorded schedule the active active_system replays; least_squares
   // samples the collected trajectory at obs_indices.
   active.set_schedule(std::vector<double>(times.begin(), times.end()));
   auto [value, gradient] = ode::compute_gradient(active, ind, functional);

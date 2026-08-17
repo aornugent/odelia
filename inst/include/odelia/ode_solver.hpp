@@ -13,7 +13,7 @@ namespace ode {
 
 // AD is opt-in: a System is differentiable only if it provides `rebind` (the double
 // -> active mould). For a plain double System that never takes a gradient, resolve
-// the active twin's type to the System itself -- a harmless placeholder that is
+// the active System's type to the System itself -- a harmless placeholder that is
 // declared but never constructed -- so `Solver<System>` compiles without forcing
 // every System to carry AD scaffolding.
 namespace detail {
@@ -42,7 +42,7 @@ public:
     collect = true;
   }
 
-  // Copyable: the tape and cached active twin are rebuildable amortization scratch
+  // Copyable: the tape and the cached active System are rebuildable amortization scratch
   // (RIF-3), not part of the Solver's value, so a copy starts with them empty and
   // rebuilds them lazily on its first gradient. plant copies Solvers on the non-AD
   // path (SCM snapshots, RcppR6 bindings), where that scratch is irrelevant; the
@@ -55,7 +55,7 @@ public:
   Solver& operator=(const Solver& o) {
     collect = o.collect; system = o.system; control_ = o.control_;
     solver = o.solver; replay_schedule_ = o.replay_schedule_; history = o.history;
-    tape.reset(); active_solver.reset(); adjoint_twin.reset();
+    tape.reset(); active_solver.reset(); active_system_.reset();
     return *this;
   }
   Solver(Solver&&) = default;
@@ -271,7 +271,7 @@ public:
     // wanted: they come back either way, and a caller that ignores them has
     // ignored something it was handed.
     if (parameter_adjoint.empty()) {
-      parameter_adjoint.assign(sweep_twin().ad_parameters().size(), 0.0);
+      parameter_adjoint.assign(active_system().ad_parameters().size(), 0.0);
     }
     std::vector<ode::state_type<System> > seed(1, lambda);
     std::vector<std::vector<double>> rows(1, std::move(parameter_adjoint));
@@ -304,12 +304,12 @@ public:
     if (k_first >= k_last || k_last >= t.size()) {
       util::stop("the adjoint segment is not a range of recorded steps");
     }
-    adjoint_twin_type& twin = sweep_twin();
+    active_system_type& sweep_system = active_system();
     std::vector<ode::state_type<System> > lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
       solver.step_adjoint_batched(system, t[k - 1], h[k], states[k - 1], lambda,
-                                  lambda_in, parameter_adjoint, twin);
+                                  lambda_in, parameter_adjoint, sweep_system);
       lambda = lambda_in;
     }
   }
@@ -322,7 +322,7 @@ public:
   std::size_t stage_sweeps() const { return solver.stage_sweeps(); }
   void clear_stage_sweeps() { solver.clear_stage_sweeps(); }
 
-  // Hand the recorded replay schedule (L1) to this solver. The active twin holds no
+  // Hand the recorded replay schedule (L1) to this solver. The active System holds no
   // recording of its own (rebind copies values, not the schedule), so the schedule is
   // handed over per gradient call -- the L1 analogue of the System's set_recording for
   // L2/L3, and the reason L1 is Solver-owned state rather than a gradient-driver
@@ -355,22 +355,19 @@ public:
   // the first sweep and handed to every stage of it. Rebuilt when the System
   // changes width; the System puts its own values into it per recording, which
   // is what a stage transpose is handed rather than a rebind of its own.
-  using adjoint_twin_type =
-      typename rebound_system<System, active_scalar,
-                              Rebindable<System, active_scalar>>::type;
-  mutable std::unique_ptr<adjoint_twin_type> adjoint_twin;
+  mutable std::unique_ptr<active_system_type> active_system_;
 
-  // One twin for the whole segment: its width is the width being swept, so a
+  // One active System for the whole segment: its width is the width being swept, so a
   // segment at another width builds its own.
-  adjoint_twin_type& sweep_twin() {
+  active_system_type& active_system() {
     static_assert(Rebindable<System, active_scalar>,
                   "an adjoint sweep records on the System at the adjoint scalar; "
                   "this System has no rebind_from()");
-    if (!adjoint_twin || adjoint_twin->ode_size() != system.ode_size()) {
-      adjoint_twin = std::make_unique<adjoint_twin_type>(
+    if (!active_system_ || active_system_->ode_size() != system.ode_size()) {
+      active_system_ = std::make_unique<active_system_type>(
           system.template rebind_from<active_scalar>());
     }
-    return *adjoint_twin;
+    return *active_system_;
   }
 
   // Should we record history at every step?

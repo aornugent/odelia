@@ -7,7 +7,7 @@
 #include <XAD/XAD.hpp>
 #include <odelia/adjoint.hpp>
 #include <odelia/ode_interface.hpp>
-#include <odelia/ode_jacobian.hpp>
+#include <odelia/ode_interface.hpp>
 
 namespace odelia {
 namespace ode {
@@ -29,7 +29,7 @@ public:
 	    state_type &dydt_out);
 
   // One seed of the step below, packed into a batch of one and unpacked on the
-  // way back. The twin the batched form is handed is this call's, where a sweep
+  // way back. The active System the batched form is handed is this call's, where a sweep
   // hands the same one to every step.
   void step_adjoint(System& system,
                     double time, double step_size,
@@ -41,14 +41,14 @@ public:
   // The step transposed for several seeds at once. The six rate evaluations that
   // rebuild the stage run ONCE, and each stage's transpose is recorded once and
   // swept per seed.
-  template <class Twin>
+  template <class ActiveSystem>
   void step_adjoint_batched(System& system,
                             double time, double step_size,
                             const state_type &y,
                             const std::vector<state_type> &lambda_out,
                             std::vector<state_type> &lambda_in,
                             std::vector<std::vector<double>>& parameter_adjoint,
-                            Twin& twin);
+                            ActiveSystem& active_system);
 
   // How many stage transposes have been swept, seeds counted separately. A row
   // that acts once per stage is multiplied by this, and a row correct per
@@ -289,18 +289,18 @@ void Step<System>::sweep_stages(double time, double h, const state_type& y,
 // seed rides the same trajectory, so both run ONCE however many are carried.
 //
 // Each stage is recorded once on the tape this stepper keeps and swept once per
-// seed -- the state and the twin's parameters in one recording, so a stage the
+// seed -- the state and the active System's parameters in one recording, so a stage the
 // parameters reach carries their rows too. The recording is derivs(), which is
 // what the forward pass calls, so no System writes a transpose of its own.
 template <class System>
-template <class Twin>
+template <class ActiveSystem>
 void Step<System>::step_adjoint_batched(System& system,
                                         double time, double step_size,
                                         const state_type &y,
                                         const std::vector<state_type> &lambda_out,
                                         std::vector<state_type> &lambda_in,
                                         std::vector<std::vector<double>>& parameter_adjoint,
-                                        Twin& twin) {
+                                        ActiveSystem& active_system) {
   using active_type = active_scalar<double>;
   static_assert(Rebindable<System, active_type>,
                 "step_adjoint_batched needs the System's rebind_from() hook to "
@@ -343,7 +343,7 @@ void Step<System>::step_adjoint_batched(System& system,
                [&](int i, double stage_t, const state_type& stage,
                    const std::vector<state_type>& lambda_rate,
                    std::vector<state_type>& lambda_stage) -> void {
-    ode::rates_adjoint(adjoint_tape.get(), system, twin, stage, stage_t, i - 1,
+    ode::rates_adjoint(adjoint_tape.get(), system, active_system, stage, stage_t, i - 1,
                        lambda_rate, lambda_stage, parameter_adjoint);
     stage_sweeps += n_seed;
   });
@@ -365,16 +365,16 @@ void Step<System>::step_adjoint(System& system,
   static_assert(Rebindable<System, active_type>,
                 "step_adjoint needs the System's rebind_from() hook to lift it to "
                 "the adjoint scalar");
-  auto twin = system.template rebind_from<active_type>();
+  auto active_system = system.template rebind_from<active_type>();
   // An empty accumulator starts from zero rather than meaning the rows are not
   // wanted: they come back either way, and a caller that ignores them has ignored
   // something it was handed.
   if (parameter_adjoint.empty()) {
-    parameter_adjoint.assign(twin.ad_parameters().size(), 0.0);
+    parameter_adjoint.assign(active_system.ad_parameters().size(), 0.0);
   }
   std::vector<state_type> seed(1, lambda_out), swept;
   std::vector<std::vector<double>> rows(1, std::move(parameter_adjoint));
-  step_adjoint_batched(system, time, step_size, y, seed, swept, rows, twin);
+  step_adjoint_batched(system, time, step_size, y, seed, swept, rows, active_system);
   parameter_adjoint = std::move(rows[0]);
   lambda_in = std::move(swept[0]);
 }

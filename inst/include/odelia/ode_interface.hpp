@@ -8,6 +8,8 @@
 
 #include <concepts>
 #include <iterator>
+#include <type_traits>
+#include <utility>
 #include <vector>
 #include <XAD/XAD.hpp>
 
@@ -34,6 +36,48 @@ class needs_time {
   template <typename C> static false_type test(...);
 public:
   enum { value = sizeof(test<T>(0)) == sizeof(true_type) };
+};
+
+// A System that can write another System's values into itself, at its own scalar.
+// This is the one map a System writes: rebind_from() below is a line over it, so
+// the two cannot describe different copies.
+//
+// A System reached this way already exists, which is what it is for. Every
+// recording clears the tape, and a System still holding the slots the last
+// recording handed it writes this one's operations onto numbers already given
+// out; the sweep then comes back wrong with nothing raised. Assigning fixes that
+// because assignment leaves every scalar unregistered again -- and it costs no
+// allocation, where building a fresh System costs one per element.
+template <typename To, typename From>
+concept AssignsFrom = requires(To& to, const From& from) {
+  to.assign_from(from);
+};
+
+// A System that can hand back a copy of itself on scalar U. The rebound type must
+// itself be a System on U: a rebind_from() returning the wrong scalar fails here
+// rather than on the first arithmetic inside the caller.
+//
+// U is named rather than defaulted. Defaulting it to the System's own scalar asks
+// whether a System can rebind to the scalar it already has, which is a different
+// question from the one every caller means and is answered yes by types that
+// cannot do what the caller needs.
+template <typename S, typename U>
+concept Rebindable = requires(const S& s) {
+  { s.template rebind_from<U>() };
+  requires std::same_as<typename decltype(s.template rebind_from<U>())::value_type, U>;
+};
+
+// The System type rebound to scalar U, i.e. decltype(system.rebind_from<U>()).
+// When the System has no rebind_from() the type is not evaluated (a harmless
+// placeholder is used instead), so a holder can still be class-instantiated for
+// systems that will never rebind; the actual use is gated on the concept.
+template <typename S, typename U, bool = Rebindable<S, U>>
+struct rebound_system {
+  using type = decltype(std::declval<const S>().template rebind_from<U>());
+};
+template <typename S, typename U>
+struct rebound_system<S, U, false> {
+  using type = S;
 };
 
 // A System that records the node positions its adaptive solve chose, so a later

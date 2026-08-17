@@ -1,37 +1,29 @@
-# Tests for the twin a stage recording is taken on -- re-seated through the
+# Tests for the active System a stage recording is taken on -- assigned through the
 # System's own hook where it has one, rebound where it has not -- and for
 # Solver::solve_adjoint over the recorded steps. The adjoint records a tape, so
 # the snippet must link against the odelia shared library for the XAD Tape
 # symbols.
 
 # Predator and prey, with the four coefficients declared as the parameters a
-# recording carries. A rebind of this System is cheap, so it declares seat_from
+# recording carries. A rebind of this System is cheap, so it declares assign_from
 # as well: what the hook buys is measured by counting the calls, not by timing.
 lv_system <- '
-  static int lv_seats = 0;
+  static int lv_assigns = 0;
 
   template <typename T>
   class LotkaVolterra {
   public:
     using value_type = T;
-    LotkaVolterra(T a_, T b_, T c_, T d_)
+    LotkaVolterra(T a_ = T(0), T b_ = T(0), T c_ = T(0), T d_ = T(0))
       : a(a_), b(b_), c(c_), d(d_) { reset(); }
 
     template <typename> friend class LotkaVolterra;
-    template <class S2> using rebind = LotkaVolterra<S2>;
 
+    // The one map. rebind_from is a line over it, so a rebound System and an
+    // assigned one hold the same thing without that having to be remembered.
     template <class S2>
-    rebind<S2> rebind_from() const {
-      return rebind<S2>(S2(odelia::util::to_passive(a)),
-                        S2(odelia::util::to_passive(b)),
-                        S2(odelia::util::to_passive(c)),
-                        S2(odelia::util::to_passive(d)));
-    }
-
-    // The values a rebind copies, written into a System that already exists.
-    template <class S2>
-    void seat_from(const LotkaVolterra<S2>& src) {
-      ++lv_seats;
+    void assign_from(const LotkaVolterra<S2>& src) {
+      ++lv_assigns;
       a = T(odelia::util::to_passive(src.a));
       b = T(odelia::util::to_passive(src.b));
       c = T(odelia::util::to_passive(src.c));
@@ -40,6 +32,13 @@ lv_system <- '
       p = T(odelia::util::to_passive(src.p));
       time = src.time;
       compute_rates();
+    }
+
+    template <class S2>
+    LotkaVolterra<S2> rebind_from() const {
+      LotkaVolterra<S2> out;
+      out.assign_from(*this);
+      return out;
     }
 
     std::vector<T*> ad_parameters() { return {&a, &b, &c, &d}; }
@@ -77,7 +76,7 @@ lv_system <- '
   };
 '
 
-compile_seat_interface <- function() {
+compile_assign_interface <- function() {
   ensure_ode_interface_loaded()
 
   include_dir <- odelia_include_dir()
@@ -103,17 +102,23 @@ compile_seat_interface <- function() {
     #include <examples/lorenz_system.hpp>
     ', lv_system, '
 
-    // The choice is made on the System, not at run time.
-    using lv_twin = LotkaVolterra<odelia::ode::active_scalar<double> >;
-    static_assert(odelia::ode::SeatsFrom<lv_twin, LotkaVolterra<double> >);
-    static_assert(!odelia::ode::SeatsFrom<LorenzSystem<double>,
-                                          LorenzSystem<double> >);
+    // A System that can be rebound can be assigned, because rebind_from is a line
+    // over assign_from. Asserted on both systems in this file so that separating
+    // the two -- writing one without the other -- stops compiling here.
+    using lv_active = LotkaVolterra<odelia::ode::active_scalar<double> >;
+    using lz_active = LorenzSystem<odelia::ode::active_scalar<double> >;
+    static_assert(odelia::ode::AssignsFrom<lv_active, LotkaVolterra<double> >);
+    static_assert(odelia::ode::Rebindable<LotkaVolterra<double>,
+                                          odelia::ode::active_scalar<double> >);
+    static_assert(odelia::ode::AssignsFrom<lz_active, LorenzSystem<double> >);
+    static_assert(odelia::ode::Rebindable<LorenzSystem<double>,
+                                          odelia::ode::active_scalar<double> >);
 
     // [[Rcpp::export]]
-    bool seat_hook_is_chosen_by_type() { return true; }
+    bool rebind_and_assign_travel_together() { return true; }
 
     // One RKCK step and its adjoint, plus what the step cost and how often the
-    // twin was re-seated.
+    // active System was assigned.
     // [[Rcpp::export]]
     Rcpp::List lv_step_and_adjoint(std::vector<double> pars, double time,
                                    double step_size, std::vector<double> y,
@@ -129,7 +134,7 @@ compile_seat_interface <- function() {
 
       LotkaVolterra<double> adj(pars[0], pars[1], pars[2], pars[3]);
       adj.rate_calls = 0;
-      lv_seats = 0;
+      lv_assigns = 0;
       std::vector<double> lambda_in;
       std::vector<double> parameter_adjoint;
       stepper.step_adjoint(adj, time, step_size, y, lambda_out, lambda_in,
@@ -139,7 +144,7 @@ compile_seat_interface <- function() {
                                 Rcpp::_["lambda_in"] = lambda_in,
                                 Rcpp::_["parameter_adjoint"] = parameter_adjoint,
                                 Rcpp::_["rate_calls"] = adj.rate_calls,
-                                Rcpp::_["seats"] = lv_seats,
+                                Rcpp::_["assigns"] = lv_assigns,
                                 Rcpp::_["stage_sweeps"] =
                                   (int) stepper.stage_sweeps);
     }
@@ -250,13 +255,13 @@ compile_seat_interface <- function() {
 lv_pars <- c(1.1, 0.06, 0.4, 0.9)
 lv_y <- c(11.0, 4.0)
 
-testthat::test_that("the re-seat hook is chosen on the System's type", {
-  compile_seat_interface()
-  expect_true(seat_hook_is_chosen_by_type())
+testthat::test_that("a System that rebinds also assigns", {
+  compile_assign_interface()
+  expect_true(rebind_and_assign_travel_together())
 })
 
 testthat::test_that("step_adjoint matches a finite difference of one step", {
-  compile_seat_interface()
+  compile_assign_interface()
 
   step_size <- 0.05
   # Non-symmetric, so a dropped transpose shows up.
@@ -279,11 +284,11 @@ testthat::test_that("step_adjoint matches a finite difference of one step", {
 })
 
 testthat::test_that("the coefficients' rows come back with the state's", {
-  compile_seat_interface()
+  compile_assign_interface()
 
-  # The parameters ride in the same recording as the state, so a twin carried
+  # The parameters ride in the same recording as the state, so an active System carried
   # into a second recording holds slots that recording has cleared and these
-  # rows are what comes back wrong. A stale twin leaves the state rows exact.
+  # rows are what comes back wrong. A stale active System leaves the state rows exact.
   step_size <- 0.05
   lambda_out <- c(0.7, -1.9)
   eps <- 1e-7
@@ -302,7 +307,7 @@ testthat::test_that("the coefficients' rows come back with the state's", {
 })
 
 testthat::test_that("one component of lambda_out at a time agrees, row by row", {
-  compile_seat_interface()
+  compile_assign_interface()
 
   step_size <- 0.05
   eps <- 1e-7
@@ -321,13 +326,16 @@ testthat::test_that("one component of lambda_out at a time agrees, row by row", 
   }
 })
 
-testthat::test_that("one re-seat per stage recording, and six of them a step", {
-  compile_seat_interface()
+testthat::test_that("one assignment per stage recording, and six of them a step", {
+  compile_assign_interface()
 
   r <- lv_step_and_adjoint(lv_pars, 0.0, 0.05, lv_y, c(0.7, -1.9))
-  # Six stage recordings, each re-seated: freshness is per recording, not per
-  # step, and a twin re-seated once a step returns a plausible wrong number.
-  expect_identical(r$seats, 6L)
+  # Six stage recordings, each assigned: freshness is per recording, not per
+  # step, and an active System assigned once a step returns a plausible wrong number.
+  # Seven rather than six because rebind_from is a line over assign_from, so
+  # building the active System counts as one -- which is the property that keeps
+  # the two from describing different copies.
+  expect_identical(r$assigns, 7L)
   expect_identical(r$stage_sweeps, 6L)
   # Six stage states rebuilt in double, then the restore that puts the System
   # back where the step began. The sweep evaluates no rates in double: the
@@ -336,13 +344,13 @@ testthat::test_that("one re-seat per stage recording, and six of them a step", {
 })
 
 testthat::test_that("a zero end adjoint sweeps to zero", {
-  compile_seat_interface()
+  compile_assign_interface()
   r <- lv_step_and_adjoint(lv_pars, 0.0, 0.05, lv_y, c(0.0, 0.0))
   expect_equal(r$lambda_in, c(0.0, 0.0))
 })
 
 testthat::test_that("solve_adjoint over the recorded steps matches a finite difference of the run", {
-  compile_seat_interface()
+  compile_assign_interface()
 
   t_end <- 1.5
   lambda_end <- c(0.4, -1.3)
@@ -365,7 +373,7 @@ testthat::test_that("solve_adjoint over the recorded steps matches a finite diff
 })
 
 testthat::test_that("the sweep taken as two segments equals the sweep taken whole", {
-  compile_seat_interface()
+  compile_assign_interface()
 
   t_end <- 1.5
   lambda_end <- c(0.4, -1.3)
@@ -381,7 +389,7 @@ testthat::test_that("the sweep taken as two segments equals the sweep taken whol
 })
 
 testthat::test_that("a segment that is not a range of recorded steps is refused", {
-  compile_seat_interface()
+  compile_assign_interface()
 
   t_end <- 1.5
   lambda_end <- c(0.4, -1.3)
