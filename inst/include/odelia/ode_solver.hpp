@@ -55,7 +55,7 @@ public:
   Solver& operator=(const Solver& o) {
     collect = o.collect; system = o.system; control_ = o.control_;
     solver = o.solver; replay_schedule_ = o.replay_schedule_; history = o.history;
-    tape.reset(); active_solver.reset(); active_system_.reset();
+    tape.reset(); active_solver.reset();
     return *this;
   }
   Solver(Solver&&) = default;
@@ -271,7 +271,7 @@ public:
     // wanted: they come back either way, and a caller that ignores them has
     // ignored something it was handed.
     if (parameter_adjoint.empty()) {
-      parameter_adjoint.assign(active_system().ad_parameters().size(), 0.0);
+      parameter_adjoint.assign(system.ad_parameters().size(), 0.0);
     }
     std::vector<ode::state_type<System> > seed(1, lambda);
     std::vector<std::vector<double>> rows(1, std::move(parameter_adjoint));
@@ -281,9 +281,9 @@ public:
   }
 
   // The same segment, carrying one lambda per seed. Every seed sees the same
-  // trajectory, so the stage states are rebuilt once per step however many are
-  // carried and each stage's transpose is recorded once -- which is where the
-  // saving is, because a recording is a model evaluation and a sweep is not.
+  // trajectory, so each step is recorded once however many are carried and swept
+  // per seed -- which is where the saving is, because a recording is a model
+  // evaluation and a sweep is not.
   void solve_adjoint_batched(const std::vector<ode::state_type<System> >& states,
                              std::vector<ode::state_type<System> >& lambda,
                              std::vector<std::vector<double>>& parameter_adjoint,
@@ -304,23 +304,21 @@ public:
     if (k_first >= k_last || k_last >= t.size()) {
       util::stop("the adjoint segment is not a range of recorded steps");
     }
-    active_system_type& sweep_system = active_system();
     std::vector<ode::state_type<System> > lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
       solver.step_adjoint_batched(system, t[k - 1], h[k], states[k - 1], lambda,
-                                  lambda_in, parameter_adjoint, sweep_system);
+                                  lambda_in, parameter_adjoint);
       lambda = lambda_in;
     }
   }
 
-  // How many stage transposes the sweeps since the last clear have taken, seeds
-  // counted separately. A row that enters once per stage is multiplied by this,
-  // and a row correct per evaluation and wrong in its multiplier is a different
-  // failure from a wrong row: no gradient check can see it, because a tangent
-  // and a sweep apply the same multiplier.
-  std::size_t stage_sweeps() const { return solver.stage_sweeps(); }
-  void clear_stage_sweeps() { solver.clear_stage_sweeps(); }
+  // Rate evaluations the sweeps since the last clear have recorded: six a step,
+  // whatever the seed count. A term entering once a step where it belongs once a
+  // stage divides this by six, and no gradient check can see that, because a
+  // tangent and a sweep apply the same multiplier.
+  std::size_t recorded_rates() const { return solver.recorded_rates(); }
+  void clear_recorded_rates() { solver.clear_recorded_rates(); }
 
   // Hand the recorded replay schedule (L1) to this solver. The active System holds no
   // recording of its own (rebind copies values, not the schedule), so the schedule is
@@ -350,25 +348,6 @@ public:
   // Reverse-mode tape, created on the first gradient and reused (only ever exercised
   // on the active solver).
   std::unique_ptr<xad::Tape<double>> tape;
-
-  // The System at the adjoint scalar the stage transposes record on, built on
-  // the first sweep and handed to every stage of it. Rebuilt when the System
-  // changes width; the System puts its own values into it per recording, which
-  // is what a stage transpose is handed rather than a rebind of its own.
-  mutable std::unique_ptr<active_system_type> active_system_;
-
-  // One active System for the whole segment: its width is the width being swept, so a
-  // segment at another width builds its own.
-  active_system_type& active_system() {
-    static_assert(Rebindable<System, active_scalar>,
-                  "an adjoint sweep records on the System at the adjoint scalar; "
-                  "this System has no rebind_from()");
-    if (!active_system_ || active_system_->ode_size() != system.ode_size()) {
-      active_system_ = std::make_unique<active_system_type>(
-          system.template rebind_from<active_scalar>());
-    }
-    return *active_system_;
-  }
 
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?

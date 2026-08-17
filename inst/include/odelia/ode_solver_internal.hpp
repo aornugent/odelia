@@ -52,30 +52,26 @@ public:
   // The adjoint of one step, from the state that step started at, for several
   // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
   // counterpart.
-  template <class ActiveSystem>
   void step_adjoint_batched(System& system, double time, double step_size,
                             const state_type& y,
                             const std::vector<state_type>& lambda_out,
                             std::vector<state_type>& lambda_in,
-                            std::vector<std::vector<double>>& parameter_adjoint,
-                            ActiveSystem& active_system) {
+                            std::vector<std::vector<double>>& parameter_adjoint) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
     // The System can be a different width from the one the forward pass left,
     // because a caller sweeping a segment narrows it between segments, and the
     // stage buffers are sized once at construction. Every seed carries that same
-    // width. A sweep is the end of the solver's forward state either way: every
-    // stage rebuild overwrites it.
+    // width. A sweep is the end of the solver's forward state either way.
     resize(lambda_out.front().size());
     stepper.step_adjoint_batched(system, time, step_size, y, lambda_out,
-                                 lambda_in, parameter_adjoint, active_system);
+                                 lambda_in, parameter_adjoint);
   }
 
-  // Stage transposes swept since the count was last cleared, seeds counted
-  // separately.
-  std::size_t stage_sweeps() const { return stepper.stage_sweeps; }
-  void clear_stage_sweeps() { stepper.stage_sweeps = 0; }
+  // Rate evaluations recorded since the count was last cleared.
+  std::size_t recorded_rates() const { return stepper.recorded_rates; }
+  void clear_recorded_rates() { stepper.recorded_rates = 0; }
 
 
   void step_to(System& system, double time_max_);

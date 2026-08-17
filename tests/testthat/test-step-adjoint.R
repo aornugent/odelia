@@ -57,8 +57,10 @@ compile_step_adjoint_interface <- function() {
       }
     };
 
-    // The six stage states step() steps through, then the six step_adjoint rebuilds,
-    // both ascending in stage.
+    // The six stage states step() steps through, then the six the recording
+    // builds, both ascending in stage. One stage_log serves every scalar the
+    // template is instantiated at, so the states the recording builds -- at the
+    // adjoint scalar -- land in it beside the ones the forward pass built.
     // [[Rcpp::export]]
     Rcpp::List lorenz_stage_states(std::vector<double> pars, double time,
                                    double step_size, std::vector<double> y,
@@ -77,19 +79,18 @@ compile_step_adjoint_interface <- function() {
       Rcpp::List forward(6);
       for (int j = 0; j < 6; ++j) forward[j] = stage_log[j];
 
-      // The six stage states step_adjoint rebuilds, then one rebuilt stage state
-      // per stage descending from stage six, then the start state it puts the
-      // system back to.
+      // The six stage states of the recording, ascending, then the start state
+      // the step puts the system back to.
       stage_log.clear();
       std::vector<double> lambda_in;
       std::vector<double> parameter_adjoint;
       stepper.step_adjoint(system, time, step_size, y, lambda_out, lambda_in,
                            parameter_adjoint);
-      Rcpp::List rebuilt(6);
-      for (int j = 0; j < 6; ++j) rebuilt[j] = stage_log[6 + (5 - j)];
+      Rcpp::List recorded(6);
+      for (int j = 0; j < 6; ++j) recorded[j] = stage_log[j];
 
       return Rcpp::List::create(Rcpp::_["forward"] = forward,
-                                Rcpp::_["rebuilt"] = rebuilt,
+                                Rcpp::_["recorded"] = recorded,
                                 Rcpp::_["last"] = stage_log.back(),
                                 Rcpp::_["n_logged"] = (int) stage_log.size());
     }
@@ -150,23 +151,26 @@ testthat::test_that("step_adjoint reproduces a finite difference of one Lorenz s
                                 tolerance = 1e-3)))
 })
 
-testthat::test_that("step_adjoint rebuilds each stage state bit-identically", {
+testthat::test_that("the recording builds each stage state bit-identically to step()", {
   compile_step_adjoint_interface()
 
   r <- lorenz_stage_states(c(10.0, 28.0, 8.0 / 3.0), 0.0, 0.01,
                            c(1.5, -0.7, 20.0), c(0.3, -1.7, 2.1))
 
-  # Six states from the stage rebuild, then one per stage swept, then the restore:
-  # pins the call order the rebuilds are read back at.
-  expect_identical(r$n_logged, 13L)
+  # Six stage states from the one recording, then the restore. Seven and not
+  # thirteen because the stage states are the recording's own intermediates
+  # rather than a rebuild in double ahead of it.
+  expect_identical(r$n_logged, 7L)
+  # What the sweep transposes has to be the step the forward pass took, term for
+  # term: b21 * h * k1 and h * (b21 * k1) round differently, and one function
+  # builds both sides so they cannot come apart.
   for (j in seq_len(6)) {
-    expect_identical(r$rebuilt[[j]], r$forward[[j]],
+    expect_identical(r$recorded[[j]], r$forward[[j]],
                      info = paste("stage", j))
   }
 
-  # Rebuilding the stages walks the system to the last stage state, so step_adjoint
-  # puts it back where the step began. A caller sweeping steps backwards reads it
-  # there.
+  # The step leaves the double system where it began, which is where a caller
+  # sweeping steps backwards reads it.
   expect_identical(r$last, c(1.5, -0.7, 20.0))
 })
 

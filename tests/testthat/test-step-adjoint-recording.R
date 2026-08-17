@@ -1,12 +1,13 @@
-# Tests for the active System a stage recording is taken on -- assigned through the
-# System's own hook where it has one, rebound where it has not -- and for
-# Solver::solve_adjoint over the recorded steps. The adjoint records a tape, so
-# the snippet must link against the odelia shared library for the XAD Tape
-# symbols.
+# Tests for the recording one step is transposed by -- all six Runge-Kutta stages
+# and the combination closing them, taken on a System lifted to the adjoint
+# scalar for that recording -- and for Solver::solve_adjoint over the recorded
+# steps. The adjoint records a tape, so the snippet must link against the odelia
+# shared library for the XAD Tape symbols.
 
 # Predator and prey, with the four coefficients declared as the parameters a
-# recording carries. A rebind of this System is cheap, so it declares assign_from
-# as well: what the hook buys is measured by counting the calls, not by timing.
+# recording carries. `dndt` and `dpdt` are DERIVED: written from an expression
+# rather than handed a fresh value, which is what a System carried between
+# recordings gets wrong.
 lv_system <- '
   static int lv_assigns = 0;
 
@@ -19,8 +20,7 @@ lv_system <- '
 
     template <typename> friend class LotkaVolterra;
 
-    // The one map. rebind_from is a line over it, so a rebound System and an
-    // assigned one hold the same thing without that having to be remembered.
+    // The one map, reached through rebind_from below.
     template <class S2>
     void assign_from(const LotkaVolterra<S2>& src) {
       ++lv_assigns;
@@ -76,7 +76,7 @@ lv_system <- '
   };
 '
 
-compile_assign_interface <- function() {
+compile_recording_interface <- function() {
   ensure_ode_interface_loaded()
 
   include_dir <- odelia_include_dir()
@@ -102,23 +102,18 @@ compile_assign_interface <- function() {
     #include <examples/lorenz_system.hpp>
     ', lv_system, '
 
-    // A System that can be rebound can be assigned, because rebind_from is a line
-    // over assign_from. Asserted on both systems in this file so that separating
-    // the two -- writing one without the other -- stops compiling here.
-    using lv_active = LotkaVolterra<odelia::ode::active_scalar<double> >;
-    using lz_active = LorenzSystem<odelia::ode::active_scalar<double> >;
-    static_assert(odelia::ode::AssignsFrom<lv_active, LotkaVolterra<double> >);
+    // Both systems in this file are lifted to the adjoint scalar by the
+    // recording, so both have to declare the hook it lifts them with.
     static_assert(odelia::ode::Rebindable<LotkaVolterra<double>,
                                           odelia::ode::active_scalar<double> >);
-    static_assert(odelia::ode::AssignsFrom<lz_active, LorenzSystem<double> >);
     static_assert(odelia::ode::Rebindable<LorenzSystem<double>,
                                           odelia::ode::active_scalar<double> >);
 
     // [[Rcpp::export]]
-    bool rebind_and_assign_travel_together() { return true; }
+    bool both_systems_rebind() { return true; }
 
-    // One RKCK step and its adjoint, plus what the step cost and how often the
-    // active System was assigned.
+    // One RKCK step and its adjoint, plus what the step cost and how many times
+    // a System was copied for it.
     // [[Rcpp::export]]
     Rcpp::List lv_step_and_adjoint(std::vector<double> pars, double time,
                                    double step_size, std::vector<double> y,
@@ -145,8 +140,8 @@ compile_assign_interface <- function() {
                                 Rcpp::_["parameter_adjoint"] = parameter_adjoint,
                                 Rcpp::_["rate_calls"] = adj.rate_calls,
                                 Rcpp::_["assigns"] = lv_assigns,
-                                Rcpp::_["stage_sweeps"] =
-                                  (int) stepper.stage_sweeps);
+                                Rcpp::_["recorded_rates"] =
+                                  (int) stepper.recorded_rates);
     }
 
     // The recorded run, the states it passed through, and the adjoint swept back
@@ -173,14 +168,17 @@ compile_assign_interface <- function() {
       }
 
       std::vector<double> lambda(lambda_end);
-      replay.clear_stage_sweeps();
-      replay.solve_adjoint(states, lambda);
+      std::vector<double> parameter_adjoint;
+      replay.clear_recorded_rates();
+      replay.solve_adjoint(states, lambda, parameter_adjoint, 0,
+                           states.size() - 1);
 
       return Rcpp::List::create(Rcpp::_["n_steps"] = (int) h.size(),
                                 Rcpp::_["y_end"] = states.back(),
                                 Rcpp::_["lambda"] = lambda,
-                                Rcpp::_["stage_sweeps"] =
-                                  (int) replay.stage_sweeps());
+                                Rcpp::_["parameter_adjoint"] = parameter_adjoint,
+                                Rcpp::_["recorded_rates"] =
+                                  (int) replay.recorded_rates());
     }
 
     // The same sweep taken as two segments meeting at `split`, which is what a
@@ -214,6 +212,31 @@ compile_assign_interface <- function() {
                            states.size() - 1);
       replay.solve_adjoint(states, lambda, parameter_adjoint, 0, (size_t) split);
       return lambda;
+    }
+
+    // The schedule `schedule_pars` resolved, run forward at `run_pars`. The
+    // sweep treats the recorded step sizes as constant, so a difference in the
+    // coefficients has to hold them at the values the sweep replayed; letting
+    // them move would difference the schedule as well and referee something the
+    // sweep does not compute.
+    // [[Rcpp::export]]
+    std::vector<double> lv_replay_at(std::vector<double> schedule_pars,
+                                     std::vector<double> run_pars,
+                                     std::vector<double> y0, double t_end) {
+      odelia::ode::OdeControl ctl;
+      LotkaVolterra<double> schedule_system(schedule_pars[0], schedule_pars[1],
+                                            schedule_pars[2], schedule_pars[3]);
+      odelia::ode::Solver<LotkaVolterra<double> > solver(schedule_system, ctl);
+      solver.set_state(y0, 0.0);
+      solver.advance_adaptive({0.0, t_end});
+      const std::vector<double> h = solver.step_sizes();
+
+      LotkaVolterra<double> run_system(run_pars[0], run_pars[1], run_pars[2],
+                                       run_pars[3]);
+      odelia::ode::Solver<LotkaVolterra<double> > replay(run_system, ctl);
+      replay.set_state(y0, 0.0);
+      replay.advance_fixed_steps(h);
+      return replay.state();
     }
 
     // The same recorded schedule run forward from a given start state, so a
@@ -255,13 +278,13 @@ compile_assign_interface <- function() {
 lv_pars <- c(1.1, 0.06, 0.4, 0.9)
 lv_y <- c(11.0, 4.0)
 
-testthat::test_that("a System that rebinds also assigns", {
-  compile_assign_interface()
-  expect_true(rebind_and_assign_travel_together())
+testthat::test_that("both systems declare the hook the recording lifts them with", {
+  compile_recording_interface()
+  expect_true(both_systems_rebind())
 })
 
 testthat::test_that("step_adjoint matches a finite difference of one step", {
-  compile_assign_interface()
+  compile_recording_interface()
 
   step_size <- 0.05
   # Non-symmetric, so a dropped transpose shows up.
@@ -284,7 +307,7 @@ testthat::test_that("step_adjoint matches a finite difference of one step", {
 })
 
 testthat::test_that("the coefficients' rows come back with the state's", {
-  compile_assign_interface()
+  compile_recording_interface()
 
   # The parameters ride in the same recording as the state, so an active System carried
   # into a second recording holds slots that recording has cleared and these
@@ -307,7 +330,7 @@ testthat::test_that("the coefficients' rows come back with the state's", {
 })
 
 testthat::test_that("one component of lambda_out at a time agrees, row by row", {
-  compile_assign_interface()
+  compile_recording_interface()
 
   step_size <- 0.05
   eps <- 1e-7
@@ -326,31 +349,31 @@ testthat::test_that("one component of lambda_out at a time agrees, row by row", 
   }
 })
 
-testthat::test_that("one assignment per stage recording, and six of them a step", {
-  compile_assign_interface()
+testthat::test_that("a step is one recording of six rates, on one copy of the System", {
+  compile_recording_interface()
 
   r <- lv_step_and_adjoint(lv_pars, 0.0, 0.05, lv_y, c(0.7, -1.9))
-  # Six stage recordings, each assigned: freshness is per recording, not per
-  # step, and an active System assigned once a step returns a plausible wrong number.
-  # Seven rather than six because rebind_from is a line over assign_from, so
-  # building the active System counts as one -- which is the property that keeps
-  # the two from describing different copies.
-  expect_identical(r$assigns, 7L)
-  expect_identical(r$stage_sweeps, 6L)
-  # Six stage states rebuilt in double, then the restore that puts the System
-  # back where the step began. The sweep evaluates no rates in double: the
-  # recording carries the chain, and one here would compute all of it again.
-  expect_identical(r$rate_calls, 7L)
+  # One recording spans the step, so one copy is made for it. Six recordings a
+  # step is what this replaced, and each of those needed its own copy, because
+  # every scalar a recording writes has to arrive holding no tape slot.
+  expect_identical(r$assigns, 1L)
+  # The six rate evaluations the recording carries: the stage states are its own
+  # intermediates.
+  expect_identical(r$recorded_rates, 6L)
+  # And the double System is walked once, by the restore that puts it back where
+  # the step began. A stage rebuild in double is what this replaced, and it cost
+  # six more -- the recording already carries the chain.
+  expect_identical(r$rate_calls, 1L)
 })
 
 testthat::test_that("a zero end adjoint sweeps to zero", {
-  compile_assign_interface()
+  compile_recording_interface()
   r <- lv_step_and_adjoint(lv_pars, 0.0, 0.05, lv_y, c(0.0, 0.0))
   expect_equal(r$lambda_in, c(0.0, 0.0))
 })
 
 testthat::test_that("solve_adjoint over the recorded steps matches a finite difference of the run", {
-  compile_assign_interface()
+  compile_recording_interface()
 
   t_end <- 1.5
   lambda_end <- c(0.4, -1.3)
@@ -358,9 +381,9 @@ testthat::test_that("solve_adjoint over the recorded steps matches a finite diff
 
   r <- lv_solve_adjoint(lv_pars, lv_y, t_end, lambda_end)
   expect_gt(r$n_steps, 3)
-  # Six stage transposes per step swept, one seed each. The recording's first
-  # entry is the state no step reached, so the sweep takes one fewer.
-  expect_identical(r$stage_sweeps, 6L * (r$n_steps - 1L))
+  # Six rate evaluations recorded per step swept. The recording's first entry is
+  # the state no step reached, so the sweep takes one fewer.
+  expect_identical(r$recorded_rates, 6L * (r$n_steps - 1L))
 
   jacobian <- sapply(seq_along(lv_y), function(j) {
     up <- lv_y; up[j] <- up[j] + eps
@@ -372,8 +395,34 @@ testthat::test_that("solve_adjoint over the recorded steps matches a finite diff
   expect_equal(r$lambda, expected, tolerance = 1e-5)
 })
 
+testthat::test_that("the coefficients' rows over a whole run match a finite difference of it", {
+  compile_recording_interface()
+
+  # The state channel above and the coefficients' channel below fail
+  # differently, and only over more than one step. A step composed wrongly
+  # leaves the state rows out by a percent or so and the coefficients' rows out
+  # by tens of percent, both finite and plausible -- so a suite refereeing the
+  # coefficients at one step and the state over a run reports nothing. Both
+  # channels are needed over a run.
+  t_end <- 1.5
+  lambda_end <- c(0.4, -1.3)
+  eps <- 1e-6
+
+  got <- lv_solve_adjoint(lv_pars, lv_y, t_end, lambda_end)$parameter_adjoint
+  expected <- sapply(seq_along(lv_pars), function(j) {
+    up <- lv_pars; up[j] <- up[j] + eps
+    down <- lv_pars; down[j] <- down[j] - eps
+    sum(((lv_replay_at(lv_pars, up, lv_y, t_end) -
+          lv_replay_at(lv_pars, down, lv_y, t_end)) / (2 * eps)) * lambda_end)
+  })
+
+  expect_equal(got, expected, tolerance = 1e-5)
+  # Every row carries something, so agreement is not two vectors of zeros.
+  expect_false(any(abs(expected) < 1e-6))
+})
+
 testthat::test_that("the sweep taken as two segments equals the sweep taken whole", {
-  compile_assign_interface()
+  compile_recording_interface()
 
   t_end <- 1.5
   lambda_end <- c(0.4, -1.3)
@@ -389,7 +438,7 @@ testthat::test_that("the sweep taken as two segments equals the sweep taken whol
 })
 
 testthat::test_that("a segment that is not a range of recorded steps is refused", {
-  compile_assign_interface()
+  compile_recording_interface()
 
   t_end <- 1.5
   lambda_end <- c(0.4, -1.3)

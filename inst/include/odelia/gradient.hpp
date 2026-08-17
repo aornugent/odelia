@@ -329,8 +329,7 @@ std::size_t solve_adjoint_over_widenings(
 
     // One tape for every widening this walk crosses. Clearing it returns it to an
     // empty recording and keeps the capacity, where one built per widening
-    // regrows it; the active_system below is rebuilt per widening because it must be, and
-    // that is the distinction the primitive it is handed to states.
+    // regrows it.
     std::size_t swept = 0;
     typename scalar::tape_type tape(false);
     for (std::size_t j = segments.size(); j-- > 0;) {
@@ -366,13 +365,13 @@ std::size_t solve_adjoint_over_widenings(
         const recorded_widening<Widening>& w = widenings[j - 1];
         system.narrow(w.event);
         const double time = solver.times()[w.after_step];
-        auto active_system = system.template rebind_from<scalar>();
-        auto widen = [&](typename std::vector<scalar>::const_iterator x,
+        auto widen = [&](auto& active_system,
+                         typename std::vector<scalar>::const_iterator x,
                          std::vector<scalar>& y) -> void {
             active_system.widened_state(w.event, time, x, y);
         };
         std::vector<std::vector<double>> narrowed;
-        state_and_parameter_adjoints(tape, active_system, states[w.after_step], lambda,
+        state_and_parameter_adjoints(tape, system, states[w.after_step], lambda,
                                      widen, narrowed, parameter_adjoint);
         lambda = std::move(narrowed);
     }

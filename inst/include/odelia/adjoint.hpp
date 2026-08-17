@@ -209,13 +209,25 @@ std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
 // A transpose taken with respect to a System's state AND the parameters its
 // active-scalar lists: one recording over both, swept once per seed.
 //
-// `evaluate` is handed the state half of the recorded inputs and the output
-// buffer, with the active_system's parameters ALREADY written from the other half. That
-// order is why the two halves are one recording rather than two calls: a
-// quantity the state determines reads the parameters while deriving it, so a
-// state written first derives it at the previous values. Writing the parameters
-// here rather than in `evaluate` is what keeps that from being a rule each
-// caller has to remember.
+// The System is lifted to the adjoint scalar HERE, per recording, and the lifted
+// copy is what `evaluate` is handed. That placement is the whole of why the
+// recording is safe. Clearing the tape returns its slot counter to zero, so
+// every scalar a recording writes has to arrive holding no slot; one still
+// holding the last recording's is handed the same number as some other variable
+// in this one, their adjoints add together, and the sweep comes back wrong with
+// nothing raised. A System built for the recording has that by construction. A
+// System carried between recordings has it only for the scalars its copy writes
+// through a fresh value -- which leaves out every quantity it DERIVES, because
+// assigning from an expression keeps the slot the target already had, and
+// keeping it is invisible until two recordings differ in shape. That is a rule
+// no signature can state and nothing here can check, so the copy is taken where
+// the requirement is instead of being asked of the caller.
+//
+// `evaluate` is handed that System, the state half of the recorded inputs, and
+// the output buffer, with the System's parameters ALREADY written from the other
+// half. That order is why the two halves are one recording rather than two
+// calls: a quantity the state determines reads the parameters while deriving it,
+// so a state written first derives it at the previous values.
 //
 // The sweep splits back along the same seam, and the two halves are handled
 // differently. `state_adjoint` is REPLACED: it is resized to one row per seed and
@@ -227,22 +239,18 @@ std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
 // Those two are therefore different objects, and one being the other would mean
 // resizing the accumulator between the check on its rows and the writes into
 // them. Refused rather than documented.
-//
-// `active_system` must be assigned for this call and not carried over from a previous one.
-// Its parameters are written from the recorded inputs, so an active System that was written
-// that way before arrives holding scalars from a recording this one has cleared,
-// and the sweep comes back wrong -- not obviously wrong: one seed's rows can stay
-// exact while another's do not. Nothing here can see the difference, which is why
-// it is stated. A caller wanting to amortise the copy has to make its scalars fresh
-// some other way.
-template <class ActiveSystem, class Evaluate>
+template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
-    xad::adj<double>::tape_type& tape, ActiveSystem& active_system,
+    xad::adj<double>::tape_type& tape, const System& system,
     const std::vector<double>& state,
     const std::vector<std::vector<double>>& output_adjoints, Evaluate&& evaluate,
     std::vector<std::vector<double>>& state_adjoint,
     std::vector<std::vector<double>>& parameter_adjoint) {
     using scalar = active_scalar<double>;
+    static_assert(Rebindable<System, scalar>,
+                  "a recording is taken on the System at the adjoint scalar; "
+                  "this System has no rebind_from()");
+    auto active_system = system.template rebind_from<scalar>();
     const std::vector<scalar*> parameters = active_system.ad_parameters();
     const std::size_t n_state = state.size();
     const std::size_t n_parameter = parameters.size();
@@ -273,7 +281,7 @@ std::size_t state_and_parameter_adjoints(
         for (scalar* p : parameters) {
             *p = x[at++];
         }
-        evaluate(x.begin(), y);
+        evaluate(active_system, x.begin(), y);
     };
 
     std::vector<std::vector<double>> in_adjoint;
@@ -293,36 +301,31 @@ std::size_t state_and_parameter_adjoints(
 }
 
 // The transpose of one rate evaluation: `state_adjoint[m]` receives
-// transpose(d dydt / d y) * rate_adjoints[m], with the active_system's parameters in the
+// transpose(d dydt / d y) * rate_adjoints[m], with the System's parameters in the
 // same recording, so a rate the parameters reach carries their rows too.
 //
-// What is recorded is derivs() on the active_system -- the call the forward pass makes --
-// so the transpose cannot drift from the rates it transposes, and a System that
+// What is recorded is derivs() -- the call the forward pass makes -- so the
+// transpose cannot drift from the rates it transposes, and a System that
 // restores a recorded field restores it here as well. Everything between the
 // state and the rates is an intermediate of that one recording, so nothing
 // between them needs a transpose written for it.
 //
 // `stage` is the recorded stage the evaluation belongs to; negative where none
 // does, which is the step's first evaluation, whose rate the step before it took.
-//
-// The active System is assigned from the System here rather than by the caller: a
-// recording clears the tape, so one arriving with the last recording's slots writes
-// this one's operations onto numbers already handed out, and the sweep comes back
-// wrong with nothing raised.
-template <class System, class ActiveSystem>
+template <class System>
 std::size_t rates_adjoint(
-    xad::adj<double>::tape_type& tape, const System& system, ActiveSystem& active_system,
+    xad::adj<double>::tape_type& tape, const System& system,
     const std::vector<double>& state, double time, int stage,
     const std::vector<std::vector<double>>& rate_adjoints,
     std::vector<std::vector<double>>& state_adjoint,
     std::vector<std::vector<double>>& parameter_adjoint) {
     using scalar = active_scalar<double>;
-    active_system.assign_from(system);
     const std::size_t n_state = state.size();
-    auto rates = [&](typename std::vector<scalar>::const_iterator x,
+    auto rates = [&](auto& active_system,
+                     typename std::vector<scalar>::const_iterator x,
                      std::vector<scalar>& dydt) -> void {
-        // The state half of the recorded inputs; the active_system's parameters are
-        // already written from the other half.
+        // The state half of the recorded inputs; the parameters are already
+        // written from the other half.
         std::vector<scalar> y(x, x + static_cast<std::ptrdiff_t>(n_state));
         if (stage < 0) {
             ode::derivs(active_system, y, dydt, time);
@@ -330,7 +333,7 @@ std::size_t rates_adjoint(
             ode::derivs(active_system, y, dydt, time, stage);
         }
     };
-    return state_and_parameter_adjoints(tape, active_system, state, rate_adjoints, rates,
+    return state_and_parameter_adjoints(tape, system, state, rate_adjoints, rates,
                                         state_adjoint, parameter_adjoint);
 }
 

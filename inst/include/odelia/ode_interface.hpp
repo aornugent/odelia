@@ -38,21 +38,6 @@ public:
   enum { value = sizeof(test<T>(0)) == sizeof(true_type) };
 };
 
-// A System that can write another System's values into itself, at its own scalar.
-// This is the one map a System writes: rebind_from() below is a line over it, so
-// the two cannot describe different copies.
-//
-// A System reached this way already exists, which is what it is for. Every
-// recording clears the tape, and a System still holding the slots the last
-// recording handed it writes this one's operations onto numbers already given
-// out; the sweep then comes back wrong with nothing raised. Assigning fixes that
-// because assignment leaves every scalar unregistered again -- and it costs no
-// allocation, where building a fresh System costs one per element.
-template <typename To, typename From>
-concept AssignsFrom = requires(To& to, const From& from) {
-  to.assign_from(from);
-};
-
 // A System that can hand back a copy of itself on scalar U. The rebound type must
 // itself be a System on U: a rebind_from() returning the wrong scalar fails here
 // rather than on the first arithmetic inside the caller.
