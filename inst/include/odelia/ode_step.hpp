@@ -278,10 +278,9 @@ void Step<System>::step_adjoint(System& system,
   ode::state_and_parameter_adjoints(adjoint_tape.get(), system, y, lambda_out,
                                     whole_step, lambda_in, parameter_adjoint);
 
-  // The stages are the recording's, so the double System was not walked through
-  // them; it is put where the step started for the caller that reads it between
-  // steps.
-  ode::internal::set_ode_state(system, y, time);
+  // The double System is left as it was found. The stages run on the lifted copy,
+  // so this one is never walked through them, and a sweep is handed each step's
+  // state and reads this System for its width alone.
 }
 
 // RKCK coefficients, from GSL

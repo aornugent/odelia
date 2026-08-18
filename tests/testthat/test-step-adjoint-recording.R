@@ -357,17 +357,16 @@ testthat::test_that("a step is one recording of six rates, on one copy of the Sy
   compile_recording_interface()
 
   r <- lv_step_and_adjoint(lv_pars, 0.0, 0.05, lv_y, c(0.7, -1.9))
-  # One recording spans the step, so one copy is made for it. Six recordings a
-  # step is what this replaced, and each of those needed its own copy, because
-  # every scalar a recording writes has to arrive holding no tape slot.
+  # One recording spans the step, so the System is lifted once for it. Every
+  # scalar a recording writes has to arrive holding no tape slot, and a copy
+  # taken for the recording is what gives it that.
   expect_identical(r$assigns, 1L)
-  # The six rate evaluations the recording carries: the stage states are its own
-  # intermediates.
+  # One rate evaluation per stage of the tableau, and the stage states between
+  # them are the recording's own intermediates.
   expect_identical(r$recorded_rates, 6L)
-  # And the double System is walked once, by the restore that puts it back where
-  # the step began. A stage rebuild in double is what this replaced, and it cost
-  # six more -- the recording already carries the chain.
-  expect_identical(r$rate_calls, 1L)
+  # The double System is not walked. The stages run on the lifted copy, and a
+  # sweep is handed each step's state, so this System is read for its width alone.
+  expect_identical(r$rate_calls, 0L)
 })
 
 testthat::test_that("a zero end adjoint sweeps to zero", {

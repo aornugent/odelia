@@ -161,10 +161,10 @@ testthat::test_that("the recording builds each stage state bit-identically to st
   r <- lorenz_stage_states(c(10.0, 28.0, 8.0 / 3.0), 0.0, 0.01,
                            c(1.5, -0.7, 20.0), c(0.3, -1.7, 2.1))
 
-  # Six stage states from the one recording, then the restore. Seven and not
-  # thirteen because the stage states are the recording's own intermediates
-  # rather than a rebuild in double ahead of it.
-  expect_identical(r$n_logged, 7L)
+  # One state loaded per stage of the tableau, and nothing after them: the stage
+  # states are the recording's own intermediates, and the double system is not
+  # walked once the recording is taken.
+  expect_identical(r$n_logged, 6L)
   # What the sweep transposes has to be the step the forward pass took, term for
   # term: b21 * h * k1 and h * (b21 * k1) round differently, and one function
   # builds both sides so they cannot come apart.
@@ -173,9 +173,8 @@ testthat::test_that("the recording builds each stage state bit-identically to st
                      info = paste("stage", j))
   }
 
-  # The step leaves the double system where it began, which is where a caller
-  # sweeping steps backwards reads it.
-  expect_identical(r$last, c(1.5, -0.7, 20.0))
+  # The last state loaded is the sixth stage's: nothing follows the stages.
+  expect_identical(r$last, r$recorded[[6]])
 })
 
 testthat::test_that("step_adjoint of a zero end adjoint is zero", {
