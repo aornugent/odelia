@@ -47,22 +47,36 @@ private:
   std::unique_ptr<tape_type> tape;
 };
 
-// One block of `f`, recorded and swept once on the tape handed in: `input_adjoints`
-// receives transpose(jacobian) * output_adjoints, and the return value is the recording's
-// size. `f` is instantiated at the active scalar here, so only doubles cross in and out.
+// One block of `f`, recorded ONCE on the tape handed in and swept once per seed:
+// `input_adjoints[m]` receives transpose(jacobian) * output_adjoints[m], and the return
+// value is the recording's size. `f` is instantiated at the active scalar here, so only
+// doubles cross in and out.
+//
+// One seed is a batch of one, and there is no separate entry point for it. Where the
+// recording is the expensive part -- which it is whenever `f` is a model evaluation
+// rather than arithmetic -- a caller wanting several rows pays one recording rather than
+// one per row, and a second signature over the same recording is a second place for the
+// seam between the recording and the sweep to be got wrong.
+//
+// Each sweep is bit-identical to the row a fresh recording of `f` would give, because
+// clearDerivatives() returns the tape's derivative slots to zero while leaving the
+// recorded operations alone. That is what makes one recording substitutable for many
+// rather than an approximation of them.
 //
 // The tape is the caller's and is reused across calls, so nothing here allocates one; a
 // tape costs about a fifth of this whole product and the product runs millions of times
-// per gradient.
+// per gradient. Stops if a tape other than this one is active: recording onto a tape this
+// product does not own would sweep the block's adjoints twice.
 //
-// Stops if a tape other than this one is active. Recording onto a tape this product does
-// not own would sweep the block's adjoints twice, so "the tape handed in is the only one"
-// is checked rather than assumed.
+// An empty seed is swept anyway rather than skipped: the row is then zeros, which is
+// what the caller's accumulator expects, and skipping would make the result depend on
+// which seeds happen to vanish at this state.
 template <class F>
 std::size_t vector_jacobian_product(xad::adj<double>::tape_type& tape,
-                                    const std::vector<double>& x,
-                                    const std::vector<double>& output_adjoints, F&& f,
-                                    std::vector<double>& input_adjoints) {
+                                     const std::vector<double>& x,
+                                     const std::vector<std::vector<double>>& output_adjoints,
+                                     F&& f,
+                                     std::vector<std::vector<double>>& input_adjoints) {
     using ad = xad::adj<double>;
     using ad_type = ad::active_type;
 
@@ -74,100 +88,15 @@ std::size_t vector_jacobian_product(xad::adj<double>::tape_type& tape,
         util::stop("vector_jacobian_product: 'x' must have at least one entry");
     }
     if (output_adjoints.empty()) {
-        util::stop("vector_jacobian_product: 'output_adjoints' must have at least one entry");
-    }
-
-    tape.activate();
-    tape_guard<ad::tape_type> guard{&tape};
-
-    // clearAll() returns the tape to an empty recording with its derivative-slot counter
-    // back at zero. newRecording() alone leaves that counter where the previous call left
-    // it -- destroying a registered input only releases its slot when the slot is the last
-    // one, which it is not for a vector destroyed front to back -- so the tape's memory and
-    // variable count would climb with every call while the adjoints stayed correct.
-    tape.clearAll();
-
-    // Inputs are registered before newRecording(). Registering after it leaves them outside
-    // the recording, and the sweep then reports every input adjoint as zero with nothing
-    // thrown.
-    std::vector<ad_type> x_active(x.begin(), x.end());
-    tape.registerInputs(x_active);
-    tape.newRecording();
-
-    std::vector<ad_type> y_active(output_adjoints.size());
-    f(x_active, y_active);
-    if (y_active.size() != output_adjoints.size()) {
-        util::stop("vector_jacobian_product: 'f' resized the output buffer; it is "
-                   "handed one entry per output adjoint and must write in place");
-    }
-    tape.registerOutputs(y_active);
-
-    for (std::size_t i = 0; i < y_active.size(); ++i) {
-        xad::derivative(y_active[i]) = output_adjoints[i];
-    }
-    tape.computeAdjoints();
-
-    // The caller owns the buffer and reuses it across calls, so this resize is a no-op
-    // after the first call and the product never allocates its own result.
-    input_adjoints.resize(x.size());
-    for (std::size_t i = 0; i < x_active.size(); ++i) {
-        input_adjoints[i] = xad::derivative(x_active[i]);
-    }
-
-    return tape.getMemory();
-}
-
-// The same product for a caller with no tape to reuse: one call, one tape. Constructed
-// inactive, so a tape already active here belongs to someone else and the overload above
-// stops on it.
-template <class F>
-std::size_t vector_jacobian_product(const std::vector<double>& x,
-                                    const std::vector<double>& output_adjoints, F&& f,
-                                    std::vector<double>& input_adjoints) {
-    xad::adj<double>::tape_type tape(false);
-    return vector_jacobian_product(tape, x, output_adjoints, std::forward<F>(f), input_adjoints);
-}
-
-// The same block recorded ONCE and swept once per seed: `input_adjoints[m]` receives
-// transpose(jacobian) * output_adjoints[m]. A caller wanting several rows of the same
-// block pays one recording rather than one per row, and where the recording is the
-// expensive part -- which is the case whenever `f` is a model evaluation rather than
-// arithmetic -- that is the whole of the cost.
-//
-// Each sweep is bit-identical to the row a fresh recording of `f` would give, because
-// clearDerivatives() returns the tape's derivative slots to zero while leaving the
-// recorded operations alone. That is what makes this substitutable for the single-seed
-// form above rather than an approximation of it.
-//
-// An empty seed is swept anyway rather than skipped: the row is then zeros, which is
-// what the caller's accumulator expects, and skipping would make the result depend on
-// which seeds happen to vanish at this state.
-template <class F>
-std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
-                                     const std::vector<double>& x,
-                                     const std::vector<std::vector<double>>& output_adjoints,
-                                     F&& f,
-                                     std::vector<std::vector<double>>& input_adjoints) {
-    using ad = xad::adj<double>;
-    using ad_type = ad::active_type;
-
-    ad::tape_type* active = ad::tape_type::getActive();
-    if (active != nullptr && active != &tape) {
-        util::stop("vector_jacobian_products: a tape is already active");
-    }
-    if (x.empty()) {
-        util::stop("vector_jacobian_products: 'x' must have at least one entry");
-    }
-    if (output_adjoints.empty()) {
-        util::stop("vector_jacobian_products: needs at least one seed");
+        util::stop("vector_jacobian_product: needs at least one seed");
     }
     const std::size_t n_out = output_adjoints.front().size();
     if (n_out == 0) {
-        util::stop("vector_jacobian_products: a seed must have at least one entry");
+        util::stop("vector_jacobian_product: a seed must have at least one entry");
     }
     for (const std::vector<double>& s : output_adjoints) {
         if (s.size() != n_out) {
-            util::stop("vector_jacobian_products: every seed must have one entry per "
+            util::stop("vector_jacobian_product: every seed must have one entry per "
                        "output; they are swept over one recording of the same block");
         }
     }
@@ -183,7 +112,7 @@ std::size_t vector_jacobian_products(xad::adj<double>::tape_type& tape,
     std::vector<ad_type> y_active(n_out);
     f(x_active, y_active);
     if (y_active.size() != n_out) {
-        util::stop("vector_jacobian_products: 'f' resized the output buffer; it is "
+        util::stop("vector_jacobian_product: 'f' resized the output buffer; it is "
                    "handed one entry per output adjoint and must write in place");
     }
     tape.registerOutputs(y_active);
@@ -286,7 +215,7 @@ std::size_t state_and_parameter_adjoints(
 
     std::vector<std::vector<double>> in_adjoint;
     const std::size_t recording =
-        vector_jacobian_products(tape, in, output_adjoints, record, in_adjoint);
+        vector_jacobian_product(tape, in, output_adjoints, record, in_adjoint);
 
     state_adjoint.assign(n_seed, std::vector<double>(n_state, 0.0));
     for (std::size_t m = 0; m < n_seed; ++m) {
