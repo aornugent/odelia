@@ -352,6 +352,31 @@ std::size_t solve_adjoint_over_widenings(
     // One tape for every widening this walk crosses. Clearing it returns it to an
     // empty recording and keeps the capacity, where one built per widening
     // regrows it.
+    // ⚠️ THE WIDTH ON EXIT IS A PROMISE, AND A THROW IS AN EXIT. The descent
+    // below starts at the run's own width and narrows as it goes, so a sweep
+    // abandoned in the highest segment leaves the System at its widest -- where
+    // every caller's tail widens back from the lowest and reads the mismatch as a
+    // length error one call later, naming neither this walk nor what refused.
+    std::size_t applied = widenings.size();
+    struct lower_on_exit {
+        // Named apart from what it binds to: a member named `system` would change
+        // what `system` means inside its own declaration.
+        decltype(system) sys;
+        const std::vector<recorded_widening<Widening>>& widenings;
+        std::size_t& applied;
+        ~lower_on_exit() {
+            // This runs with another exception possibly in flight, so a failure
+            // here cannot be raised: it would end the process rather than the
+            // call that is already failing.
+            try {
+                while (applied > 0) {
+                    sys.narrow(widenings[--applied].event);
+                }
+            } catch (...) {
+            }
+        }
+    } lower{system, widenings, applied};
+
     std::size_t swept = 0;
     typename scalar::tape_type tape(false);
     for (std::size_t j = segments.size(); j-- > 0;) {
@@ -386,6 +411,7 @@ std::size_t solve_adjoint_over_widenings(
 
         const recorded_widening<Widening>& w = widenings[j - 1];
         system.narrow(w.event);
+        --applied;
         const double time = solver.times()[w.after_step];
         auto widen = [&](auto& active_system,
                          typename std::vector<scalar>::const_iterator x,
