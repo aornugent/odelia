@@ -57,8 +57,13 @@ compile_step_record_interface <- function() {
       const std::vector<double> step_sizes = solver.step_sizes();
       const std::vector<double> y_adaptive = solver.state();
 
+      std::vector<ode::recorded_step> recording;
+      recording.reserve(times.size());
+      for (size_t i = 0; i < times.size(); ++i) {
+        recording.push_back({times[i], step_sizes[i]});
+      }
       ode::Solver<LorenzD> by_steps = make_solver(y0, t0);
-      by_steps.advance_fixed_steps(step_sizes);
+      by_steps.advance_recorded(recording);
 
       ode::Solver<LorenzD> by_times = make_solver(y0, t0);
       by_times.advance_fixed(times);

@@ -431,22 +431,23 @@ template <class Solver, class Widening>
 void advance_over_widenings(
     Solver& forward,
     const std::vector<recorded_insertion<Widening>>& insertions,
-    const std::vector<double>& step_sizes, std::size_t from_segment,
+    const std::vector<recorded_step>& steps, std::size_t from_segment,
     std::size_t first) {
     const std::vector<state_segment> segments =
-        state_segments(insertions, step_sizes.size());
+        state_segments(insertions, steps.size());
     if (from_segment >= segments.size()) {
         util::stop("advance_over_widenings: the recording has no such segment");
     }
     for (std::size_t j = from_segment; j < segments.size(); ++j) {
-        // The first entry is the size no step reached, which is how a recorded
+        // The first entry is the start no step reached, which is how a recorded
         // run reads back.
-        std::vector<double> sizes(1, std::numeric_limits<double>::quiet_NaN());
+        std::vector<recorded_step> segment_steps{
+            {forward.time(), std::numeric_limits<double>::quiet_NaN()}};
         for (std::size_t k = first + 1; k <= segments[j].last; ++k) {
-            sizes.push_back(step_sizes[k]);
+            segment_steps.push_back(steps[k]);
         }
-        if (sizes.size() > 1) {
-            forward.advance_fixed_steps(sizes);
+        if (segment_steps.size() > 1) {
+            forward.advance_recorded(segment_steps);
         }
         if (j + 1 < segments.size()) {
             // The same map the sweep transposes, so a tangent traverses exactly

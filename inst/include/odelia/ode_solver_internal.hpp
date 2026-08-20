@@ -43,8 +43,8 @@ public:
 
   void advance_adaptive(System &system, double time_max_);
   void advance_fixed(System& system, const std::vector<double>& times);
-  void advance_fixed_steps(System& system,
-                           const std::vector<double>& step_sizes);
+  void advance_recorded(System& system,
+                        const std::vector<recorded_step>& steps);
   void advance_euler(System& system, const std::vector<double>& times);
 
   void step(System& system);
@@ -91,7 +91,8 @@ public:
   // reached it, and the state there where the run was asked to keep states.
   void push_step(System& system, double time_, double step_size);
   void step_to(System& system, double time_max_);
-  void step_by(System& system, double step_size);
+  // `reached` is the time a recording says this step ended at; NaN accumulates.
+  void step_by(System& system, double step_size, double reached);
   void step_euler(System& system, double time_max_);
 
   void set_time_max(double time_max_);
@@ -291,22 +292,27 @@ void SolverInternal<System>::advance_fixed(System& system,
   }
 }
 
-// Step over a recorded run's step sizes {NaN, h_1, h_2, ...}, one step each, in
-// place of differencing its times. The leading NaN is the recorded start, which
-// no step reached; requiring it here is what checks that the caller handed over a
-// whole recording rather than a sequence offset by one step.
+// Step over a schedule, landing on each of its times: at the recorded size where
+// one is known, and to the time itself where it is not. The leading entry is where
+// the schedule starts, which no step reached, so its size is NaN; requiring that is
+// what checks the caller handed over a whole schedule rather than one offset by a
+// step.
 template <class System>
-void SolverInternal<System>::advance_fixed_steps(System& system,
-                                   const std::vector<double>& step_sizes) {
-  if (step_sizes.empty()) {
-    util::stop("'step_sizes' must be vector of at least length 1");
+void SolverInternal<System>::advance_recorded(
+    System& system, const std::vector<recorded_step>& steps) {
+  if (steps.empty()) {
+    util::stop("'steps' must be a recording of at least length 1");
   }
-  std::vector<double>::const_iterator h = step_sizes.begin();
-  if (!std::isnan(*h++)) {
-    util::stop("First element in 'step_sizes' must be NaN, the recorded start");
+  if (!std::isnan(steps.front().step_size)) {
+    util::stop("The first recorded step must have a NaN size, being the start "
+               "that no step reached");
   }
-  while (h != step_sizes.end()) {
-    step_by(system, *h++);
+  for (std::size_t k = 1; k < steps.size(); ++k) {
+    if (std::isnan(steps[k].step_size)) {
+      step_to(system, steps[k].time);
+    } else {
+      step_by(system, steps[k].step_size, steps[k].time);
+    }
   }
 }
 
@@ -513,7 +519,8 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
 // This takes a step of the given size, regardless of what the integration error
 // says.  This is used by advance_fixed_steps.
 template <class System>
-void SolverInternal<System>::step_by(System& system, double step_size) {
+void SolverInternal<System>::step_by(System& system, double step_size,
+                                     double reached) {
   if (!util::is_finite(step_size)) {
     util::stop("step_size must be finite!");
   }
@@ -524,7 +531,11 @@ void SolverInternal<System>::step_by(System& system, double step_size) {
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
   save_dydt_out_as_in();
 
-  time += step_size;
+  // The time the run reached, where a recording says what it was, rather than
+  // this time plus this size. A run does not accumulate either: its last step
+  // into an interval is set to the interval's end, and fl(t + (t1 - t)) is not
+  // t1 -- so a replay that adds arrives a bit short and has to be nudged.
+  time = util::is_finite(reached) ? reached : time + step_size;
   time_max = time;
   push_step(system, time, step_size);
 }

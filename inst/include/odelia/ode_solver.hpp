@@ -156,18 +156,21 @@ public:
     }
   }
 
-  // Take a series of steps of the recorded sizes {NaN, h_1, h_2, ...}, in place of
-  // differencing recorded times (cf. advance_fixed).
-  void advance_fixed_steps(std::vector<double> step_sizes)
+  // Step over a schedule, landing on each of its times: at the recorded size
+  // where one is known, and to the time itself where it is not. Not by
+  // differencing the times, because a size differenced back out of two recorded
+  // times is not the size that was taken; and not by adding sizes, which arrives
+  // a rounding short of where the run landed.
+  void advance_recorded(const std::vector<recorded_step>& steps)
   {
-    if (step_sizes.empty())
+    if (steps.empty())
     {
-      util::stop("'step_sizes' must be vector of at least length 1");
+      util::stop("'steps' must be a recording of at least length 1");
     }
-    std::vector<double>::const_iterator h = step_sizes.begin();
-    if (!std::isnan(*h++))
+    if (!std::isnan(steps.front().step_size))
     {
-      util::stop("First element in 'step_sizes' must be NaN, the recorded start");
+      util::stop("The first recorded step must have a NaN size, being the start "
+                 "that no step reached");
     }
 
     if (collect)
@@ -175,9 +178,16 @@ public:
       history.push_back(system);
     }
 
-    while (h != step_sizes.end())
+    for (std::size_t k = 1; k < steps.size(); ++k)
     {
-      solver.step_by(system, *h++);
+      if (std::isnan(steps[k].step_size))
+      {
+        solver.step_to(system, steps[k].time);
+      }
+      else
+      {
+        solver.step_by(system, steps[k].step_size, steps[k].time);
+      }
       if (collect)
       {
         history.push_back(system);

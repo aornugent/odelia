@@ -102,6 +102,23 @@ concept RecordsChoices =
     s.set_ode_state(in, time, at);
   };
 
+// One step of a schedule: a time to stop at, and the size that reached it where
+// something recorded it. Both in one object, because a replay adding sizes does
+// not land where the run landed -- a run sets its last step into an interval to
+// the interval's end rather than adding to it, and fl(t + (t1 - t)) is not t1.
+// Two vectors side by side can also be paired across different runs; one cannot.
+//
+// A NaN size is a time with no size known, which is a grid point rather than a
+// recorded step: step TO it. So one schedule type covers a grid a caller chose
+// and a run a caller recorded, and each entry says which it is rather than a
+// second container's emptiness saying it for all of them.
+//
+// The first entry is where the schedule starts, which no step reached: NaN.
+struct recorded_step {
+  double time;
+  double step_size;
+};
+
 // One insertion the run made: what it added, the recorded step it followed, and
 // that step's recorded time. `what` is the model's own and is never read here.
 //
