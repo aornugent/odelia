@@ -19,7 +19,9 @@ public:
   
   void resize(size_t size_);
   size_t order() const;
-  void step(System& system,
+  // `step` is which accepted step this is, which is half of the address a System
+  // recording its choices loads them by. The walk owns it; nothing asks the System.
+  void step(System& system, std::size_t step,
             double time, double step_size,
 	    state_type &y,
 	    state_type &yerr,
@@ -31,7 +33,7 @@ public:
   // one; there is no separate entry point for that, because a second signature
   // over the same recording is a second place for the seam between the state and
   // the parameter halves to be got wrong.
-  void step_adjoint(System& system,
+  void step_adjoint(System& system, std::size_t step,
                     double time, double step_size,
                     const state_type &y,
                     const std::vector<state_type> &lambda_out,
@@ -108,17 +110,8 @@ size_t Step<System>::order() const {
   return 5;
 }
 
-// Record the per-RK-stage field value on a System that keeps one; a no-op otherwise.
-template <typename System>
-void record_stage(System& system, int rk_step) {
-  if constexpr (ReplaysField<System>) {
-    system.record_stage(rk_step);
-  }
-}
-
-
 template <class System>
-void Step<System>::step(System& system,
+void Step<System>::step(System& system, std::size_t step,
                         double time, double step_size,
                         state_type &y,
                         state_type &yerr,
@@ -126,18 +119,18 @@ void Step<System>::step(System& system,
                         state_type &dydt_out) {
   const double h = step_size;
 
-  // First-same-as-last: k1 is the previous step's dydt_out, so the step costs
-  // five rate evaluations and one more to hand the next step its own k1.
+  // First-same-as-last: k1 is the previous step's dydt_out, so the step costs five
+  // rate evaluations and one more to hand the next step its own k1 -- which is why
+  // that last one is addressed as the next step's stage 0.
   std::copy(dydt_in.begin(), dydt_in.end(), k[0].begin());
   for (int i = 1; i < 6; ++i) {
     stage_state(i, y, k, h, ytmp);
-    ode::derivs(system, ytmp, k[i], stage_time(i, time, h), i - 1);
-    record_stage(system, i - 1);
+    ode::derivs(system, ytmp, k[i], stage_time(i, time, h),
+                recorded_stage{step, i});
   }
 
   step_end(y, k, h, y);
-  ode::derivs(system, y, dydt_out, time + h, 5);
-  record_stage(system, 5);
+  ode::derivs(system, y, dydt_out, time + h, recorded_stage{step + 1, 0});
 
   // Difference between 4th and 5th order, for error calculations
   for (size_t q = 0; q < size; ++q) {
@@ -224,23 +217,13 @@ void Step<System>::step_end(const std::vector<S>& y,
 // writes a transpose of its own; and the parameters ride in the same recording,
 // so a stage the parameters reach carries their rows too.
 template <class System>
-void Step<System>::step_adjoint(System& system,
+void Step<System>::step_adjoint(System& system, std::size_t step,
                                 double time, double step_size,
                                 const state_type &y,
                                 const std::vector<state_type> &lambda_out,
                                 std::vector<state_type> &lambda_in,
                                 std::vector<std::vector<double>>& parameter_adjoint) {
   using scalar = active_scalar<double>;
-  // A System that replays a recorded field is refused rather than swept. The
-  // recording below runs on a System lifted for it, which carries no recording of
-  // its own and cannot be handed one, so every rate here would be taken with the
-  // field REBUILT where the run read it back -- transposing a step the run never
-  // took, finitely and plausibly. Nothing in the signature says that, so it is
-  // said here.
-  static_assert(!ReplaysField<System>,
-                "step_adjoint records rates on a freshly lifted System, which "
-                "holds no recorded field, so a System that replays one would be "
-                "transposed at a field the run did not use");
   const double h = step_size;
   if (lambda_out.empty()) {
     util::stop("step_adjoint: needs at least one seed");
@@ -258,18 +241,16 @@ void Step<System>::step_adjoint(System& system,
     const std::vector<scalar> y0(x, x + static_cast<std::ptrdiff_t>(size));
     std::vector<std::vector<scalar>> rate(6, std::vector<scalar>(size));
     std::vector<scalar> stage(size);
-    // k1 is re-derived at this step's own start state: first-same-as-last hands
-    // step() the previous step's dydt_out, which a reverse traversal has not
-    // rebuilt.
-    //
-    // No stage index is passed: it selects a recorded field, which the assertion
-    // above establishes this System does not have, so passing one would say the
-    // recording can read a stage back when it cannot.
+    // k1 is re-derived at this step's own start state, and unaddressed on purpose:
+    // the run took its first rates either at the end of the step before this one or,
+    // where it widened in between, at a state no record holds. A descent that starts
+    // at an arbitrary step cannot tell those apart, so it asks for neither.
     ode::derivs(active_system, y0, rate[0], time);
     ++recorded_rates;
     for (int i = 1; i < 6; ++i) {
       stage_state(i, y0, rate, h, stage);
-      ode::derivs(active_system, stage, rate[i], stage_time(i, time, h));
+      ode::derivs(active_system, stage, rate[i], stage_time(i, time, h),
+                  recorded_stage{step, i});
       ++recorded_rates;
     }
     step_end(y0, rate, h, y_end);

@@ -234,6 +234,16 @@ public:
 
   System get_history_step(std::size_t i) const { return history.at(i); }
 
+  // Keep the state at each accepted step beside the time and the size that reached
+  // it. Set before the run, because the state the run starts from is recorded as it
+  // begins.
+  void set_keep_states(bool keep) { solver.set_keep_states(keep); }
+  bool keeps_states() const { return solver.keeps_states(); }
+  const ode::state_type<System>& recorded_state(std::size_t k) const {
+    return solver.recorded_state(k);
+  }
+  std::size_t recorded_steps() const { return solver.recorded_steps(); }
+
   // The read-only surface behind the "forgot to record" guard: whether an adaptive
   // pass has resolved a schedule on this solver, and what it is. The schedule is the
   // grid a replay-gradient advances over (advance_fixed).
@@ -268,7 +278,16 @@ public:
     const std::vector<double> h = step_sizes();
     util::check_length(states.size(), t.size());
     for (const ode::state_type<System>& l : lambda) {
-      util::check_length(l.size(), system.ode_size());
+      // Named, because a bare length mismatch here is read as the caller's and says
+      // nothing about the seam it is really about: a seed carried at one width
+      // against a System left at another.
+      if (l.size() != system.ode_size()) {
+        util::stop("solve_adjoint: a seed is " +
+                   util::to_string(static_cast<int>(l.size())) +
+                   " wide against a System of " +
+                   util::to_string(static_cast<int>(system.ode_size())) +
+                   ", so the two are not at the same widening");
+      }
     }
     if (k_first >= k_last || k_last >= t.size()) {
       util::stop("the adjoint segment is not a range of recorded steps");
@@ -276,7 +295,7 @@ public:
     std::vector<ode::state_type<System> > lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
-      solver.step_adjoint(system, t[k - 1], h[k], states[k - 1], lambda,
+      solver.step_adjoint(system, k, t[k - 1], h[k], states[k - 1], lambda,
                           lambda_in, parameter_adjoint);
       lambda = lambda_in;
     }

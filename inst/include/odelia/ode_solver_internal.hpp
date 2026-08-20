@@ -52,8 +52,8 @@ public:
   // The adjoint of one step, from the state that step started at, for several
   // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
   // counterpart.
-  void step_adjoint(System& system, double time, double step_size,
-                    const state_type& y,
+  void step_adjoint(System& system, std::size_t step, double time,
+                    double step_size, const state_type& y,
                     const std::vector<state_type>& lambda_out,
                     std::vector<state_type>& lambda_in,
                     std::vector<std::vector<double>>& parameter_adjoint) {
@@ -65,7 +65,7 @@ public:
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
     resize(lambda_out.front().size());
-    stepper.step_adjoint(system, time, step_size, y, lambda_out,
+    stepper.step_adjoint(system, step, time, step_size, y, lambda_out,
                          lambda_in, parameter_adjoint);
   }
 
@@ -74,6 +74,22 @@ public:
   void clear_recorded_rates() { stepper.recorded_rates = 0; }
 
 
+  // Keep the state at each accepted step as well as the time and the size. The
+  // caller's decision: a run whose gradient will be taken needs the states, and a
+  // run that is only integrating does not.
+  void set_keep_states(bool keep) { keep_states_ = keep; }
+  bool keeps_states() const { return keep_states_; }
+  // What the run held at accepted step k, out of the record it shares with the
+  // time and the size that reached it -- so a caller cannot pair one run's state
+  // with another run's size.
+  const state_type& recorded_state(std::size_t k) const {
+    return prev_steps.at(k).state;
+  }
+  std::size_t recorded_steps() const { return prev_steps.size(); }
+
+  // One accepted step, into the record: the time it reached, the size that
+  // reached it, and the state there where the run was asked to keep states.
+  void push_step(System& system, double time_, double step_size);
   void step_to(System& system, double time_max_);
   void step_by(System& system, double step_size);
   void step_euler(System& system, double time_max_);
@@ -89,6 +105,9 @@ private:
   // Stepper dispatch: SolverInternal holds both steppers and forwards to the one
   // selected at construction. The adaptive controller (see step()) is otherwise
   // stepper-agnostic.
+  // The step index the stages are addressed by is this object's own count of
+  // accepted steps, which is the step about to be taken -- read here rather than
+  // passed, so no caller can disagree with it.
   void stepper_step(System& system, double time_, double step_size,
                     state_type& y_, state_type& yerr_,
                     const state_type& dydt_in_, state_type& dydt_out_) {
@@ -106,7 +125,8 @@ private:
                    "use method='rkck'.");
       }
     } else {
-      stepper.step(system, time_, step_size, y_, yerr_, dydt_in_, dydt_out_);
+      stepper.step(system, prev_steps.size(), time_, step_size, y_, yerr_,
+                   dydt_in_, dydt_out_);
     }
   }
   size_t stepper_order() const {
@@ -135,7 +155,23 @@ private:
   // fl(fl(t + h) - t) != h -- the addition rounds away bits of h that the
   // subtraction cannot return, so a replay that differences the times takes
   // different steps from the run it replays.
-  std::vector<std::pair<double, double> > prev_steps;
+  // One entry per accepted step, the first being the state the run started from,
+  // which no step reached and which therefore has no size.
+  //
+  // The state is kept BESIDE the size that reached it because the two are one
+  // record. Where they live in separate stores a walk can pair a state with a size
+  // from a different run, and nothing says so -- so the store that held the states
+  // had to be emptied as it was read, and every consumer after the first repeated
+  // the whole run to refill it.
+  struct step_record {
+    double time;
+    double step_size;
+    state_type state;   // empty unless this run was asked to keep them
+  };
+  std::vector<step_record> prev_steps;
+  // Whether to keep the states. The caller's: a run whose gradient will be taken
+  // needs them and a run that is only integrating does not.
+  bool keep_states_ = false;
 
   state_type y;        // Vector of current system state
   state_type yerr;     // Vector of error estimates
@@ -163,26 +199,6 @@ void SolverInternal<System>::reset(System& system) {
   set_state_from_system(system);
 }
 
-// Record this ODE step's node positions on a System that records them, during the
-// pass; a no-op for any System that doesn't record.
-template <typename System>
-void record_ode_step(System& system) {
-  if constexpr (RecordsSteps<System>) {
-    system.record_ode_step();
-  }
-}
-
-// On the replay pass, let a System that recorded a field restore this step's values;
-// a no-op otherwise. Called from step_to. What restoring does -- reuse recorded field
-// values, or nothing so the field is recomputed with the active scalar -- is the
-// System's own choice.
-template <typename System>
-void replay_step(System& system) {
-  if constexpr (ReplaysField<System>) {
-    system.replay_step();
-  }
-}
-
 // Seed y and dydt_in from whatever state the system currently holds. The system
 // is mutable because `ode_rates` is allowed to compute: a system that reaches a
 // state by a route of its own (widening it, reloading it) can then hand back the
@@ -197,14 +213,34 @@ void SolverInternal<System>::set_state_from_system(System& system) {
   system.ode_state(y.begin());
   system.ode_rates(dydt_in.begin());
   dydt_in_is_clean = true;
+  // The state the run starts from, into the record set_time just opened. Kept
+  // here rather than by the caller because this is the one place that knows the
+  // System has been read.
+  if (keep_states_ && prev_steps.size() == 1 && prev_steps.back().state.empty()) {
+    prev_steps.back().state.assign(y.begin(), y.end());
+  }
+}
+
+// One accepted step, recorded. The state comes off the System rather than out of
+// `y`, so a System that reaches a state by a route of its own is recorded at the
+// state it holds.
+template <class System>
+void SolverInternal<System>::push_step(System& system, double time_,
+                                       double step_size) {
+  step_record record{time_, step_size, state_type()};
+  if (keep_states_) {
+    record.state.resize(system.ode_size());
+    system.ode_state(record.state.begin());
+  }
+  prev_steps.push_back(std::move(record));
 }
 
 template <class System>
 std::vector<double> SolverInternal<System>::get_times() const {
   std::vector<double> ret;
   ret.reserve(prev_steps.size());
-  for (const std::pair<double, double>& s : prev_steps) {
-    ret.push_back(s.first);
+  for (const step_record& s : prev_steps) {
+    ret.push_back(s.time);
   }
   return ret;
 }
@@ -215,8 +251,8 @@ template <class System>
 std::vector<double> SolverInternal<System>::get_step_sizes() const {
   std::vector<double> ret;
   ret.reserve(prev_steps.size());
-  for (const std::pair<double, double>& s : prev_steps) {
-    ret.push_back(s.second);
+  for (const step_record& s : prev_steps) {
+    ret.push_back(s.step_size);
   }
   return ret;
 }
@@ -313,7 +349,7 @@ void SolverInternal<System>::step_euler(System& system, double time_max_) {
   time = time_max;
   // Settle the system onto the new state at the new time.
   ode::internal::set_ode_state(system, y, time);
-  prev_steps.push_back(std::make_pair(time, h));
+  push_step(system, time, h);
   dydt_in_is_clean = false;
 }
 
@@ -453,9 +489,8 @@ void SolverInternal<System>::step(System& system) {
 	      time += step_size;
 	      step_size_last = step_size_next;
       }
-      prev_steps.push_back(std::make_pair(time, step_size));
       save_dydt_out_as_in();
-      record_ode_step(system);
+      push_step(system, time, step_size);
       return; // This exits the infinite loop.
     }
   }
@@ -467,14 +502,12 @@ template <class System>
 void SolverInternal<System>::step_to(System& system, double time_max_) {
   set_time_max(time_max_);
   const double step_size = time_max - time;
-  replay_step(system); // restore this step's recorded state on a replay pass
   setup_dydt_in(system);
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
   save_dydt_out_as_in();
-  record_ode_step(system);
 
   time = time_max;
-  prev_steps.push_back(std::make_pair(time, step_size));
+  push_step(system, time, step_size);
 }
 
 // This takes a step of the given size, regardless of what the integration error
@@ -487,15 +520,13 @@ void SolverInternal<System>::step_by(System& system, double step_size) {
   if (step_size < 0.0) {
     util::stop("step_size must be greater than (or equal to) zero");
   }
-  replay_step(system); // restore this step's recorded state on a replay pass
   setup_dydt_in(system);
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
   save_dydt_out_as_in();
-  record_ode_step(system);
 
   time += step_size;
   time_max = time;
-  prev_steps.push_back(std::make_pair(time, step_size));
+  push_step(system, time, step_size);
 }
 
 template <class System>
@@ -534,17 +565,18 @@ template <typename System>
 void SolverInternal<System>::set_time(double t) {
   const int ulp = 2; // units in the last place (accuracy)
   if (prev_steps.size() > 0 &&
-      !util::almost_equal(prev_steps.back().first, t, ulp))
+      !util::almost_equal(prev_steps.back().time, t, ulp))
   {
     util::stop("Time does not match previous (delta = " +
-               util::format_double(prev_steps.back().first - t) +
+               util::format_double(prev_steps.back().time - t) +
                "). Reset solver first.");
   }
   time = t;
   if (prev_steps.empty()) { // only if first time (avoids duplicate times)
-    // No step reached the initial time, so it records no size.
+    // No step reached the initial time, so it records no size. The state is
+    // recorded by set_state_from_system, which calls this and then holds it.
     prev_steps.push_back(
-      std::make_pair(time, std::numeric_limits<double>::quiet_NaN()));
+      step_record{time, std::numeric_limits<double>::quiet_NaN(), state_type()});
   }
 }
 

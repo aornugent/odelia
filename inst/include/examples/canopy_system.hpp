@@ -28,12 +28,23 @@ using namespace odelia;
 // record once and replay. The ODE is linear in (gain, y), so dy(T)/dgain has a clean
 // finite-difference reference.
 //
-// On the adaptive pass the System records, per step, the node positions the
-// refinement chose (and, if asked, the light at each RK stage). A later pass replays
-// on those fixed positions: either recomputing the light with the active scalar (its
-// derivative flows -- the canopy re-shades in response to the parameter), or reusing
-// the recorded light values as fixed doubles (the derivative through the light is
-// then zero).
+// So the nodes are a CHOICE the state leaves open, and a pass re-running the model
+// to tape it has to make the run's choice rather than its own -- refining again
+// would resolve the profile somewhere else and tape a different function. The
+// adaptive pass records them against the evaluation that made them; a later pass
+// loads them and reads the profile on them with the active scalar, so its derivative
+// flows while the discretisation stands still. Asked for the light VALUE back
+// instead, it takes that, and the derivative through the light is then zero -- which
+// is the driver declaring the light exogenous on that pass.
+// What one rate evaluation chose that the state leaves open: the nodes the
+// refinement placed, and the light it read off them. Plain doubles, and outside the
+// class on purpose -- a choice is the same object at every scalar, so the double
+// pass's record hands straight to the active one and cannot carry a derivative.
+struct canopy_choice {
+  std::vector<double> nodes;
+  double light = 0.0;
+};
+
 template <typename T = double>
 class CanopySystem {
 public:
@@ -82,35 +93,40 @@ public:
   double ode_time() const { return time; }
   double ode_t0() const { return t0; }
 
-  // Adaptive pass, and replay that recomputes the light: set the state and (re)build
-  // the light profile.
+  // Set the state and build the light profile by refining a spline over depth. The
+  // refinement's nodes move with y, so this is the pass that CHOOSES them.
   template <typename Iterator>
   Iterator set_ode_state(Iterator it, double time_) {
     y = *it++;
     time = time_;
-    light = compute_light();
+    light = refine_light();
     compute_rates();
     return it;
   }
 
-  // Replay that reuses recorded light: read this RK stage's recorded value as a plain
-  // double (off the tape, so its derivative is zero) instead of rebuilding the
-  // profile. derivs routes here when has_recorded_field() is true.
+  // The same load at an evaluation the run recorded its choices against. Recording,
+  // it refines and keeps what the refinement chose; replaying, it takes the nodes
+  // back and reads the profile on them, so the discretisation stands still while the
+  // profile moves with the active scalar. `reuse_light` takes the light VALUE back
+  // instead, which is the driver saying the light is exogenous on this pass -- its
+  // derivative is then zero rather than flowing.
   template <typename Iterator>
-  Iterator set_ode_state(Iterator it, int stage) {
+  Iterator set_ode_state(Iterator it, double time_, ode::recorded_stage at) {
     y = *it++;
-    bg_light = stage_light.at(stage);
+    time = time_;
+    if (loading()) {
+      const canopy_choice& made = recorded(at);
+      light = reuse_light ? T(made.light) : light_on(made.nodes);
+    } else {
+      light = refine_light();
+      if (recording) keep(at);
+    }
     compute_rates();
     return it;
   }
 
-  // Turnover minus captured light. On a reuse replay the light is the recorded double;
-  // otherwise it is the value read from the (active) profile.
-  void compute_rates() {
-    dydt = -turnover * y;
-    if (has_recorded_field()) dydt += bg_light;
-    else                      dydt += light;
-  }
+  // Turnover minus the light captured.
+  void compute_rates() { dydt = light - turnover * y; }
 
   template <typename Iterator>
   Iterator set_initial_state(Iterator it, double t0_ = 0.0) {
@@ -128,15 +144,7 @@ public:
   void reset() {
     y = T(y0_init);
     time = t0;
-    step = 0;
-    if (has_recorded_field()) {
-      // light_history[step][stage]: take this first step's row of per-RK-stage values,
-      stage_light = light_history.front();
-      bg_light = stage_light.front();     // and the value the first stage will read.
-    } else {
-      if (replaying()) node_positions = positions_history.front();
-      light = compute_light();
-    }
+    light = refine_light();
     compute_rates();
   }
 
@@ -144,87 +152,65 @@ public:
   std::vector<T*> ad_parameters()    { return {&gain}; }
   std::vector<T*> ad_initial_state() { return {}; }
 
-  // ---- Record / replay hooks (Replayable) ---------------------------------
-  // record_* run only while recording; replay_step only on replay. Record the node
-  // positions once per accepted step, and the light at each of the six RK stages.
-  void record_stage(int stage) {
-    if (!recording) return;
-    if (stage == 0) {
-      pending_positions = node_positions;   // hold this step's positions until it commits
-      stage_light.assign(6, 0.0);
-    }
-    if (stage >= 0 && stage < 6) {
-      stage_light[stage] = xad::value(light);
-    }
-  }
-
-  void record_ode_step() {
-    if (!recording) return;
-    positions_history.push_back(pending_positions);
-    light_history.push_back(stage_light);
-  }
-
-  // Load this step's recorded positions (and light, if recorded), then advance the
-  // cursor. A no-op on the recording pass. Replay runs on the recorded schedule, so
-  // the cursor walks [0, size) without clamping.
-  void replay_step() {
-    if (!replaying()) return;
-    node_positions = positions_history.at(step);
-    if (has_recorded_field()) stage_light = light_history.at(step);
-    ++step;
-  }
-
-  // ---- Record / replay channel (System -> System) -------------------------
-  // The double Solver produces a recording; the active replay reads it per call.
-  // Positions and light values are plain doubles, so they cross the double->active
-  // boundary directly.
+  // ---- The record, System to System --------------------------------------
+  // The double Solver's adaptive pass fills it; the driver hands it to the active
+  // System, which then loads it rather than refining again.
   void start_recording() {
     recording = true;
-    positions_history.clear();
-    light_history.clear();
+    history.clear();
   }
-  const std::vector<std::vector<double>>& recorded_positions() const { return positions_history; }
-  const std::vector<std::vector<double>>& recorded_values()    const { return light_history; }
+  const std::vector<std::vector<canopy_choice>>& recorded_choices() const { return history; }
 
-  // Hand a recording to the active System for one replay. `reuse_light` = reuse the
-  // recorded light values as constants (derivative through the light is zero);
-  // otherwise the light is recomputed with the active scalar on the recorded
-  // positions. has_recorded_field() then reports which path applies.
-  void set_recording(std::vector<std::vector<double>> positions,
-                     std::vector<std::vector<double>> values, bool reuse_light) {
-    positions_history = std::move(positions);
-    light_history = reuse_light ? std::move(values) : std::vector<std::vector<double>>{};
+  // Hand a recording over for one replay. `reuse` = take the recorded light values
+  // back as constants; otherwise only the nodes come back and the profile is read on
+  // them with the active scalar.
+  void set_recording(std::vector<std::vector<canopy_choice>> choices, bool reuse) {
+    history = std::move(choices);
+    reuse_light = reuse;
     recording = false;
-    step = 0;
   }
-  bool has_recording() const { return !positions_history.empty(); }
+  bool has_recording() const { return !history.empty(); }
 
   double pars() const { return xad::value(gain); }
 
-  // Whether recorded light values are present to reuse: the query derivs reads to
-  // choose the replay path. Guarded against the recording pass, which is still
-  // building the values.
-  bool has_recorded_field() const { return !recording && !light_history.empty(); }
-
 private:
-  bool replaying() const { return !recording && has_recording(); }
-
-  // Build the light profile as a spline over depth and read it at ref_depth. On the
-  // adaptive pass the nodes are refined and stored; on replay they are rebuilt with
-  // the active scalar on the recorded positions.
-  T compute_light() {
+  // Refine a spline over depth until it resolves the profile, read it at ref_depth,
+  // and keep the nodes the refinement placed.
+  T refine_light() {
     interpolator::basic_interpolator<T> interp;
-    if (replaying()) {
-      std::vector<T> vals;
-      vals.reserve(node_positions.size());
-      for (double x : node_positions) vals.push_back(light_profile(x));
-      interp.init(node_positions, vals);
-    } else {
-      interp.construct([this](double x) { return light_profile(x); }, 0.0, 1.0,
-                       tol, 0.0, 5, static_cast<std::size_t>(max_depth));
-      if (recording) node_positions = interp.get_x();
-    }
+    interp.construct([this](double x) { return light_profile(x); }, 0.0, 1.0,
+                     tol, 0.0, 5, static_cast<std::size_t>(max_depth));
+    chose = interp.get_x();
     return interp.eval(ref_depth);
+  }
+
+  // And read it on nodes already chosen, so the profile responds to the parameter
+  // where the discretisation does not.
+  T light_on(const std::vector<double>& nodes) {
+    interpolator::basic_interpolator<T> interp;
+    std::vector<T> vals;
+    vals.reserve(nodes.size());
+    for (double x : nodes) vals.push_back(light_profile(x));
+    interp.init(nodes, vals);
+    return interp.eval(ref_depth);
+  }
+
+  // Written where the address says, so a rejected attempt is overwritten by the
+  // retry that replaces it and nothing has to commit a step of its own.
+  void keep(ode::recorded_stage at) {
+    const std::size_t stage = static_cast<std::size_t>(at.stage);
+    if (history.size() <= at.step) history.resize(at.step + 1);
+    if (history[at.step].size() <= stage) history[at.step].resize(stage + 1);
+    history[at.step][stage] = canopy_choice{chose, xad::value(light)};
+  }
+
+  // Handed a record and not filling one. This reads what the driver GAVE this
+  // System, not which pass the solver is running -- the driver said which by
+  // calling start_recording or set_recording.
+  bool loading() const { return !recording && !history.empty(); }
+
+  const canopy_choice& recorded(ode::recorded_stage at) const {
+    return history.at(at.step).at(static_cast<std::size_t>(at.stage));
   }
 
   T light_profile(double x) const {
@@ -240,17 +226,16 @@ private:
   double t0;
 
   T y, dydt, light;
-  double bg_light = 0.0;   // on a reuse replay, the recorded light for the current RK stage
   double time;
 
+  // One entry per accepted step, one per addressed stage within it. Whether this
+  // pass fills it or loads it is the DRIVER's, said by which of the two methods
+  // above it called -- a rejected attempt rewrites its own slots, so presence
+  // cannot say it.
   bool recording = false;
-  std::vector<std::vector<double>> positions_history;  // node positions per ODE step
-  std::vector<std::vector<double>> light_history;      // light per [ODE step][RK stage]
-
-  std::size_t step = 0;
-  std::vector<double> node_positions;   // positions built (recording) or loaded (replay)
-  std::vector<double> stage_light;      // this step's light at each of the six RK stages
-  std::vector<double> pending_positions;
+  std::vector<std::vector<canopy_choice>> history;
+  bool reuse_light = false;
+  std::vector<double> chose;   // the nodes the last refinement placed
 };
 
 #endif

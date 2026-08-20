@@ -47,6 +47,13 @@ S record_with_derivatives(double value,
                  ", one of which is not finite, so the value they belong to "
                  "cannot be recorded");
     }
+    // A zero derivative contributes exactly zero to the value and exactly nothing
+    // to the transpose, and recording it costs a tape edge that the sweep then walks
+    // twice. Tested for finiteness first, because a zero row beside a non-finite
+    // input still says the value it belongs to cannot be recorded.
+    if (term.derivative == 0.0) {
+      continue;
+    }
     out += term.derivative * (term.input - at);
   }
   return out;

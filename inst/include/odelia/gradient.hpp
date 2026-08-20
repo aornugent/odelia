@@ -217,8 +217,21 @@ void narrow_all(System& system,
                 const std::vector<std::vector<double>>& states) {
     for (std::size_t j = widenings.size(); j-- > 0;) {
         system.narrow(widenings[j].event);
-        util::check_length(system.ode_size(),
-                           states[widenings[j].after_step].size());
+        // Named, because a bare length mismatch here reads as a caller's error one
+        // call away and says nothing about which walk or which widening.
+        if (system.ode_size() != states[widenings[j].after_step].size()) {
+            util::stop("narrow_all: after undoing widening " +
+                       util::to_string(static_cast<int>(j)) + " of " +
+                       util::to_string(static_cast<int>(widenings.size())) +
+                       " the state is " +
+                       util::to_string(static_cast<int>(system.ode_size())) +
+                       " wide, against " +
+                       util::to_string(static_cast<int>(
+                           states[widenings[j].after_step].size())) +
+                       " recorded at step " +
+                       util::to_string(static_cast<int>(
+                           widenings[j].after_step)));
+        }
     }
 }
 
@@ -244,7 +257,19 @@ void widen_all(System& system,
     }
     for (std::size_t j = 0; j < widenings.size(); ++j) {
         const std::size_t at = widenings[j].after_step;
-        util::check_length(system.ode_size(), states[at].size());
+        if (system.ode_size() != states[at].size()) {
+            util::stop("widen_all: before applying widening " +
+                       util::to_string(static_cast<int>(j)) + " of " +
+                       util::to_string(static_cast<int>(widenings.size())) +
+                       " the state is " +
+                       util::to_string(static_cast<int>(system.ode_size())) +
+                       " wide, against " +
+                       util::to_string(static_cast<int>(states[at].size())) +
+                       " recorded at step " +
+                       util::to_string(static_cast<int>(at)) +
+                       " -- so it did not arrive at the width this walk widens "
+                       "from, which is the lowest");
+        }
         system.set_recorded_state(states[at].begin(), times[at]);
         system.widen(widenings[j].event);
     }

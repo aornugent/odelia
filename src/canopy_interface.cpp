@@ -67,7 +67,7 @@ Rcpp::List Canopy_record_replay_gradient(SEXP system_xp, SEXP control_xp,
 
   // Replay: lift to the active System, hand over the recording, differentiate.
   ActiveSystemType act = rec_sys.rebind_from<xad::adj<double>::active_type>();
-  act.set_recording(rec_sys.recorded_positions(), rec_sys.recorded_values(), reuse_light);
+  act.set_recording(rec_sys.recorded_choices(), reuse_light);
   ode::Solver<ActiveSystemType> active_solver(act, *ctrl);
   active_solver.set_schedule(times);   // the recorded L1 schedule to replay
 
@@ -122,7 +122,7 @@ Rcpp::List Canopy_replay_gradient(SEXP solver_xp, bool reuse_light = false) {
 
   auto& active = solver::active_solver<SystemType, ActiveSystemType>(*d);
   active.set_schedule(times);   // the recorded L1 schedule to replay
-  active.get_system_ref().set_recording(rec.recorded_positions(), rec.recorded_values(), reuse_light);
+  active.get_system_ref().set_recording(rec.recorded_choices(), reuse_light);
 
   ode::DifferentiationTargets ind;
   ind.params.push_back(0);     // gain

@@ -75,7 +75,7 @@ compile_step_adjoint_interface <- function() {
       // y, then the five later stage states, then y_end.
       stage_log.clear();
       odelia::ode::derivs(system, y, dydt_in, time);
-      stepper.step(system, time, step_size, y_end, yerr, dydt_in, dydt_out);
+      stepper.step(system, 1, time, step_size, y_end, yerr, dydt_in, dydt_out);
       Rcpp::List forward(6);
       for (int j = 0; j < 6; ++j) forward[j] = stage_log[j];
 
@@ -85,7 +85,7 @@ compile_step_adjoint_interface <- function() {
       std::vector<std::vector<double> > seeds(1, lambda_out), swept;
       std::vector<std::vector<double> > rows(
         1, std::vector<double>(system.ad_parameters().size(), 0.0));
-      stepper.step_adjoint(system, time, step_size, y, seeds, swept, rows);
+      stepper.step_adjoint(system, 1, time, step_size, y, seeds, swept, rows);
       std::vector<double> lambda_in = swept[0];
       std::vector<double> parameter_adjoint = rows[0];
       Rcpp::List recorded(6);
@@ -109,12 +109,12 @@ compile_step_adjoint_interface <- function() {
       std::vector<double> dydt_in(y.size()), dydt_out(y.size()), yerr(y.size());
       std::vector<double> y_end(y);
       odelia::ode::derivs(system, y, dydt_in, time);
-      stepper.step(system, time, step_size, y_end, yerr, dydt_in, dydt_out);
+      stepper.step(system, 1, time, step_size, y_end, yerr, dydt_in, dydt_out);
 
       std::vector<std::vector<double> > seeds(1, lambda_out), swept;
       std::vector<std::vector<double> > rows(
         1, std::vector<double>(system.ad_parameters().size(), 0.0));
-      stepper.step_adjoint(system, time, step_size, y, seeds, swept, rows);
+      stepper.step_adjoint(system, 1, time, step_size, y, seeds, swept, rows);
       std::vector<double> lambda_in = swept[0];
       std::vector<double> parameter_adjoint = rows[0];
 
@@ -254,7 +254,7 @@ compile_step_adjoint_on <- function(rebind_body) {
       std::vector<std::vector<double> > seeds(1, lambda_out), swept;
       std::vector<std::vector<double> > rows(
         1, std::vector<double>(system.ad_parameters().size(), 0.0));
-      stepper.step_adjoint(system, 0.0, 0.1, y, seeds, swept, rows);
+      stepper.step_adjoint(system, 1, 0.0, 0.1, y, seeds, swept, rows);
       return swept[0];
     }
   ', rebind_body))

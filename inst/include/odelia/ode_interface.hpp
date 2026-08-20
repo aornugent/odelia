@@ -61,34 +61,45 @@ struct rebound_system<S, U, false> {
   using type = S;
 };
 
-// A System that records the node positions its adaptive solve chose, so a later
-// pass runs on a schedule that no longer moves and the active scalar propagates
-// through it. The field is then recomputed at those fixed positions, and its
-// derivative flows. The hook is detected at compile time; a System that records
-// nothing is unaffected and pays nothing.
-template <typename System>
-concept RecordsSteps = requires(System s) {
-  s.record_ode_step();       // per accepted ODE step: commit the node positions
+// Where in a run one rate evaluation sits: the accepted step it belongs to, and
+// which of that step's stages it is. One value rather than two arguments, because
+// the two halves are one address -- and because a type of its own is what stops it
+// being taken for the time, which one bare number beside another does not.
+//
+// A step makes six rate evaluations: its stages 1 to 5, and one at the state it ends
+// at, which first-same-as-last hands the NEXT step as that step's first rates. So the
+// sixth is addressed as the next step's stage 0, and a pass re-running the schedule
+// forward reads it back where the run wrote it.
+//
+// A reverse recording does not: it re-derives stage 0 at the state it was handed and
+// asks for nothing there. Between two steps the run can widen its state, and it then
+// takes its first rates at a state no record holds -- so stage 0 is the one address a
+// walk that jumps into the middle of a recording cannot trust.
+struct recorded_stage {
+  std::size_t step;
+  int stage;
 };
 
-// And a System that keeps a field value per RK stage as well, reading it back by
-// stage index instead of recomputing it. Those values are reused as fixed doubles,
-// so the derivative through the field is zero rather than flowing;
-// has_recorded_field() reports which of the two depths applies.
+// And a System whose state does not determine it. Between one rate evaluation and
+// the next this System makes choices the state leaves open -- the nodes a
+// refinement placed, the branch an inner solve took, an early exit -- and a pass
+// that re-runs the model in order to tape it has to make the RUN'S choices rather
+// than its own. Re-deriving them risks a different discretisation, and what is then
+// taped is a function the run never computed, with every number finite.
 //
-// Separate from RecordsSteps because recording the steps and rebuilding the field
-// is the ordinary case. Asking for it as one concept made such a System declare
-// three members it did not mean, and an empty body is how a hook stops being a
-// contract and becomes a formality nobody reads -- including, eventually, the
-// engine that was supposed to call it.
+// So the run records them against the evaluation that made them, and every pass
+// re-running the model loads them with the state. That is the same requirement
+// set_recorded_state exists for one level up, and it is spelled as a loader for the
+// same reason: what completes a state belongs with the state.
+//
+// The address reaches a System only from a walk that is stepping, so a reload out
+// of band cannot read a record, and a record cannot complete a state it was not
+// taken at.
 template <typename System>
-concept ReplaysField =
-  requires(System s, int stage,
+concept RecordsChoices =
+  requires(System s, double time, recorded_stage at,
            typename std::vector<typename System::value_type>::const_iterator in) {
-    s.record_stage(stage);     // per RK stage: record this stage's field value
-    s.replay_step();           // per step on the replay pass: restore its record
-    { s.has_recorded_field() } -> std::convertible_to<bool>;
-    s.set_ode_state(in, stage);  // load state against a recorded stage, not a time
+    s.set_ode_state(in, time, at);
   };
 
 // A System whose state vector gains entries at times the RUN schedules. The
@@ -261,10 +272,15 @@ void set_ode_state(T& obj, const StateType& y, double time) {
   }
 }
 
+// The same load, with the address of the choices the run made at this evaluation.
+// A System that records none loads without it.
 template <typename T, typename StateType>
-  requires ReplaysField<T>
-void set_ode_state(T& obj, const StateType& y, int index) {
-  obj.set_ode_state(y.begin(), index);
+void set_ode_state(T& obj, const StateType& y, double time, recorded_stage at) {
+  if constexpr (RecordsChoices<T>) {
+    obj.set_ode_state(y.begin(), time, at);
+  } else {
+    set_ode_state(obj, y, time);
+  }
 }
 }
 
@@ -277,22 +293,13 @@ void derivs(T& obj, const StateType& y, StateType& dydt,
   obj.ode_rates(dydt.begin());
 }
 
-// ODE stepping. A System that has recorded field values reads the field for this RK
-// stage by index; otherwise it sets state at the current time and recomputes (the
-// second branch also covers every System that keeps no field). The choice compiles
-// away for a System that does not replay one.
+// One rate evaluation of a step, at the address the run recorded its choices
+// against. A System that records none takes the call above and the address costs
+// it nothing.
 template <typename T, typename StateType>
-void derivs(T& obj, const StateType& y, StateType& dydt,
-            const double time, const int index) {
-  if constexpr (ReplaysField<T>) {
-    if (obj.has_recorded_field()) {
-      internal::set_ode_state(obj, y, index);
-    } else {
-      internal::set_ode_state(obj, y, time);
-    }
-  } else {
-    internal::set_ode_state(obj, y, time);
-  }
+void derivs(T& obj, const StateType& y, StateType& dydt, const double time,
+            recorded_stage at) {
+  internal::set_ode_state(obj, y, time, at);
   obj.ode_rates(dydt.begin());
 }
 
