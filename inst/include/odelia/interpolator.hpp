@@ -2,250 +2,418 @@
 #ifndef ODELIA_INTERPOLATOR_HPP
 #define ODELIA_INTERPOLATOR_HPP
 
-#include <vector>
-#include <list>
+#include <algorithm>
 #include <cmath>
-#include <limits>
-#include <XAD/XAD.hpp>
-#include <odelia/spline.hpp>
+#include <cstddef>
+#include <list>
+#include <type_traits>
+#include <vector>
 #include <odelia/ode_util.hpp>
 
+// Interpolation: one interpolant, and the two rules that produce its inputs.
+//
+// A piecewise cubic is determined by a value and a slope at each knot, so the
+// interpolant takes exactly those and holds no rule for choosing any of them.
+// Where the knot data comes from belongs to the caller, and there are three
+// sources: a closed form supplies both halves, a reduction supplies both halves
+// from one expression, or only values exist and `monotone_slopes` chooses the
+// rest. Where the knot POSITIONS come from belongs to the caller too: a fixed
+// lattice, or `refine` for a target whose features are not known in advance.
+//
+// There is no fit that chooses slopes globally. One was here, solving a
+// tridiagonal system for C2, and it converged at h^2 on the curve this library
+// tabulates against h^3.7 for the same knots read as a Hermite -- the global
+// solve spreads a local defect -- while making every knot influence every span,
+// which turns an O(1) adjoint into an O(K) one. Nothing read a second derivative
+// from it.
 namespace odelia {
 namespace interpolator {
 
-// One interpolator with two build paths: `construct` adaptively refines a node set
-// and records it; `init` builds on a node set it is given. A recorded interpolator is
-// rebuilt with `init` on those nodes, never re-refined.
+// A C1 piecewise-cubic interpolant built from a value AND a slope at each knot.
 //
-// Templated on the scalar S of the knot VALUES; knot positions stay double. S = double
-// is the production type; an AD active S makes the interpolated value differentiable
-// w.r.t. the knot values, delegating to basic_spline<S>.
+// The value and the slope come from one polynomial, so a caller that needs both
+// gets a consistent pair: slope(u) is the exact derivative of what eval(u) returns.
 //
-// The basic_interpolator name and the Interpolator alias below are both kept so plant
-// compiles unchanged; collapsing them to one Interpolator<S> is done together with
-// plant's binding.
+// Each span reads only its own two knots, so moving one knot changes the
+// interpolant only in the two spans that touch it.
+//
+// Knot positions are double; values and slopes carry the working scalar S. The two
+// halves of a build are separate: set_nodes lays out the spans from the positions,
+// and set_data fills the coefficients. A caller whose positions are fixed for a run
+// calls set_nodes once and set_data per stage.
+//
+// eval takes either a double position or an active one; at an active position the
+// value is read at its passive part and the query's own derivative is grafted on
+// through the slope, so d(value)/d(u) is recorded. slope and value_and_slope take a
+// double, because a query's derivative reaches a value and not a slope.
 template <typename S>
-class basic_interpolator {
+class hermite_interpolator {
 public:
-  // Adaptively refine `target` over [a, b] to tolerance, then build on the chosen
-  // nodes. A node is accepted when its midpoint's absolute OR relative error is under
-  // tolerance; refinement halves the spacing until every interval passes or the depth
-  // cap bites. Decisions are taken in `double` (xad::value), so placement never
-  // depends on an active tape -- call this only on the adaptive pass; a replay uses
-  // `init` on the recorded nodes.
-  template <typename Function>
-  void construct(Function target, double a, double b,
-                 double atol = 1e-6, double rtol = 1e-6,
-                 std::size_t nbase = 17, std::size_t max_depth = 16) {
-    if (a >= b) {
-      util::stop("Interpolator::construct: impossible bounds (a >= b)");
-    }
-    if (!util::is_finite(a) || !util::is_finite(b)) {
-      util::stop("Interpolator::construct: infinite bounds");
-    }
-    if (nbase < 2) {
-      util::stop("Interpolator::construct: need at least 2 base points");
-    }
-
-    // Lists so points can be inserted in the middle of a span during refinement.
-    std::list<double> xs;
-    std::list<S>      ys;
-    std::list<bool>   refine_here;   // is the interval ending at this node still open?
-
-    double dx = (b - a) / static_cast<double>(nbase - 1);
-    const double dxmin = dx / std::pow(2.0, static_cast<double>(max_depth));
-    for (std::size_t i = 0; i < nbase; ++i) {
-      const double xi = a + dx * static_cast<double>(i);
-      xs.push_back(xi);
-      ys.push_back(target(xi));
-      refine_here.push_back(i > 0);
-    }
-    rebuild(xs, ys);
-
-    auto within_tol = [&](S y_true, S y_pred) {
-      const double t = util::to_passive(y_true), p = util::to_passive(y_pred);
-      return std::fabs(t - p) < atol || std::fabs(1.0 - p / t) < rtol;
-    };
-
-    bool open = true;
-    while (open) {
-      dx /= 2.0;
-      if (dx < dxmin) {
-        util::stop("Interpolator::construct: refined as far as max_depth allows");
-      }
-      open = false;
-      auto xi = xs.begin();
-      auto yi = ys.begin();
-      auto zi = refine_here.begin();
-      for (; xi != xs.end(); ++xi, ++yi, ++zi) {
-        if (*zi) {
-          const double x_mid = *xi - dx;
-          const S      y_mid = target(x_mid);
-          const S      p_mid = eval(x_mid);
-          xs.insert(xi, x_mid);
-          ys.insert(yi, y_mid);
-          const bool still_open = !within_tol(y_mid, p_mid);
-          *zi = still_open;                 // the interval [x_mid, *xi]
-          refine_here.insert(zi, still_open); // the interval ending at x_mid
-          open = open || still_open;
-        }
-      }
-      rebuild(xs, ys);
-    }
-  }
-
-  // Build an interpolator out of the vectors 'x' and 'y'.
-  void init(const std::vector<double> &x_,
-            const std::vector<S> &y_) {
-    util::check_length(y_.size(), x_.size());
-    if (x_.size() < 3)
-    {
-      util::stop("insufficient number of points");
+  // Knot positions, strictly ascending; at least two are needed (one span).
+  // Discards any data already set.
+  void set_nodes(const std::vector<double>& x_) {
+    if (x_.size() < 2) util::stop("hermite_interpolator: need at least 2 knots");
+    for (std::size_t i = 1; i < x_.size(); ++i) {
+      if (!(x_[i] > x_[i - 1]))
+        util::stop("hermite_interpolator: knots must be strictly ascending");
     }
     x = x_;
+    const std::size_t ns = x.size() - 1;
+    spans.assign(ns, Span());
+    for (std::size_t k = 0; k < ns; ++k) {
+      spans[k].x0 = x[k];
+      spans[k].inv_h = 1.0 / (x[k + 1] - x[k]);
+    }
+    // An equally spaced knot set indexes by arithmetic instead of a search.
+    uniform = false;
+    if (ns > 1) {
+      const double h0 = x[1] - x[0];
+      const double tol = 1e-12 * (x.back() - x.front());
+      uniform = true;
+      for (std::size_t k = 1; k < ns; ++k) {
+        if (std::abs((x[k + 1] - x[k]) - h0) > tol) { uniform = false; break; }
+      }
+      if (uniform) inv_h0 = 1.0 / h0;
+    }
+    initialised = false;
+  }
+
+  // Values and dy/dx at the nodes already set, one entry each per node.
+  void set_data(const std::vector<S>& y_, const std::vector<S>& dydx_) {
+    if (spans.empty()) util::stop("hermite_interpolator: no knots set");
+    util::check_length(y_.size(), x.size());
+    util::check_length(dydx_.size(), x.size());
     y = y_;
-    initialise();
-  }
-
-  // Compute the interpolated function from the points contained in 'x' and 'y'.
-  void initialise() {
-    // https://stackoverflow.com/questions/17769114/stdis-sorted-and-strictly-less-comparison
-    if (not std::is_sorted(x.begin(), x.end(), std::less_equal<double>()))
-    {
-      util::stop("spline control points must be unique and in ascending order");
+    m = dydx_;
+    for (std::size_t k = 0; k < spans.size(); ++k) {
+      const double h = x[k + 1] - x[k];
+      const S a = y[k], b = y[k + 1];
+      const S sa = m[k] * h, sb = m[k + 1] * h;
+      Span& s = spans[k];
+      s.y0 = a;
+      s.c1 = sa;
+      s.c2 = 3.0 * (b - a) - 2.0 * sa - sb;
+      s.c3 = 2.0 * (a - b) + sa + sb;
     }
-    if (x.size() > 0)
-    {
-      spline.set_points(x, y);
-      active = true;
-    }
+    initialised = true;
   }
 
-  // Support for adding points in turn (assumes monotonic increasing in
-  // 'x', unchecked).
-  void add_point(double xi, S yi) {
-    x.push_back(xi);
-    y.push_back(yi);
+  // Nodes and data in one call, for a caller that rebuilds both together.
+  void init(const std::vector<double>& x_, const std::vector<S>& y_,
+            const std::vector<S>& dydx_) {
+    set_nodes(x_);
+    set_data(y_, dydx_);
   }
 
-  // Remove all the contents, being ready to be refilled.
   void clear() {
-    x.clear();
-    y.clear();
-    active = false;
+    x.clear(); y.clear(); m.clear(); spans.clear();
+    inv_h0 = 0.0;
+    uniform = false;
+    initialised = false;
   }
 
-  // Compute the value of the interpolated function at point `x=u`
-  S eval(double u) const {
-    check_active();
-    // ⚠️ Do NOT "tidy" this into `not (u >= min() and u <= max())`. Every
-    // comparison against NaN is false, so as written a non-finite `u` falls
-    // *through* to the spline and comes back non-finite -- which callers rely on
-    // (traitecoevo/plant#576 documents a `profit_psi_stem_TF(NA, .) -> NA`
-    // contract built on it). Negating an in-range test turns that into a throw:
-    // it reads as a tightening and is a behaviour change.
-    if (not extrapolate and (u < min() or u > max()))
-    {
-      const bool below = u < min();
-      // The point, how far out it fell, and the domain. Reporting none of the
-      // three used to make an out-of-domain failure a bisect rather than a read:
-      // localising plant#576 meant instrumenting four call sites by hand to
-      // discover which spline was being asked and at what value, and the answer
-      // (the LOWER end, not past the far end as everyone assumed) inverted the
-      // fix. The caller's own identity is the one thing this layer cannot know --
-      // consumers that build several splines should catch and say which.
-      util::stop(std::string("Extrapolation disabled and evaluation point "
-                             "outside of interpolated domain: u = ") +
-                 util::format_double(u) + " lies " +
-                 util::format_double(below ? min() - u : u - max()) +
-                 " beyond the " + (below ? "lower" : "upper") + " end of [" +
-                 util::format_double(min()) + ", " +
-                 util::format_double(max()) + "].");
+  bool is_initialised() const { return initialised; }
+  std::size_t size() const { return x.size(); }
+  double min() const { return x.front(); }
+  double max() const { return x.back(); }
+  const std::vector<double>& knots() const { return x; }
+
+  // The data the last set_data was given, unchanged. A caller that needs to hand
+  // the interpolant's contents on -- to pack them into a state vector, or to
+  // supply them to a pass that does not build them -- reads them here rather than
+  // keeping its own copy: a slope recovered from a span is not bit-identical,
+  // where these are what was supplied.
+  const std::vector<S>& values() const { return y; }
+  const std::vector<S>& slopes() const { return m; }
+
+  // Value at u. Outside the knot range the end span's line is extended (value and
+  // slope of the nearest end), which keeps the read C1 across the boundary instead
+  // of letting a cubic run away. A caller that must refuse an out-of-range read
+  // compares against min() and max() and says which curve it was asking about,
+  // which this class cannot know.
+  template <typename U>
+  S eval(const U& u) const {
+    check_initialised();
+    const double up = util::to_passive(u);
+    if constexpr (std::is_same_v<U, double>) {
+      return value_at(up);
+    } else {
+      // One span load for both halves. The graft needs the slope too, and taking
+      // them separately resolves the same position twice on the read this class
+      // exists for.
+      S value, dydu;
+      value_and_slope(up, value, dydu);
+      return graft(value, dydu, u, up);
     }
-    return spline(u);
   }
 
-  // faster version of above
-  S operator()(double u) const {
-    return spline(u);
+  template <typename U>
+  S operator()(const U& u) const { return eval(u); }
+
+  // dy/du at u -- the exact derivative of the polynomial eval() uses, as a value.
+  //
+  // The position is read passively and an active query is refused rather than
+  // answered with a silent zero. Grafting the query's derivative here would need
+  // the span's second derivative, and that number is a derivative of the fit: the
+  // read is C1 and not C2, so a curvature taken from it describes the interpolant
+  // rather than what was interpolated.
+  template <typename U>
+  S slope(const U& u) const {
+    static_assert(std::is_same_v<U, double>,
+                  "hermite_interpolator::slope reads the position at its value, so "
+                  "an active query's derivative has nowhere to go and would come "
+                  "back as exactly zero. eval() is the reader that takes one.");
+    check_initialised();
+    return slope_at(u);
   }
 
-  // Analytic dy/du at u: the interpolating polynomial's own derivative, read at a
-  // passive position. phylloptim's root-finders and leaf model call this, so it is
-  // not reachable from this repository's callers alone.
-  S deriv(double u) const {
-    check_active();
-    return spline.deriv(u);
-  }
-
-  // Return the number of (x,y) pairs contained in the Interpolator.
-  size_t size() const {
-    return x.size();
-  }
-
-  // These are chosen so that if a Interpolator is empty, functions
-  // looking to see if they will fall outside of the covered range will
-  // always find they do.  This is the same principle as R's
-  // range(numeric(0)) -> c(Inf, -Inf)
-  double min() const {
-    return size() > 0 ? x.front() : std::numeric_limits<double>::infinity();
-  }
-
-  double max() const {
-    return size() > 0 ? x.back() : -std::numeric_limits<double>::infinity();
-  }
-
-  void set_extrapolate(bool e) {
-    extrapolate = e;
-  }
-
-  std::vector<double> get_x() const {
-    return x;
-  }
-
-  std::vector<S> get_y() const {
-    return y;
-  }
-
-  // Compute the value of the interpolated function at a vector of
-  // points `x=u`, returning a vector of the same length.
-  // change to const& vec?
-  std::vector<S> r_eval(std::vector<double> u) const {
-    check_active();
-    auto ret = std::vector<S>();
-    ret.reserve(u.size()); // fast to do this once rather than multiple times with push_back
-    for (auto const &x : u)
-    {
-      ret.push_back(eval(x));
+  // Both from one knot lookup and one span load, so a caller wanting the pair at
+  // many positions pays one lookup each rather than two.
+  //
+  // Passive query only, for the reason slope() is: the pair's second half has no
+  // route for the query's derivative, so grafting it onto the first half alone
+  // would answer half the query and leave the other half reading exactly zero.
+  template <typename U>
+  void value_and_slope(const U& u, S& value, S& dydu) const {
+    static_assert(std::is_same_v<U, double>,
+                  "hermite_interpolator::value_and_slope reads the position at its "
+                  "value, so an active query's derivative would reach the value and "
+                  "not the slope. eval() is the reader that takes one.");
+    check_initialised();
+    const double up = u;
+    if (up <= x.front()) {
+      value = y.front() + m.front() * (up - x.front());
+      dydu = m.front();
+    } else if (up >= x.back()) {
+      value = y.back() + m.back() * (up - x.back());
+      dydu = m.back();
+    } else {
+      const Span& s = spans[span_of(up)];
+      const double t = s.local(up);
+      value = s.value(t);
+      dydu = s.slope(t);
     }
-    return ret;
   }
 
 private:
-  void check_active() const {
-    if (!active)
-    {
-      util::stop("Interpolator not initialised -- cannot evaluate");
+  // One span's whole polynomial, contiguous: a query touches a single cache line
+  // rather than one per coefficient array. The cubic and its derivative are written
+  // here, beside the coefficients they read, so the three readers share one spelling
+  // of each instead of restating it and needing a test that they agree.
+  struct Span {
+    double x0 = 0.0, inv_h = 0.0;
+    S y0{}, c1{}, c2{}, c3{};
+    double local(double u) const { return (u - x0) * inv_h; }
+    S value(double t) const { return y0 + t * (c1 + t * (c2 + t * c3)); }
+    S slope(double t) const { return (c1 + t * (2.0 * c2 + t * 3.0 * c3)) * inv_h; }
+  };
+
+  // The query's derivative, materialised while its operands are alive. A deduced
+  // return type here would hand back an XAD expression template referencing the
+  // temporaries of this return statement, which die on return.
+  template <typename U>
+  static S graft(const S& value, const S& dydu, const U& u, double up) {
+    static_assert(std::is_constructible_v<S, U>,
+                  "hermite_interpolator: reading at an active position needs the "
+                  "knot values on the same scalar, so the derivative of the query "
+                  "has somewhere to go -- an active position with S = double would "
+                  "silently drop it.");
+    return value + dydu * (u - up);
+  }
+
+  S value_at(double u) const {
+    if (u <= x.front()) return y.front() + m.front() * (u - x.front());
+    if (u >= x.back())  return y.back()  + m.back()  * (u - x.back());
+    const Span& s = spans[span_of(u)];
+    return s.value(s.local(u));
+  }
+
+  S slope_at(double u) const {
+    if (u <= x.front()) return m.front();
+    if (u >= x.back())  return m.back();
+    const Span& s = spans[span_of(u)];
+    return s.slope(s.local(u));
+  }
+
+  std::size_t span_of(double u) const {
+    const std::size_t ns = spans.size();
+    // A non-finite query reaches here only as NaN -- the infinities are answered by
+    // the end-extension branches above -- and casting NaN to an index is undefined.
+    // Answer from a span that exists and let the arithmetic carry the NaN out, which
+    // is the contract callers rely on: a non-finite position reads back non-finite
+    // rather than throwing.
+    if (!util::is_finite(u)) return 0;
+    if (uniform) {
+      const std::size_t k = static_cast<std::size_t>((u - x.front()) * inv_h0);
+      return k < ns ? k : ns - 1;
     }
+    const std::size_t k =
+        static_cast<std::size_t>(std::upper_bound(x.begin(), x.end(), u) - x.begin());
+    return k > 0 ? k - 1 : 0;
   }
 
-  // Rebuild the spline from the working lists during construct().
-  void rebuild(const std::list<double>& xs, const std::list<S>& ys) {
-    init(std::vector<double>(xs.begin(), xs.end()),
-         std::vector<S>(ys.begin(), ys.end()));
+  void check_initialised() const {
+    if (!initialised) util::stop("hermite_interpolator: not initialised");
   }
 
-  std::vector<double> x;
-  std::vector<S> y;
-  spline::basic_spline<S> spline;
-  bool active = false;
-  bool extrapolate = true;
+  std::vector<double> x;   // knot positions, contiguous for the search
+  std::vector<S> y, m;     // knot values and slopes, as supplied
+  std::vector<Span> spans;
+  double inv_h0 = 0.0;
+  bool uniform = false;
+  bool initialised = false;
 };
 
-// Default interpolator (knot values in double): the production type bound by
-// plant's RcppR6 as `odelia::interpolator::Interpolator`, used by ResourceSpline,
-// the leaf model, etc.
-using Interpolator = basic_interpolator<double>;
+// Slopes for knots that arrive with values and nothing else, limited so that the
+// fit is monotone on every span -- so a read can never leave the range of the two
+// values that bound it.
+//
+// Double only, and that is the point rather than a limitation: a caller holding
+// values without slopes is holding data from outside the model, and data is
+// passive. The limit also decides its branch by comparing values, so at an active
+// scalar the rule would be differentiable everywhere except where that branch
+// switches, which is a derivative no caller here wants.
+//
+// The interior estimate is the parabola through three values, which on an uneven
+// grid is more accurate than the arithmetic mean of the two secants; the limit is
+// Fritsch and Carlson, projecting the pair of end slopes back onto the region
+// where the span is monotone.
+//
+// ⚠️ THE REGION IS NOT THE CIRCLE alpha^2 + beta^2 <= 9. That circle sits inside
+// it, so testing against it fires on spans that were already monotone and flattens
+// them: measured on a sine at 100 knots, the circle reads 5.3e-04 against 1.6e-05
+// for the region below -- worse than the global fit this replaced, where the region
+// is better than it. Both keep an intermittent series inside its own values.
+inline std::vector<double> monotone_slopes(const std::vector<double>& x,
+                                           const std::vector<double>& y) {
+  util::check_length(y.size(), x.size());
+  if (x.size() < 2) util::stop("monotone_slopes: need at least 2 knots");
+  const std::size_t n = x.size();
+  std::vector<double> secant(n - 1), m(n);
+  for (std::size_t k = 0; k + 1 < n; ++k) {
+    secant[k] = (y[k + 1] - y[k]) / (x[k + 1] - x[k]);
+  }
+  m[0] = secant[0];
+  m[n - 1] = secant[n - 2];
+  for (std::size_t k = 1; k + 1 < n; ++k) {
+    const double h0 = x[k] - x[k - 1], h1 = x[k + 1] - x[k];
+    m[k] = (h1 * secant[k - 1] + h0 * secant[k]) / (h0 + h1);
+  }
+  // A turning point in the data is a turning point in the fit. Without this the
+  // estimate at a peak lies between two secants of opposite sign, so it opposes one
+  // of them -- and the projection below cannot reach that case, which is how a
+  // rainfall series that is nowhere negative reads to -1.86 between two wet days.
+  // It costs accuracy where the data really is smooth: on a sine at 100 knots the
+  // mean relative difference goes from 1.2e-05 to 4.5e-05. Both are far below the
+  // precision of any series a caller supplies, and one of them is a value the model
+  // cannot have.
+  for (std::size_t k = 1; k + 1 < n; ++k) {
+    if (secant[k - 1] * secant[k] <= 0.0) {
+      m[k] = 0.0;
+    }
+  }
+  for (std::size_t k = 0; k + 1 < n; ++k) {
+    const double s = secant[k];
+    if (s == 0.0) {
+      // A flat pair pins both its slopes, which is what stops a pulse being
+      // smeared back across the dry interval beside it.
+      m[k] = 0.0;
+      m[k + 1] = 0.0;
+      continue;
+    }
+    const double alpha = m[k] / s, beta = m[k + 1] / s;
+    const double a2b3 = 2.0 * alpha + beta - 3.0;
+    const double ab23 = alpha + 2.0 * beta - 3.0;
+    if (a2b3 > 0.0 && ab23 > 0.0 && alpha * (a2b3 + ab23) < a2b3 * a2b3) {
+      const double tau = 3.0 * s / std::sqrt(alpha * alpha + beta * beta);
+      m[k] = tau * alpha;
+      m[k + 1] = tau * beta;
+    }
+  }
+  return m;
+}
+
+// A node set and the interpolant's data on it, which is what `refine` returns and
+// what `hermite_interpolator::init` takes.
+template <typename S>
+struct nodes_and_data {
+  std::vector<double> x;
+  std::vector<S> y, m;
+};
+
+// Choose knot positions for a target whose features are not known in advance:
+// halve the spacing until every interval's midpoint is within tolerance of the
+// interpolant built on the interval's ends.
+//
+// The target returns a value AND a slope, which is what the interpolant takes, so
+// refinement needs no rule of its own for the second half. Placement is decided
+// in double (util::to_passive), so a refined node set never depends on an active
+// tape -- and a pass that must run on the nodes a previous pass chose calls
+// `hermite_interpolator::init` on them rather than refining again.
+template <typename S, typename Function>
+nodes_and_data<S> refine(Function value_and_slope, double a, double b,
+                         double tol = 1e-6, std::size_t nbase = 17,
+                         std::size_t max_depth = 16) {
+  if (!(a < b)) util::stop("interpolator::refine: impossible bounds (a >= b)");
+  if (!util::is_finite(a) || !util::is_finite(b)) {
+    util::stop("interpolator::refine: infinite bounds");
+  }
+  if (nbase < 2) util::stop("interpolator::refine: need at least 2 base points");
+
+  // Lists so a node can be inserted in the middle of a span during refinement.
+  std::list<double> xs;
+  std::list<S> ys, ms;
+  std::list<bool> open;   // is the interval ending at this node still open?
+
+  double dx = (b - a) / static_cast<double>(nbase - 1);
+  const double dxmin = dx / std::pow(2.0, static_cast<double>(max_depth));
+  for (std::size_t i = 0; i < nbase; ++i) {
+    const auto vs = value_and_slope(a + dx * static_cast<double>(i));
+    xs.push_back(a + dx * static_cast<double>(i));
+    ys.push_back(vs.first);
+    ms.push_back(vs.second);
+    open.push_back(i > 0);
+  }
+
+  auto gather = [&]() {
+    return nodes_and_data<S>{std::vector<double>(xs.begin(), xs.end()),
+                             std::vector<S>(ys.begin(), ys.end()),
+                             std::vector<S>(ms.begin(), ms.end())};
+  };
+  hermite_interpolator<S> fit;
+  { const auto d = gather(); fit.init(d.x, d.y, d.m); }
+
+  bool any_open = true;
+  while (any_open) {
+    dx /= 2.0;
+    if (dx < dxmin) {
+      util::stop("interpolator::refine: refined as far as max_depth allows");
+    }
+    any_open = false;
+    auto xi = xs.begin();
+    auto yi = ys.begin();
+    auto mi = ms.begin();
+    auto oi = open.begin();
+    for (; xi != xs.end(); ++xi, ++yi, ++mi, ++oi) {
+      if (!*oi) continue;
+      const double x_mid = *xi - dx;
+      const auto vs = value_and_slope(x_mid);
+      const double got = util::to_passive(vs.first);
+      const double got_fit = util::to_passive(fit.eval(x_mid));
+      const bool still_open =
+          std::fabs(got - got_fit) > tol * std::max(std::fabs(got), 1.0);
+      xs.insert(xi, x_mid);
+      ys.insert(yi, vs.first);
+      ms.insert(mi, vs.second);
+      *oi = still_open;                 // the interval [x_mid, *xi]
+      open.insert(oi, still_open);      // the interval ending at x_mid
+      any_open = any_open || still_open;
+    }
+    const auto d = gather();
+    fit.init(d.x, d.y, d.m);
+  }
+  return gather();
+}
 
 }
 }

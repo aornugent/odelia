@@ -5,6 +5,7 @@
 #include <odelia/interpolator.hpp>
 #include <XAD/XAD.hpp>
 #include <vector>
+#include <utility>
 #include <cmath>
 
 using namespace odelia;
@@ -174,24 +175,31 @@ public:
   double pars() const { return xad::value(gain); }
 
 private:
-  // Refine a spline over depth until it resolves the profile, read it at ref_depth,
-  // and keep the nodes the refinement placed.
+  // Refine over depth until the fit resolves the profile, read it at ref_depth, and
+  // keep the nodes the refinement placed.
   T refine_light() {
-    interpolator::basic_interpolator<T> interp;
-    interp.construct([this](double x) { return light_profile(x); }, 0.0, 1.0,
-                     tol, 0.0, 5, static_cast<std::size_t>(max_depth));
-    chose = interp.get_x();
+    const interpolator::nodes_and_data<T> chosen = interpolator::refine<T>(
+        [this](double x) { return light_and_slope(x); }, 0.0, 1.0, tol, 5,
+        static_cast<std::size_t>(max_depth));
+    chose = chosen.x;
+    interpolator::hermite_interpolator<T> interp;
+    interp.init(chosen.x, chosen.y, chosen.m);
     return interp.eval(ref_depth);
   }
 
   // And read it on nodes already chosen, so the profile responds to the parameter
   // where the discretisation does not.
   T light_on(const std::vector<double>& nodes) {
-    interpolator::basic_interpolator<T> interp;
-    std::vector<T> vals;
+    std::vector<T> vals, slopes;
     vals.reserve(nodes.size());
-    for (double x : nodes) vals.push_back(light_profile(x));
-    interp.init(nodes, vals);
+    slopes.reserve(nodes.size());
+    for (double x : nodes) {
+      const std::pair<T, T> vs = light_and_slope(x);
+      vals.push_back(vs.first);
+      slopes.push_back(vs.second);
+    }
+    interpolator::hermite_interpolator<T> interp;
+    interp.init(nodes, vals, slopes);
     return interp.eval(ref_depth);
   }
 
@@ -213,10 +221,16 @@ private:
     return history.at(at.step).at(static_cast<std::size_t>(at.stage));
   }
 
-  T light_profile(double x) const {
+  // The profile and its slope in depth, which is the pair the interpolant takes.
+  // Both come off the same two exponentials, so they cannot disagree. The return
+  // type is declared rather than deduced: a deduced one hands back expression
+  // templates referencing the temporaries of this return statement.
+  std::pair<T, T> light_and_slope(double x) const {
     using std::exp;
     const double g = x - 0.5;
-    return gain * exp(-extinction * x) + y * exp(-shade_conc * g * g);
+    const T beam = gain * exp(-extinction * x);
+    const T shade = y * exp(-shade_conc * g * g);
+    return {beam + shade, -extinction * beam - 2.0 * shade_conc * g * shade};
   }
 
   T gain;

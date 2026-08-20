@@ -8,8 +8,8 @@
 //
 // It also catches the subtler version of the same bug: a header using a
 // standard-library facility (`assert`, `std::string`, ...) that it never
-// includes and only receives by accident from R's headers. That is exactly how
-// spline.hpp came to use `assert` without <cassert>.
+// includes and only receives by accident from R's headers. A retired spline
+// header came to use `assert` without <cassert>, which is how.
 //
 // The R interface headers -- solver_interface.hpp, rcpp_interface_helpers.hpp
 // -- are deliberately NOT listed here. They are meant to depend on Rcpp.
@@ -20,7 +20,6 @@
 // an R one.
 
 #include <odelia/ode_util.hpp>
-#include <odelia/spline.hpp>
 #include <odelia/interpolator.hpp>
 #include <odelia/drivers.hpp>
 #include <odelia/ode_control.hpp>
@@ -66,18 +65,21 @@ void test_stop_throws() {
 
 // The interpolator is the part of the core most downstream consumers touch.
 void test_interpolator() {
-  odelia::interpolator::Interpolator in;
-  in.init({0.0, 1.0, 2.0, 3.0}, {0.0, 1.0, 4.0, 9.0});
+  odelia::interpolator::hermite_interpolator<double> in;
+  // x^2 with its own slope at every knot, which a cubic reproduces exactly.
+  in.init({0.0, 1.0, 2.0, 3.0}, {0.0, 1.0, 4.0, 9.0}, {0.0, 2.0, 4.0, 6.0});
   check(std::abs(in.eval(2.0) - 4.0) < 1e-12, "interpolator hits its knots");
+  check(std::abs(in.eval(1.5) - 2.25) < 1e-12, "and the quadratic between them");
+  check(std::abs(in.slope(1.5) - 3.0) < 1e-12, "with the slope of the same curve");
 
   bool threw = false;
   try {
-    odelia::interpolator::Interpolator too_short;
-    too_short.init({0.0, 1.0}, {0.0, 1.0});
+    odelia::interpolator::hermite_interpolator<double> one_knot;
+    one_knot.init({0.0}, {0.0}, {0.0});
   } catch (const std::runtime_error &) {
     threw = true;
   }
-  check(threw, "interpolator rejects fewer than three points");
+  check(threw, "interpolator rejects a knot set with no span");
 }
 
 // Integrating a real system with no R session anywhere is the whole point.

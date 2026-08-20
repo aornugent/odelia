@@ -1,12 +1,13 @@
-# Tests for odelia::interpolator::hermite_interpolator -- the C1 piecewise cubic
-# carrying a value and a slope at each knot.
+# Tests for odelia/interpolator.hpp: the C1 piecewise cubic carrying a value and a
+# slope at each knot, the slope rule for knots that arrive with values alone, and
+# the node rule for a target whose features are not known in advance.
 #
 # The interpolant records on a tape when its scalar or its query position is active,
 # and the XAD Tape<T,N> template methods are explicitly instantiated only in the
 # odelia shared library, so these snippets link against it rather than compiling
 # header-only.
 
-compile_hermite_interface <- function() {
+compile_interpolator_interface <- function() {
   ensure_ode_interface_loaded()
 
   include_dir <- odelia_include_dir()
@@ -21,7 +22,7 @@ compile_hermite_interface <- function() {
     #include <vector>
     #include <cmath>
     #include <XAD/XAD.hpp>
-    #include <odelia/hermite_interpolator.hpp>
+    #include <odelia/interpolator.hpp>
 
     using tape_type = xad::Tape<double>;
     using adouble = tape_type::active_type;
@@ -141,6 +142,83 @@ compile_hermite_interface <- function() {
     void hermite_set_nodes_descending(std::vector<double> z) {
       hermite_interpolator<double> interp;
       interp.set_nodes(z);
+    }
+
+    // A cubic given its own values and slopes is reproduced exactly, which is what
+    // says the coefficients belong to that polynomial and not to a fit.
+    // [[Rcpp::export]]
+    std::vector<double> hermite_cubic_exact(std::vector<double> z,
+                                            std::vector<double> u) {
+      auto f  = [](double t) { return 0.7 + 1.3 * t - 0.4 * t * t + 0.11 * t * t * t; };
+      auto df = [](double t) { return 1.3 - 0.8 * t + 0.33 * t * t; };
+      std::vector<double> y(z.size()), m(z.size());
+      for (std::size_t i = 0; i < z.size(); ++i) { y[i] = f(z[i]); m[i] = df(z[i]); }
+      hermite_interpolator<double> interp;
+      interp.init(z, y, m);
+      std::vector<double> out(u.size());
+      for (std::size_t i = 0; i < u.size(); ++i) out[i] = interp.eval(u[i]) - f(u[i]);
+      return out;
+    }
+
+    // The adjoint of one read with respect to every knot VALUE. Each span reads two
+    // knots, so a read touches four of the 2K inputs and the rest are exactly zero.
+    // [[Rcpp::export]]
+    std::vector<double> hermite_knot_value_adjoint(std::vector<double> z, double u) {
+      tape_type tape;
+      const std::vector<double> y0 = field_values(z), m0 = field_slopes(z);
+      std::vector<adouble> y(y0.begin(), y0.end()), m(m0.begin(), m0.end());
+      tape.registerInputs(y);
+      tape.registerInputs(m);
+      tape.newRecording();
+      hermite_interpolator<adouble> interp;
+      interp.init(z, y, m);
+      adouble out = interp.eval(u);
+      tape.registerOutput(out);
+      xad::derivative(out) = 1.0;
+      tape.computeAdjoints();
+      std::vector<double> d;
+      d.reserve(y.size() + m.size());
+      for (const adouble& v : y) d.push_back(xad::derivative(v));
+      for (const adouble& v : m) d.push_back(xad::derivative(v));
+      return d;
+    }
+
+    // [[Rcpp::export]]
+    std::vector<double> interpolator_monotone_slopes(std::vector<double> x,
+                                                     std::vector<double> y) {
+      return odelia::interpolator::monotone_slopes(x, y);
+    }
+
+    // Read a limited fit between its control points, to see whether it leaves their
+    // range.
+    // [[Rcpp::export]]
+    std::vector<double> interpolator_monotone_read(std::vector<double> x,
+                                                   std::vector<double> y,
+                                                   std::vector<double> u) {
+      hermite_interpolator<double> interp;
+      interp.init(x, y, odelia::interpolator::monotone_slopes(x, y));
+      std::vector<double> out(u.size());
+      for (std::size_t i = 0; i < u.size(); ++i) out[i] = interp.eval(u[i]);
+      return out;
+    }
+
+    // The nodes refinement places on the field, and how well the fit on them holds.
+    // [[Rcpp::export]]
+    Rcpp::List interpolator_refine(double a, double b, double tol) {
+      const auto chosen = odelia::interpolator::refine<double>(
+          [](double z) { return std::pair<double, double>(field.value(z),
+                                                          field.slope(z)); },
+          a, b, tol);
+      hermite_interpolator<double> interp;
+      interp.init(chosen.x, chosen.y, chosen.m);
+      double worst = 0.0;
+      for (std::size_t k = 0; k + 1 < chosen.x.size(); ++k) {
+        const double mid = 0.5 * (chosen.x[k] + chosen.x[k + 1]);
+        worst = std::max(worst, std::abs(interp.eval(mid) - field.value(mid)));
+      }
+      return Rcpp::List::create(Rcpp::_["n"] = (int)chosen.x.size(),
+                                Rcpp::_["worst"] = worst,
+                                Rcpp::_["x"] = chosen.x);
     }', verbose = FALSE)
 }
 
@@ -150,7 +228,7 @@ knot_sets <- list(uniform = seq(0, 4, length.out = 33),
 query <- c(0.05, 0.31, 0.62, 1.0, 1.55, 2.4, 3.87, 3.999)
 
 testthat::test_that("slope is the exact derivative of what eval returns", {
-  compile_hermite_interface()
+  compile_interpolator_interface()
 
   # The slope is not a fit by-product: it is the derivative of the same cubic eval
   # uses, so it agrees with a central difference of eval everywhere, knots included.
@@ -168,7 +246,7 @@ testthat::test_that("slope is the exact derivative of what eval returns", {
 })
 
 testthat::test_that("setting the nodes once and the data per stage moves no value", {
-  compile_hermite_interface()
+  compile_interpolator_interface()
 
   for (z in knot_sets) {
     r <- hermite_split_matches_all_at_once(z, query, scale = 0.37)
@@ -179,7 +257,7 @@ testthat::test_that("setting the nodes once and the data per stage moves no valu
 })
 
 testthat::test_that("a read at an active position records the derivative of the query", {
-  compile_hermite_interface()
+  compile_interpolator_interface()
 
   # Without the graft the span is indexed at the passive position and nothing records
   # the query, so this adjoint would be exactly zero.
@@ -198,11 +276,66 @@ testthat::test_that("a read at an active position records the derivative of the 
 })
 
 testthat::test_that("an incomplete or unusable build stops", {
-  compile_hermite_interface()
+  compile_interpolator_interface()
 
   z <- knot_sets$uniform
   testthat::expect_error(hermite_eval_before_data(z), "not initialised")
   testthat::expect_error(hermite_data_before_nodes(z), "no knots set")
   testthat::expect_error(hermite_set_nodes_descending(rev(z)), "strictly ascending")
   testthat::expect_error(hermite_set_nodes_descending(c(1.0)), "at least 2 knots")
+})
+
+testthat::test_that("a cubic given its own values and slopes comes back exactly", {
+  compile_interpolator_interface()
+  for (z in knot_sets) {
+    testthat::expect_lt(max(abs(hermite_cubic_exact(z, query))), 1e-13)
+  }
+})
+
+testthat::test_that("a read touches four knot inputs and no others", {
+  compile_interpolator_interface()
+  z <- knot_sets$uniform
+  # A query strictly inside one span: the two knots bounding it, each through its
+  # value and its slope. Everything else must be exactly zero, not merely small --
+  # this is the sparsity an O(1) adjoint rests on.
+  d <- hermite_knot_value_adjoint(z, 1.55)
+  testthat::expect_equal(sum(d != 0), 4L)
+  k <- findInterval(1.55, z)
+  nz <- c(k, k + 1L, length(z) + k, length(z) + k + 1L)
+  testthat::expect_equal(which(d != 0), nz)
+})
+
+testthat::test_that("the slope rule keeps a limited fit inside its own data", {
+  compile_interpolator_interface()
+  # An intermittent series: mostly zero, occasional pulses. A fit that chooses
+  # slopes globally reads negative between two dry points; this one cannot.
+  x <- seq(0, 20, length.out = 41)
+  y <- ifelse(seq_along(x) %% 7 == 0, 5, 0)
+  u <- seq(0, 20, length.out = 1000)
+  got <- interpolator_monotone_read(x, y, u)
+  testthat::expect_gte(min(got), 0)
+  testthat::expect_lte(max(got), max(y))
+
+  # And on a monotone series it is monotone.
+  ym <- cumsum(c(0, abs(sin(seq_along(x)[-1]))))
+  gotm <- interpolator_monotone_read(x, ym, u)
+  testthat::expect_true(all(diff(gotm) >= -1e-12))
+
+  # A flat pair pins both its slopes to zero, which is what stops a pulse being
+  # smeared backwards into a dry day.
+  m <- interpolator_monotone_slopes(x, y)
+  testthat::expect_equal(m[2], 0)
+})
+
+testthat::test_that("refinement stops where the fit resolves the target", {
+  compile_interpolator_interface()
+  loose <- interpolator_refine(0, 4, 1e-4)
+  tight <- interpolator_refine(0, 4, 1e-8)
+  # A tighter tolerance places more nodes and reaches a smaller miss.
+  testthat::expect_gt(tight$n, loose$n)
+  testthat::expect_lt(tight$worst, loose$worst)
+  testthat::expect_lt(loose$worst, 1e-4)
+  # The nodes it placed are a usable knot set: ascending, spanning the interval.
+  testthat::expect_true(all(diff(loose$x) > 0))
+  testthat::expect_equal(range(loose$x), c(0, 4))
 })
