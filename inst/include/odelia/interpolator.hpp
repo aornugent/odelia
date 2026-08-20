@@ -29,10 +29,19 @@
 namespace odelia {
 namespace interpolator {
 
-// A C1 piecewise-cubic interpolant built from a value AND a slope at each knot.
+// A piecewise-polynomial interpolant built from a value AND a slope at each knot,
+// and at Order 5 a curvature as well.
 //
 // The value and the slope come from one polynomial, so a caller that needs both
 // gets a consistent pair: slope(u) is the exact derivative of what eval(u) returns.
+//
+// Order is how many derivatives the knot data carries, and it is set by the source
+// rather than chosen: a cubic takes a value and a slope, a quintic takes a
+// curvature too, and set_data has one signature for each so supplying the wrong
+// number of channels does not compile. A cubic converges as h^4 and a quintic as
+// h^6, so a source with a closed form for the second derivative reaches a given
+// error on far fewer knots -- but no rule here ever invents a channel, and a
+// quantity that is not twice differentiable must not ask for the quintic.
 //
 // Each span reads only its own two knots, so moving one knot changes the
 // interpolant only in the two spans that touch it.
@@ -46,8 +55,13 @@ namespace interpolator {
 // value is read at its passive part and the query's own derivative is grafted on
 // through the slope, so d(value)/d(u) is recorded. slope and value_and_slope take a
 // double, because a query's derivative reaches a value and not a slope.
-template <typename S>
+template <typename S, int Order = 3>
 class hermite_interpolator {
+  static_assert(Order == 3 || Order == 5,
+                "hermite_interpolator carries a value and a slope (Order 3) or "
+                "those plus a curvature (Order 5); there is no other knot data "
+                "any source in this library supplies exactly.");
+
 public:
   // Knot positions, strictly ascending; at least two are needed (one span).
   // Discards any data already set.
@@ -80,20 +94,53 @@ public:
 
   // Values and dy/dx at the nodes already set, one entry each per node.
   void set_data(const std::vector<S>& y_, const std::vector<S>& dydx_) {
-    if (spans.empty()) util::stop("hermite_interpolator: no knots set");
-    util::check_length(y_.size(), x.size());
-    util::check_length(dydx_.size(), x.size());
-    y = y_;
-    m = dydx_;
+    static_assert(Order == 3,
+                  "a quintic read has a curvature channel, so it needs the second "
+                  "derivative at every knot; leaving it out would make the read "
+                  "quintic in name and cubic in fact.");
+    begin_data(y_, dydx_);
     for (std::size_t k = 0; k < spans.size(); ++k) {
       const double h = x[k + 1] - x[k];
       const S a = y[k], b = y[k + 1];
       const S sa = m[k] * h, sb = m[k + 1] * h;
       Span& s = spans[k];
       s.y0 = a;
-      s.c1 = sa;
-      s.c2 = 3.0 * (b - a) - 2.0 * sa - sb;
-      s.c3 = 2.0 * (a - b) + sa + sb;
+      s.c[0] = sa;
+      s.c[1] = 3.0 * (b - a) - 2.0 * sa - sb;
+      s.c[2] = 2.0 * (a - b) + sa + sb;
+    }
+    initialised = true;
+  }
+
+  // As above, with d2y/dx2 as well: the unique quintic through both knots' value,
+  // slope and curvature.
+  void set_data(const std::vector<S>& y_, const std::vector<S>& dydx_,
+                const std::vector<S>& d2ydx2_) {
+    static_assert(Order == 5,
+                  "a cubic read is determined by the value and the slope, so a "
+                  "curvature has nowhere to go and would be silently dropped.");
+    begin_data(y_, dydx_);
+    util::check_length(d2ydx2_.size(), x.size());
+    // The curvatures are read into the spans and not kept. values() and slopes()
+    // are held because a caller hands them on and a slope recovered from a span is
+    // not bit-identical; nothing hands a curvature on, and a member here would sit
+    // on every cubic interpolant in the library.
+    for (std::size_t j = 0; j < spans.size(); ++j) {
+      const double h = x[j + 1] - x[j];
+      const S a = y[j], b = y[j + 1];
+      const S a1 = m[j] * h, b1 = m[j + 1] * h;
+      const S a2 = 0.5 * d2ydx2_[j] * h * h, b2 = d2ydx2_[j + 1] * h * h;
+      // What the two ends leave for the top three powers to match.
+      const S d = b - a - a1 - a2;
+      const S e = b1 - a1 - 2.0 * a2;
+      const S f = b2 - 2.0 * a2;
+      Span& s = spans[j];
+      s.y0 = a;
+      s.c[0] = a1;
+      s.c[1] = a2;
+      s.c[2] = 10.0 * d - 4.0 * e + 0.5 * f;
+      s.c[3] = -15.0 * d + 7.0 * e - f;
+      s.c[4] = 6.0 * d - 3.0 * e + 0.5 * f;
     }
     initialised = true;
   }
@@ -103,6 +150,12 @@ public:
             const std::vector<S>& dydx_) {
     set_nodes(x_);
     set_data(y_, dydx_);
+  }
+
+  void init(const std::vector<double>& x_, const std::vector<S>& y_,
+            const std::vector<S>& dydx_, const std::vector<S>& d2ydx2_) {
+    set_nodes(x_);
+    set_data(y_, dydx_, d2ydx2_);
   }
 
   void clear() {
@@ -202,11 +255,39 @@ private:
   // of each instead of restating it and needing a test that they agree.
   struct Span {
     double x0 = 0.0, inv_h = 0.0;
-    S y0{}, c1{}, c2{}, c3{};
+    S y0{};
+    S c[Order]{};  // the coefficient of t^(i+1), t the span-local coordinate
     double local(double u) const { return (u - x0) * inv_h; }
-    S value(double t) const { return y0 + t * (c1 + t * (c2 + t * c3)); }
-    S slope(double t) const { return (c1 + t * (2.0 * c2 + t * 3.0 * c3)) * inv_h; }
+    // Written out per order rather than looped. A Horner loop over Order terms is
+    // the same algebra and not the same arithmetic: it groups the derivative's
+    // integer factor as t * (k * c) where this groups it as (t * k) * c, which
+    // moves the last bit of every slope. The cubic's two lines are therefore the
+    // ones that were always here.
+    S value(double t) const {
+      if constexpr (Order == 3) {
+        return y0 + t * (c[0] + t * (c[1] + t * c[2]));
+      } else {
+        return y0 + t * (c[0] + t * (c[1] + t * (c[2] + t * (c[3] + t * c[4]))));
+      }
+    }
+    S slope(double t) const {
+      if constexpr (Order == 3) {
+        return (c[0] + t * (2.0 * c[1] + t * 3.0 * c[2])) * inv_h;
+      } else {
+        return (c[0] + t * (2.0 * c[1] + t * (3.0 * c[2] +
+                t * (4.0 * c[3] + t * 5.0 * c[4])))) * inv_h;
+      }
+    }
   };
+
+  // The two length checks and the two vectors every order stores.
+  void begin_data(const std::vector<S>& y_, const std::vector<S>& dydx_) {
+    if (spans.empty()) util::stop("hermite_interpolator: no knots set");
+    util::check_length(y_.size(), x.size());
+    util::check_length(dydx_.size(), x.size());
+    y = y_;
+    m = dydx_;
+  }
 
   // The query's derivative, materialised while its operands are alive. A deduced
   // return type here would hand back an XAD expression template referencing the

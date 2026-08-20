@@ -35,6 +35,7 @@ compile_interpolator_interface <- function() {
 
       double value(double z) const { return amplitude * std::exp(-extinction * z); }
       double slope(double z) const { return -extinction * value(z); }
+      double curvature(double z) const { return extinction * extinction * value(z); }
     };
 
     static AttenuatingField field;
@@ -47,6 +48,11 @@ compile_interpolator_interface <- function() {
     static std::vector<double> field_slopes(const std::vector<double>& z) {
       std::vector<double> v(z.size());
       for (std::size_t i = 0; i < z.size(); ++i) v[i] = field.slope(z[i]);
+      return v;
+    }
+    static std::vector<double> field_curvatures(const std::vector<double>& z) {
+      std::vector<double> v(z.size());
+      for (std::size_t i = 0; i < z.size(); ++i) v[i] = field.curvature(z[i]);
       return v;
     }
 
@@ -219,6 +225,41 @@ compile_interpolator_interface <- function() {
       return Rcpp::List::create(Rcpp::_["n"] = (int)chosen.x.size(),
                                 Rcpp::_["worst"] = worst,
                                 Rcpp::_["x"] = chosen.x);
+    }
+
+    // The same knots read at both orders, and each order at its own knots. A source
+    // with a closed form for the curvature can supply three channels; one with only
+    // two cannot, and set_data has a signature for each.
+    // [[Rcpp::export]]
+    Rcpp::List hermite_orders(std::vector<double> z, std::vector<double> u) {
+      hermite_interpolator<double> cubic;
+      cubic.init(z, field_values(z), field_slopes(z));
+      hermite_interpolator<double, 5> quintic;
+      quintic.init(z, field_values(z), field_slopes(z), field_curvatures(z));
+      double worst3 = 0.0, worst5 = 0.0, at_knots = 0.0, slope_at_knots = 0.0;
+      for (std::size_t i = 0; i < u.size(); ++i) {
+        worst3 = std::max(worst3, std::abs(cubic.eval(u[i]) - field.value(u[i])));
+        worst5 = std::max(worst5, std::abs(quintic.eval(u[i]) - field.value(u[i])));
+      }
+      for (std::size_t k = 0; k < z.size(); ++k) {
+        at_knots = std::max(at_knots, std::abs(quintic.eval(z[k]) - field.value(z[k])));
+        slope_at_knots =
+            std::max(slope_at_knots, std::abs(quintic.slope(z[k]) - field.slope(z[k])));
+      }
+      // The slope against a difference of the quintic\'s OWN value, so this checks
+      // one polynomial rather than agreement with the field.
+      const double h = 1e-6;
+      double own = 0.0;
+      for (std::size_t i = 0; i < u.size(); ++i) {
+        if (u[i] - h <= z.front() || u[i] + h >= z.back()) continue;
+        own = std::max(own, std::abs((quintic.eval(u[i] + h) - quintic.eval(u[i] - h))
+                                     / (2 * h) - quintic.slope(u[i])));
+      }
+      return Rcpp::List::create(Rcpp::_["cubic"] = worst3,
+                                Rcpp::_["quintic"] = worst5,
+                                Rcpp::_["at_knots"] = at_knots,
+                                Rcpp::_["slope_at_knots"] = slope_at_knots,
+                                Rcpp::_["own_slope"] = own);
     }', verbose = FALSE)
 }
 
@@ -338,4 +379,28 @@ testthat::test_that("refinement stops where the fit resolves the target", {
   # The nodes it placed are a usable knot set: ascending, spanning the interval.
   testthat::expect_true(all(diff(loose$x) > 0))
   testthat::expect_equal(range(loose$x), c(0, 4))
+})
+
+testthat::test_that("a curvature channel raises the order and is refused where absent", {
+  compile_interpolator_interface()
+
+  # Both orders on the same knots. A cubic is determined by a value and a slope, a
+  # quintic by those plus a curvature, so the second converges as h^6 against h^4 --
+  # which is what lets a source with a closed-form second derivative reach a given
+  # error on far fewer knots. Measured here on a coarse grid so the two are apart by
+  # more than the arithmetic's own noise.
+  coarse <- seq(0, 4, length.out = 9)
+  probe <- seq(0.02, 3.98, length.out = 401)
+  got <- hermite_orders(coarse, probe)
+
+  testthat::expect_lt(got$quintic, got$cubic / 100)
+
+  # Both channels are exact at the knots the data was supplied at: a quintic is an
+  # interpolant, not a fit, in the value and the slope alike.
+  testthat::expect_identical(got$at_knots, 0)
+  testthat::expect_identical(got$slope_at_knots, 0)
+
+  # And its slope is the derivative of its own value, not of the target -- the same
+  # property the cubic has, checked against the polynomial rather than the field.
+  testthat::expect_lt(got$own_slope, 1e-8)
 })
