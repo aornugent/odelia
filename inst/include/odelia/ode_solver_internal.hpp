@@ -54,9 +54,8 @@ public:
   // counterpart.
   void step_adjoint(System& system, std::size_t step, double time,
                     double step_size, const state_type& y,
-                    const std::vector<state_type>& lambda_out,
-                    std::vector<state_type>& lambda_in,
-                    std::vector<std::vector<double>>& parameter_adjoint) {
+                    const row_batch& lambda_out, row_batch& lambda_in,
+                    row_batch& parameter_adjoint) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
@@ -64,7 +63,7 @@ public:
     // because a caller sweeping a segment narrows it between segments. Every seed
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
-    resize(lambda_out.front().size());
+    resize(lambda_out.width());
     stepper.step_adjoint(system, step, time, step_size, y, lambda_out,
                          lambda_in, parameter_adjoint);
   }

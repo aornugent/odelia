@@ -56,12 +56,13 @@ compile_vjp_interface <- function() {
       Rcpp::NumericVector small_block_vjp(std::vector<double> x,
                                           std::vector<double> output_adjoints) {
         xad::adj<double>::tape_type tape(false);
-        const std::vector<std::vector<double>> seeds(1, output_adjoints);
-        std::vector<std::vector<double>> input_adjoints;
+        const odelia::ode::row_batch seeds =
+            odelia::ode::row_batch::one_row(output_adjoints);
+        odelia::ode::row_batch input_adjoints;
         odelia::ode::vector_jacobian_product(
             tape, x, seeds,
             [](const auto& xa, auto& ya) { small_block(xa, ya); }, input_adjoints);
-        return Rcpp::wrap(input_adjoints[0]);
+        return Rcpp::wrap(input_adjoints.to_rows()[0]);
       }
 
       // [[Rcpp::export]]
@@ -69,8 +70,9 @@ compile_vjp_interface <- function() {
                                          std::vector<double> output_adjoints) {
         std::vector<double> x(n_inputs, 0.5);
         xad::adj<double>::tape_type tape(false);
-        const std::vector<std::vector<double>> seeds(1, output_adjoints);
-        std::vector<std::vector<double>> input_adjoints;
+        const odelia::ode::row_batch seeds =
+            odelia::ode::row_batch::one_row(output_adjoints);
+        odelia::ode::row_batch input_adjoints;
         return double(odelia::ode::vector_jacobian_product(
             tape, x, seeds,
             [](const auto& xa, auto& ya) { padded_block(xa, ya); }, input_adjoints));
@@ -85,8 +87,9 @@ compile_vjp_interface <- function() {
                                              std::vector<double> output_adjoints,
                                              int n_calls) {
         xad::adj<double>::tape_type tape(false);
-        const std::vector<std::vector<double>> seeds(1, output_adjoints);
-        std::vector<std::vector<double>> input_adjoints;
+        const odelia::ode::row_batch seeds =
+            odelia::ode::row_batch::one_row(output_adjoints);
+        odelia::ode::row_batch input_adjoints;
         std::vector<double> all_adjoints, sizes;
         for (int k = 0; k < n_calls; ++k) {
           sizes.push_back(double(odelia::ode::vector_jacobian_product(
@@ -112,12 +115,13 @@ compile_vjp_interface <- function() {
           std::vector<double> x, std::vector<double> output_adjoints) {
         xad::adj<double>::tape_type owned(false);
         xad::adj<double>::tape_type other;  // constructed active
-        const std::vector<std::vector<double>> seeds(1, output_adjoints);
-        std::vector<std::vector<double>> input_adjoints;
+        const odelia::ode::row_batch seeds =
+            odelia::ode::row_batch::one_row(output_adjoints);
+        odelia::ode::row_batch input_adjoints;
         odelia::ode::vector_jacobian_product(
             owned, x, seeds,
             [](const auto& xa, auto& ya) { small_block(xa, ya); }, input_adjoints);
-        return Rcpp::wrap(input_adjoints[0]);
+        return Rcpp::wrap(input_adjoints.to_rows()[0]);
       }', verbose = FALSE)
     NULL
   }, error = function(e) e)

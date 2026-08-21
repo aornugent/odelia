@@ -130,12 +130,13 @@ compile_recording_interface <- function() {
       LotkaVolterra<double> adj(pars[0], pars[1], pars[2], pars[3]);
       adj.rate_calls = 0;
       lv_assigns = 0;
-      std::vector<std::vector<double> > seeds(1, lambda_out), swept;
-      std::vector<std::vector<double> > rows(
-        1, std::vector<double>(adj.ad_parameters().size(), 0.0));
+      const odelia::ode::row_batch seeds =
+        odelia::ode::row_batch::one_row(lambda_out);
+      odelia::ode::row_batch swept;
+      odelia::ode::row_batch rows(1, adj.ad_parameters().size());
       stepper.step_adjoint(adj, 1, time, step_size, y, seeds, swept, rows);
-      std::vector<double> lambda_in = swept[0];
-      std::vector<double> parameter_adjoint = rows[0];
+      const std::vector<double> lambda_in = swept.to_rows()[0];
+      const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
       return Rcpp::List::create(Rcpp::_["y_end"] = y_end,
                                 Rcpp::_["lambda_in"] = lambda_in,
@@ -175,16 +176,15 @@ compile_recording_interface <- function() {
         states.push_back(s);
       }
 
-      std::vector<std::vector<double> > lambda(1, lambda_end);
-      std::vector<std::vector<double> > rows(
-        1, std::vector<double>(system.ad_parameters().size(), 0.0));
+      odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
+      odelia::ode::row_batch rows(1, system.ad_parameters().size());
       replay.clear_recorded_rates();
       replay.solve_adjoint(states, lambda, rows, 0, states.size() - 1);
-      const std::vector<double> parameter_adjoint = rows[0];
+      const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
       return Rcpp::List::create(Rcpp::_["n_steps"] = (int) h.size(),
                                 Rcpp::_["y_end"] = states.back(),
-                                Rcpp::_["lambda"] = lambda[0],
+                                Rcpp::_["lambda"] = lambda.to_rows()[0],
                                 Rcpp::_["parameter_adjoint"] = parameter_adjoint,
                                 Rcpp::_["recorded_rates"] =
                                   (int) replay.recorded_rates());
@@ -221,13 +221,12 @@ compile_recording_interface <- function() {
         states.push_back(s);
       }
 
-      std::vector<std::vector<double> > lambda(1, lambda_end);
-      std::vector<std::vector<double> > rows(
-        1, std::vector<double>(system.ad_parameters().size(), 0.0));
+      odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
+      odelia::ode::row_batch rows(1, system.ad_parameters().size());
       replay.solve_adjoint(states, lambda, rows, (size_t) split,
                            states.size() - 1);
       replay.solve_adjoint(states, lambda, rows, 0, (size_t) split);
-      return lambda[0];
+      return lambda.to_rows()[0];
     }
 
     // The schedule `schedule_pars` resolved, run forward at `run_pars`. The

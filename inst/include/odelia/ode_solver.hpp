@@ -274,8 +274,8 @@ public:
   // saving is, because a recording is a model evaluation and a sweep is not. A
   // caller wanting a single row passes a batch of one.
   void solve_adjoint(const std::vector<ode::state_type<System> >& states,
-                     std::vector<ode::state_type<System> >& lambda,
-                     std::vector<std::vector<double>>& parameter_adjoint,
+                     ode::row_batch& lambda,
+                     ode::row_batch& parameter_adjoint,
                      size_t k_first, size_t k_last)
   {
     if (!has_recording()) {
@@ -287,27 +287,26 @@ public:
     const std::vector<double> t = times();
     const std::vector<double> h = step_sizes();
     util::check_length(states.size(), t.size());
-    for (const ode::state_type<System>& l : lambda) {
-      // Named, because a bare length mismatch here is read as the caller's and says
-      // nothing about the seam it is really about: a seed carried at one width
-      // against a System left at another.
-      if (l.size() != system.ode_size()) {
-        util::stop("solve_adjoint: a seed is " +
-                   util::to_string(static_cast<int>(l.size())) +
-                   " wide against a System of " +
-                   util::to_string(static_cast<int>(system.ode_size())) +
-                   ", so the two are not at the same widening");
-      }
+    // Named, because a bare length mismatch here is read as the caller's and says
+    // nothing about the seam it is really about: a batch carried at one width
+    // against a System left at another. One width for every row, so this is asked
+    // of the batch and not of each seed in it.
+    if (lambda.width() != system.ode_size()) {
+      util::stop("solve_adjoint: the seeds are " +
+                 util::to_string(static_cast<int>(lambda.width())) +
+                 " wide against a System of " +
+                 util::to_string(static_cast<int>(system.ode_size())) +
+                 ", so the two are not at the same widening");
     }
     if (k_first >= k_last || k_last >= t.size()) {
       util::stop("the adjoint segment is not a range of recorded steps");
     }
-    std::vector<ode::state_type<System> > lambda_in;
+    ode::row_batch lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       util::check_length(states[k - 1].size(), system.ode_size());
       solver.step_adjoint(system, k, t[k - 1], h[k], states[k - 1], lambda,
                           lambda_in, parameter_adjoint);
-      lambda = lambda_in;
+      lambda = std::move(lambda_in);
     }
   }
 

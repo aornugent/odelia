@@ -320,8 +320,7 @@ template <class Solver, class Widening>
 std::size_t solve_adjoint_over_widenings(
     Solver& solver, const std::vector<std::vector<double>>& states,
     const std::vector<recorded_widening<Widening>>& widenings,
-    std::vector<std::vector<double>>& lambda,
-    std::vector<std::vector<double>>& parameter_adjoint,
+    row_batch& lambda, row_batch& parameter_adjoint,
     const std::vector<std::size_t>& extra_splits = {}) {
     using scalar = active_scalar<double>;
     auto& system = solver.get_system_ref();
@@ -410,7 +409,7 @@ std::size_t solve_adjoint_over_widenings(
                          std::vector<scalar>& y) -> void {
             active_system.widened_state(w, x, y);
         };
-        std::vector<std::vector<double>> narrowed;
+        row_batch narrowed;
         state_and_parameter_adjoints(tape, system, states[w.after_step], lambda,
                                      widen, narrowed, parameter_adjoint);
         lambda = std::move(narrowed);
