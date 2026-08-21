@@ -50,5 +50,12 @@ r_free.o: r_free.cpp $(HEADERS)
 Tape.o: ../../src/Tape.cpp
 	$(CXX) $(CXXSTD) $(OPT) -w $(INCLUDES) -c -o $@ $<
 
+# A measurement rather than a check, so it is not in `all`. It compiles its own
+# copy of the tape runtime because it needs widths the shipped one does not
+# instantiate, and therefore links without Tape.o.
+probe_width: probe_width.cpp ../../src/Tape.cpp $(HEADERS)
+	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
+	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $<
+
 clean:
-	rm -f r_free r_free.o Tape.o
+	rm -f r_free r_free.o Tape.o probe_width
