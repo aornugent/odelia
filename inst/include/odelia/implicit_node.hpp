@@ -3,6 +3,8 @@
 #define ODELIA_IMPLICIT_NODE_HPP_
 
 #include <cmath>
+#include <cstddef>
+#include <string>
 #include <type_traits>
 #include <vector>
 #include <XAD/XAD.hpp>
@@ -19,45 +21,68 @@ struct input_and_derivative {
   double derivative;
 };
 
-// `value`, carrying derivatives that were never recorded: the result is `value`
-// itself, and its derivative with respect to each input is the one supplied.
-// Each term is an input minus its own passive copy, which is zero in value and
-// carries the derivative, so the number returned is untouched and only the tape
-// sees the terms.
+// What a graft could not record, beside the value it wrote. A row that cannot be
+// recorded is not an error here: the value is still the value, and whether a
+// consumer can go on without the row is the consumer's to decide -- one output's
+// rows can go missing while another's survive, and a stop takes both.
+struct graft_report {
+  bool whole = true;
+  // Which input's row is missing, and what was wrong with it. Meaningless where
+  // `whole`.
+  std::size_t at = 0;
+  std::string why;
+};
+
+// `into` receives `value` carrying the derivatives supplied against it: the
+// number is `value` itself, and its derivative with respect to each input is the
+// one supplied. Each term is an input minus its own passive copy, which is zero
+// in value and carries the derivative, so the number is untouched and only the
+// tape sees the terms.
 //
 // This is how a quantity computed away from the tape gets onto it -- a
 // root-find, a submodel's own solve, anything whose derivative is known by some
 // means other than recording the steps that produced it. At a plain double the
 // terms all vanish and this is the value.
+//
+// NOTHING PARTIAL. Every row is tested before any is recorded, because a value
+// carrying some of its rows is a channel that has gone missing with every number
+// still finite -- which is worse than no rows at all, since a consumer told the
+// rows are absent can carry the value as a constant and say so.
+//
+// The report is the return, so a caller cannot take the number without being
+// handed the reading of it.
 template <class S>
-S record_with_derivatives(double value,
-                          const std::vector<input_and_derivative<S>>& against) {
-  S out = value;
-  for (const input_and_derivative<S>& term : against) {
+[[nodiscard]] graft_report record_with_derivatives(
+    double value, const std::vector<input_and_derivative<S>>& against, S& into) {
+  for (std::size_t i = 0; i < against.size(); ++i) {
     // Either half being non-finite poisons the VALUE and not only what is
     // recorded against it: NaN times zero is not a number, and an infinite input
     // minus its own passive copy is NaN rather than zero. Tested here, where the
     // halves are still separable; downstream they are one expression.
-    const double at = util::to_passive(term.input);
-    if (!util::is_finite(term.derivative) || !util::is_finite(at)) {
-      util::stop("record_with_derivatives: input " +
-                 util::to_string(static_cast<int>(&term - against.data())) +
-                 " of " + util::to_string(static_cast<int>(against.size())) +
-                 " has value " + util::format_double(at) + " and derivative " +
-                 util::format_double(term.derivative) +
-                 ", one of which is not finite, so the value they belong to "
-                 "cannot be recorded");
+    const double at = util::to_passive(against[i].input);
+    if (!util::is_finite(against[i].derivative) || !util::is_finite(at)) {
+      into = value;
+      return {false, i,
+              "input " + util::to_string(static_cast<int>(i)) + " of " +
+                  util::to_string(static_cast<int>(against.size())) +
+                  " has value " + util::format_double(at) + " and derivative " +
+                  util::format_double(against[i].derivative) +
+                  ", one of which is not finite, so the value they belong to "
+                  "cannot be recorded"};
     }
+  }
+  S out = value;
+  for (const input_and_derivative<S>& term : against) {
     // A zero derivative contributes exactly zero to the value and exactly nothing
     // to the transpose, and recording it costs a tape edge that the sweep then walks
-    // twice. Tested for finiteness first, because a zero row beside a non-finite
-    // input still says the value it belongs to cannot be recorded.
+    // twice.
     if (term.derivative == 0.0) {
       continue;
     }
-    out += term.derivative * (term.input - at);
+    out += term.derivative * (term.input - util::to_passive(term.input));
   }
-  return out;
+  into = out;
+  return {};
 }
 
 // The quantity a solve left at a root of R(p; u) = 0, on the tape carrying the
@@ -74,20 +99,26 @@ S record_with_derivatives(double value,
 // this, which is the envelope theorem written as an omission rather than as a
 // term that has to come out to zero.
 template <class S>
-S implicit_root(double p, double residual_slope,
-                std::vector<input_and_derivative<S>> against) {
+[[nodiscard]] graft_report implicit_root(
+    double p, double residual_slope,
+    std::vector<input_and_derivative<S>> against, S& into) {
   // Zero is the only threshold available: how small a slope is too small depends
   // on R's units, which the caller has and this does not. At a fold it
-  // approaches zero and the quotient is garbage rather than large.
+  // approaches zero and the quotient is garbage rather than large. Reported
+  // rather than stopped, for the reason the graft's own rows are: the point is
+  // still the point, and a consumer whose other outputs do not read it can carry
+  // on -- where a stop takes those too.
   if (!util::is_finite(residual_slope) || residual_slope == 0.0) {
-    util::stop("implicit_root: dR/dp is " + util::format_double(residual_slope) +
-               " at the operating point, so the implicit function theorem does "
-               "not apply there (a fold?)");
+    into = p;
+    return {false, 0,
+            "dR/dp is " + util::format_double(residual_slope) +
+                " at the operating point, so the implicit function theorem does "
+                "not apply there (a fold?)"};
   }
   for (input_and_derivative<S>& term : against) {
     term.derivative /= -residual_slope;
   }
-  return record_with_derivatives<S>(p, against);
+  return record_with_derivatives<S>(p, against, into);
 }
 
 // The value y* defined implicitly by a scalar equation F(y; p) = 0, made
@@ -146,7 +177,17 @@ S implicit_value(double y_star, Equation&& F) {
     // so y* against it with a coefficient of -1 is the theorem's own quotient.
     // to_passive strips every layer, so this composes at a nested scalar too.
     const S corr = F(S(y_star)) / dFdy;
-    return record_with_derivatives<S>(y_star, {{corr, -1.0}});
+    S out;
+    // Stopped rather than reported, and the asymmetry with the two above is the
+    // point: this IS the value the equation defines, so a caller handed y* with
+    // no derivative has a structural zero and no way to know it. The two above
+    // return a value a consumer already has another use for.
+    const graft_report report =
+        record_with_derivatives<S>(y_star, {{corr, -1.0}}, out);
+    if (!report.whole) {
+      util::stop("implicit_value: " + report.why);
+    }
+    return out;
   }
 }
 

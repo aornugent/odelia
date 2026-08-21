@@ -97,8 +97,9 @@ compile_implicit_value_interface <- function() {
       tape.registerInput(v);
       tape.newRecording();
 
-      adouble y = odelia::record_with_derivatives<adouble>(value,
-                                                           {{u, du}, {v, dv}});
+      adouble y;
+      const odelia::graft_report report =
+          odelia::record_with_derivatives<adouble>(value, {{u, du}, {v, dv}}, y);
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
       tape.computeAdjoints();
@@ -106,7 +107,10 @@ compile_implicit_value_interface <- function() {
           Rcpp::_["value"] = xad::value(y),
           Rcpp::_["identical"] = odelia::util::identical(xad::value(y), value),
           Rcpp::_["d_du"] = xad::derivative(u),
-          Rcpp::_["d_dv"] = xad::derivative(v));
+          Rcpp::_["d_dv"] = xad::derivative(v),
+          Rcpp::_["whole"] = report.whole,
+          Rcpp::_["at"] = (int) report.at,
+          Rcpp::_["why"] = report.why);
     }
 
     // A root p of R(p; u, v) = 0 with both slopes supplied, and one output that
@@ -122,9 +126,12 @@ compile_implicit_value_interface <- function() {
       tape.registerInput(v);
       tape.newRecording();
 
-      adouble root = odelia::implicit_root<adouble>(p, residual_slope,
-                                                    {{u, dR_du}, {v, dR_dv}});
-      adouble y = odelia::record_with_derivatives<adouble>(7.5, {{root, dy_dp}});
+      adouble root;
+      const odelia::graft_report on_root = odelia::implicit_root<adouble>(
+          p, residual_slope, {{u, dR_du}, {v, dR_dv}}, root);
+      adouble y;
+      const odelia::graft_report on_y =
+          odelia::record_with_derivatives<adouble>(7.5, {{root, dy_dp}}, y);
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
       tape.computeAdjoints();
@@ -134,7 +141,11 @@ compile_implicit_value_interface <- function() {
           Rcpp::_["y"] = xad::value(y),
           Rcpp::_["y_identical"] = odelia::util::identical(xad::value(y), 7.5),
           Rcpp::_["d_du"] = xad::derivative(u),
-          Rcpp::_["d_dv"] = xad::derivative(v));
+          Rcpp::_["d_dv"] = xad::derivative(v),
+          Rcpp::_["root_whole"] = on_root.whole,
+          Rcpp::_["root_why"] = on_root.why,
+          Rcpp::_["y_whole"] = on_y.whole,
+          Rcpp::_["y_why"] = on_y.why);
     }
 
     // A residual that touches zero rather than crossing it, so dF/dy is zero at
@@ -162,11 +173,20 @@ testthat::test_that("record_with_derivatives returns the value and carries what 
   testthat::expect_equal(got$d_du, 2.0)
   testthat::expect_equal(got$d_dv, -3.5)
 
+  testthat::expect_true(got$whole)
+
   # A non-finite derivative poisons the VALUE and not only the tape, because NaN
-  # times zero is not a number. It is refused here, where the two are still
-  # separable; downstream they are one expression.
-  testthat::expect_error(record_with_derivatives_gradient(4.75, NaN, 1.0),
-                         "is not finite")
+  # times zero is not a number. So the rows are refused -- ALL of them, not the
+  # one that was bad: a value carrying part of its rows is a channel gone missing
+  # with every number still finite. The VALUE is handed back either way, because
+  # whether a caller can go on without the rows is the caller's to decide.
+  bad <- record_with_derivatives_gradient(4.75, NaN, 1.0)
+  testthat::expect_false(bad$whole)
+  testthat::expect_match(bad$why, "is not finite")
+  testthat::expect_true(bad$identical)
+  testthat::expect_equal(bad$at, 0L)
+  testthat::expect_equal(bad$d_du, 0.0)
+  testthat::expect_equal(bad$d_dv, 0.0)
 })
 
 testthat::test_that("implicit_value returns the operating point and its IFT derivative", {
@@ -226,20 +246,26 @@ testthat::test_that("implicit_root turns supplied slopes into the theorem's quot
   testthat::expect_equal(chained$d_dv, 4.25 * (3.5 / slope))
 })
 
-testthat::test_that("implicit_root stops where the theorem does not apply", {
+testthat::test_that("implicit_root reports where the theorem does not apply", {
   compile_implicit_value_interface()
 
   # dR/dp of zero is the fold: the quotient is garbage rather than large, and a
-  # non-finite one has nothing to divide by at all.
-  testthat::expect_error(implicit_root_gradient(1.0, 0.0, 2.0, -3.5, 1.0),
-                         "does not apply")
-  testthat::expect_error(implicit_root_gradient(1.0, NaN, 2.0, -3.5, 1.0),
-                         "does not apply")
+  # non-finite one has nothing to divide by at all. Reported rather than thrown,
+  # because the point is still the point and a consumer's other outputs may not
+  # read it -- a stop takes those too.
+  for (slope in c(0.0, NaN)) {
+    at_fold <- implicit_root_gradient(1.0, slope, 2.0, -3.5, 1.0)
+    testthat::expect_false(at_fold$root_whole)
+    testthat::expect_match(at_fold$root_why, "does not apply")
+    testthat::expect_true(at_fold$identical)
+    testthat::expect_equal(at_fold$d_du, 0.0)
+  }
 
   # And a supplied slope that is not finite is still refused by the graft it
   # records through, after the quotient rather than before it.
-  testthat::expect_error(implicit_root_gradient(1.0, -0.8, NaN, -3.5, 1.0),
-                         "is not finite")
+  bad_slope <- implicit_root_gradient(1.0, -0.8, NaN, -3.5, 1.0)
+  testthat::expect_false(bad_slope$root_whole)
+  testthat::expect_match(bad_slope$root_why, "is not finite")
 })
 
 testthat::test_that("implicit_value stops where the theorem does not apply", {
