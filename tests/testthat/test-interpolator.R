@@ -384,11 +384,12 @@ testthat::test_that("refinement stops where the fit resolves the target", {
 testthat::test_that("a curvature channel raises the order and is refused where absent", {
   compile_interpolator_interface()
 
-  # Both orders on the same knots. A cubic is determined by a value and a slope, a
-  # quintic by those plus a curvature, so the second converges as h^6 against h^4 --
-  # which is what lets a source with a closed-form second derivative reach a given
-  # error on far fewer knots. Measured here on a coarse grid so the two are apart by
-  # more than the arithmetic's own noise.
+  # Both orders on the same knots, read through the one polynomial the class writes
+  # for both. A cubic is determined by a value and a slope, a quintic by those plus a
+  # curvature, so the second converges as h^6 against h^4 -- which is what lets a
+  # source with a closed-form second derivative reach a given error on far fewer
+  # knots. Measured here on a coarse grid so the two are apart by more than the
+  # arithmetic's own noise.
   coarse <- seq(0, 4, length.out = 9)
   probe <- seq(0.02, 3.98, length.out = 401)
   got <- hermite_orders(coarse, probe)

@@ -30,18 +30,24 @@ namespace odelia {
 namespace interpolator {
 
 // A piecewise-polynomial interpolant built from a value AND a slope at each knot,
-// and at Order 5 a curvature as well.
+// and a curvature as well where the source has one.
 //
 // The value and the slope come from one polynomial, so a caller that needs both
 // gets a consistent pair: slope(u) is the exact derivative of what eval(u) returns.
 //
-// Order is how many derivatives the knot data carries, and it is set by the source
-// rather than chosen: a cubic takes a value and a slope, a quintic takes a
-// curvature too, and set_data has one signature for each so supplying the wrong
-// number of channels does not compile. A cubic converges as h^4 and a quintic as
-// h^6, so a source with a closed form for the second derivative reaches a given
-// error on far fewer knots -- but no rule here ever invents a channel, and a
-// quantity that is not twice differentiable must not ask for the quintic.
+// Order is how many coefficients a span holds, and it is set by which set_data a
+// caller reaches for: two channels build a cubic, three build a quintic, and there
+// is one polynomial written here for both. A cubic converges as h^4 and a quintic
+// as h^6, so a source with a closed form for the second derivative reaches a given
+// error on far fewer knots -- and a quantity that is not twice differentiable
+// simply has no third channel to supply.
+//
+// ⚠️ IT IS NOT A SETTING TO BE COLLAPSED, and the reason is the tape rather than the
+// clock. Reading every span as a quintic costs 19% of the read time, which is
+// arguable -- but a cubic's top two coefficients would then be ACTIVE zeros holding
+// tape slots, so each read would record two operations whose adjoints are
+// structurally zero. That doubles nothing and adds half again to the sparsest,
+// hottest recorded read in the model.
 //
 // Each span reads only its own two knots, so moving one knot changes the
 // interpolant only in the two spans that touch it.
@@ -58,9 +64,9 @@ namespace interpolator {
 template <typename S, int Order = 3>
 class hermite_interpolator {
   static_assert(Order == 3 || Order == 5,
-                "hermite_interpolator carries a value and a slope (Order 3) or "
-                "those plus a curvature (Order 5); there is no other knot data "
-                "any source in this library supplies exactly.");
+                "a span is determined by a value and a slope at each end, or by "
+                "those plus a curvature; there is no other knot data any source "
+                "in this library supplies exactly.");
 
 public:
   // Knot positions, strictly ascending; at least two are needed (one span).
@@ -95,9 +101,9 @@ public:
   // Values and dy/dx at the nodes already set, one entry each per node.
   void set_data(const std::vector<S>& y_, const std::vector<S>& dydx_) {
     static_assert(Order == 3,
-                  "a quintic read has a curvature channel, so it needs the second "
-                  "derivative at every knot; leaving it out would make the read "
-                  "quintic in name and cubic in fact.");
+                  "a quintic span has a curvature coefficient, so it needs the "
+                  "second derivative at every knot; leaving it out would make the "
+                  "read quintic in storage and cubic in fact.");
     begin_data(y_, dydx_);
     for (std::size_t k = 0; k < spans.size(); ++k) {
       const double h = x[k + 1] - x[k];
@@ -117,7 +123,7 @@ public:
   void set_data(const std::vector<S>& y_, const std::vector<S>& dydx_,
                 const std::vector<S>& d2ydx2_) {
     static_assert(Order == 5,
-                  "a cubic read is determined by the value and the slope, so a "
+                  "a cubic span is determined by the value and the slope, so a "
                   "curvature has nowhere to go and would be silently dropped.");
     begin_data(y_, dydx_);
     util::check_length(d2ydx2_.size(), x.size());
@@ -258,25 +264,22 @@ private:
     S y0{};
     S c[Order]{};  // the coefficient of t^(i+1), t the span-local coordinate
     double local(double u) const { return (u - x0) * inv_h; }
-    // Written out per order rather than looped. A Horner loop over Order terms is
-    // the same algebra and not the same arithmetic: it groups the derivative's
-    // integer factor as t * (k * c) where this groups it as (t * k) * c, which
-    // moves the last bit of every slope. The cubic's two lines are therefore the
-    // ones that were always here.
+    // Horner over the coefficients the order has, once for both orders. Order is a
+    // constant so both loops unroll, and the factors stay double: at an active
+    // scalar a converted int would register a variable and record an operation
+    // per term.
     S value(double t) const {
-      if constexpr (Order == 3) {
-        return y0 + t * (c[0] + t * (c[1] + t * c[2]));
-      } else {
-        return y0 + t * (c[0] + t * (c[1] + t * (c[2] + t * (c[3] + t * c[4]))));
-      }
+      S r = c[Order - 1];
+      for (int i = Order - 2; i >= 0; --i) r = c[i] + t * r;
+      return y0 + t * r;
     }
     S slope(double t) const {
-      if constexpr (Order == 3) {
-        return (c[0] + t * (2.0 * c[1] + t * 3.0 * c[2])) * inv_h;
-      } else {
-        return (c[0] + t * (2.0 * c[1] + t * (3.0 * c[2] +
-                t * (4.0 * c[3] + t * 5.0 * c[4])))) * inv_h;
-      }
+      S r = static_cast<double>(Order) * c[Order - 1];
+      for (int i = Order - 2; i >= 1; --i)
+        r = static_cast<double>(i + 1) * c[i] + t * r;
+      // c[0]'s factor is one, and writing it as one is a multiply the compiler
+      // keeps: it measured 8% of the read.
+      return (c[0] + t * r) * inv_h;
     }
   };
 
