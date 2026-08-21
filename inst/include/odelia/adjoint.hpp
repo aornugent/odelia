@@ -28,7 +28,7 @@ struct tape_guard {
 // active would not fire, because it is not foreign.
 class scratch_tape {
 public:
-  using tape_type = typename active_scalar<double>::tape_type;
+  using tape_type = adjoint_tape<double>;
 
   scratch_tape() = default;
   scratch_tape(const scratch_tape&) {}
@@ -72,15 +72,15 @@ private:
 // what the caller's accumulator expects, and skipping would make the result depend on
 // which seeds happen to vanish at this state.
 template <class F>
-std::size_t vector_jacobian_product(xad::adj<double>::tape_type& tape,
+std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
                                      const std::vector<double>& x,
                                      const std::vector<std::vector<double>>& output_adjoints,
                                      F&& f,
                                      std::vector<std::vector<double>>& input_adjoints) {
-    using ad = xad::adj<double>;
-    using ad_type = ad::active_type;
+    using ad_type = active_scalar<double>;
+    using tape_type = adjoint_tape<double>;
 
-    ad::tape_type* active = ad::tape_type::getActive();
+    tape_type* active = tape_type::getActive();
     if (active != nullptr && active != &tape) {
         util::stop("vector_jacobian_product: a tape is already active");
     }
@@ -102,7 +102,7 @@ std::size_t vector_jacobian_product(xad::adj<double>::tape_type& tape,
     }
 
     tape.activate();
-    tape_guard<ad::tape_type> guard{&tape};
+    tape_guard<tape_type> guard{&tape};
     tape.clearAll();
 
     std::vector<ad_type> x_active(x.begin(), x.end());
@@ -170,7 +170,7 @@ std::size_t vector_jacobian_product(xad::adj<double>::tape_type& tape,
 // them. Refused rather than documented.
 template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
-    xad::adj<double>::tape_type& tape, const System& system,
+    adjoint_tape<double>& tape, const System& system,
     const std::vector<double>& state,
     const std::vector<std::vector<double>>& output_adjoints, Evaluate&& evaluate,
     std::vector<std::vector<double>>& state_adjoint,
@@ -245,7 +245,7 @@ std::size_t state_and_parameter_adjoints(
 // copy cannot have.
 template <class System>
 std::size_t rates_adjoint(
-    xad::adj<double>::tape_type& tape, const System& system,
+    adjoint_tape<double>& tape, const System& system,
     const std::vector<double>& state, double time,
     const std::vector<std::vector<double>>& rate_adjoints,
     std::vector<std::vector<double>>& state_adjoint,

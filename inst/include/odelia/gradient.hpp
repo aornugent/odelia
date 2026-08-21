@@ -22,7 +22,7 @@ namespace ode {
 // picks up reused stack memory. The static_assert rejects that shape.
 template <typename F>
 double forward_derivative(double x, F&& f) {
-  using active_type = xad::fwd<double>::active_type;
+  using active_type = tangent_scalar<double>;
   static_assert(
       std::is_same_v<std::invoke_result_t<F&, active_type&>, active_type>,
       "f must return the active scalar itself, not a deduced expression template");
@@ -64,8 +64,8 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
     const DifferentiationTargets& targets,
     Functional&& functional
 ) {
-    using ad = xad::adj<double>;
-    using ad_type = ad::active_type;
+    using ad_type = active_scalar<double>;
+    using tape_type = adjoint_tape<double>;
     const std::size_t codomain = functional.codomain();
 
     if (targets.empty()) {
@@ -89,7 +89,7 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
     // The tape is created once and reused across the rows of this Jacobian, and
     // across calls, so an optimiser loop amortises it.
     if (!solver.tape) {
-        solver.tape = std::make_unique<ad::tape_type>(false);
+        solver.tape = std::make_unique<tape_type>(false);
     }
     // NOT cleared, and the asymmetry with adjoint.hpp is the point. There,
     // clearAll() is right because the System is lifted per recording, so every
@@ -106,7 +106,7 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
     // call while every number stays right. That is the trade the cached System
     // buys, and clearing here instead makes two consecutive gradients disagree.
     solver.tape->activate();
-    tape_guard<ad::tape_type> guard{solver.tape.get()};
+    tape_guard<tape_type> guard{solver.tape.get()};
 
     // computeJacobian registers the inputs, so it takes them as one flat vector
     // (ordered params-then-ics, matching `values`) and calls the forward callback.

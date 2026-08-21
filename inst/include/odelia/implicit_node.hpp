@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <vector>
 #include <XAD/XAD.hpp>
+#include <odelia/ode_interface.hpp>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
@@ -123,8 +124,11 @@ S implicit_value(double y_star, Equation&& F) {
     // own -- a nested implicit_value, say -- they must not be recorded here: their
     // values are discarded, so they would be orphan nodes on the active tape, and
     // probe x difference x nesting corrupts it. Stop recording across the probe;
-    // the one derivative-carrying evaluation of F is the graft below.
-    auto* tape = xad::Tape<double>::getActive();
+    // the one derivative-carrying evaluation of F is the graft below. The tape is
+    // asked for through the scalar alias: a tape named here directly is the right
+    // tape at one derivative width and, at any other, a different tape that
+    // reports nothing active -- so the probe would record and nothing would say so.
+    auto* tape = ode::adjoint_tape<double>::getActive();
     const bool was_recording = (tape != nullptr) && tape->isActive();
     if (was_recording) tape->deactivate();
     auto Fd = [&](double y) -> double { return util::to_passive(F(S(y))); };

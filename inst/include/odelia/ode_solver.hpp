@@ -345,7 +345,7 @@ public:
 
   // Reverse-mode tape, created on the first gradient and reused (only ever exercised
   // on the active solver).
-  std::unique_ptr<xad::Tape<double>> tape;
+  std::unique_ptr<ode::adjoint_tape<double>> tape;
 
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?

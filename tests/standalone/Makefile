@@ -13,7 +13,10 @@
 # has to link it. It is R-free too.
 
 CXX     ?= c++
-CXXSTD  ?= -std=c++17
+# The core uses concepts, so this must stay at C++20 or later: below it every
+# `concept` in the headers reads as `'concept' does not name a type` and the
+# hundred errors after that are cascade.
+CXXSTD  ?= -std=c++20
 OPT     ?= -O0
 WARN    ?= -Wall -Wextra -Wno-unused-parameter
 

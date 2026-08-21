@@ -27,6 +27,18 @@ using state_type = std::vector<typename System::value_type>;
 template <typename T = double>
 using active_scalar = typename xad::adj<T>::active_type;
 
+// The tape a reverse pass records on, reached from the scalar rather than named
+// beside it. Naming a tape independently of its scalar is right at one
+// derivative width and silently wrong at another -- both spellings compile, and
+// the one that queries the wrong tape reports no tape active and stops nothing.
+template <typename T = double>
+using adjoint_tape = typename active_scalar<T>::tape_type;
+
+// The scalar a forward-mode (tangent) pass runs on: one tangent layer above T,
+// carrying a directional derivative and no tape.
+template <typename T = double>
+using tangent_scalar = typename xad::fwd<T>::active_type;
+
 // A System that carries its own clock. One that does not is time homogeneous,
 // and the calls below hand it no time rather than refusing it.
 template <typename T>
