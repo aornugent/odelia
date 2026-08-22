@@ -208,6 +208,10 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
         // Between sweeps, or the previous seed's adjoints are still on the slots and
         // every row after the first is the running sum of the ones before it.
         tape.clearDerivatives();
+        // The adjoint slots, named directly rather than through an accessor of
+        // their own: this is the only place in the family that touches one, the
+        // scalar is fixed two statements above, and a name for two sites inside
+        // the function that owns the tape would say nothing the tape does not.
         for (std::size_t i = 0; i < y_active.size(); ++i) {
             xad::derivative(y_active[i]) = output_adjoints[m][i];
         }

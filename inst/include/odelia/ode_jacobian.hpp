@@ -37,7 +37,7 @@ class Jacobian {
 public:
   using value_type = typename System::value_type;
   // Tangent scalar: one forward-mode layer on top of the solver's scalar type.
-  using tangent_type = typename xad::fwd<value_type>::active_type;
+  using tangent_type = tangent_scalar<value_type>;
   using tangent_system_type = typename rebound_system<System, tangent_type>::type;
 
   // Whether the forward-AD Jacobian is instantiable and usable for this System.
@@ -72,12 +72,12 @@ public:
 
     J.assign(size * size, value_type(0.0));
     for (size_t col = 0; col < size; ++col) {
-      xad::derivative(v[col]) = 1.0;
+      seed_direction(v[col], 1.0);
       ode::derivs(tangent_system, v, dydt_ad, t);
       for (size_t row = 0; row < size; ++row) {
-        J[row * size + col] = xad::derivative(dydt_ad[row]);
+        J[row * size + col] = derivative_along(dydt_ad[row]);
       }
-      xad::derivative(v[col]) = 0.0;
+      seed_direction(v[col], 0.0);
     }
   }
 

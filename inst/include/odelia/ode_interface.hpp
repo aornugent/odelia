@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <vector>
 #include <odelia/ode_util.hpp>
+#include <odelia/tangent.hpp>
 
 #include <concepts>
 #include <iterator>
@@ -34,10 +35,6 @@ using active_scalar = typename xad::adj<T>::active_type;
 template <typename T = double>
 using adjoint_tape = typename active_scalar<T>::tape_type;
 
-// The scalar a forward-mode (tangent) pass runs on: one tangent layer above T,
-// carrying a directional derivative and no tape.
-template <typename T = double>
-using tangent_scalar = typename xad::fwd<T>::active_type;
 
 // A System that carries its own clock. One that does not is time homogeneous,
 // and the calls below hand it no time rather than refusing it.

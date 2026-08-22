@@ -28,9 +28,9 @@ double forward_derivative(double x, F&& f) {
       "f must return the active scalar itself, not a deduced expression template");
 
   active_type x_active = x;
-  xad::derivative(x_active) = 1.0;
+  seed_direction(x_active, 1.0);
   active_type y = f(x_active);
-  return xad::derivative(y);
+  return derivative_along(y);
 }
 
 // The inputs a gradient is taken with respect to: which parameters and which
@@ -128,7 +128,7 @@ std::pair<std::vector<double>, std::vector<std::vector<double>>> compute_jacobia
             solver.run();
             auto outputs = functional(solver);
             values.resize(outputs.size());
-            for (size_t i = 0; i < outputs.size(); ++i) values[i] = xad::value(outputs[i]);
+            for (size_t i = 0; i < outputs.size(); ++i) values[i] = util::to_passive(outputs[i]);
             return outputs;
         };
 
