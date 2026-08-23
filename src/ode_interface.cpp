@@ -18,7 +18,6 @@
 #include <odelia/drivers.hpp>
 #include <odelia/ode_control.hpp>
 #include <odelia/ode_solver.hpp>
-#include <odelia/gradient.hpp>
 #include <odelia/rcpp_interface_helpers.hpp>
 
 using namespace Rcpp;

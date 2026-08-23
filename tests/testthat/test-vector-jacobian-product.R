@@ -25,7 +25,7 @@ compile_vjp_interface <- function() {
       #include <cstddef>
       #include <vector>
       #include <XAD/XAD.hpp>
-      #include <odelia/gradient.hpp>
+      #include <odelia/adjoint.hpp>
 
       // A four-input, three-output block, small enough to difference centrally.
       template <class S>

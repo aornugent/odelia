@@ -2,6 +2,7 @@
 #ifndef ODELIA_TANGENT_HPP_
 #define ODELIA_TANGENT_HPP_
 
+#include <type_traits>
 #include <XAD/XAD.hpp>
 
 // The forward-mode vocabulary, apart from the reverse-mode one because a
@@ -44,6 +45,26 @@ template <typename S>
   requires CarriesDirection<S>
 typename S::derivative_type derivative_along(const S& x) {
   return xad::derivative(x);
+}
+
+// Forward-mode derivative of a one-input scalar function at a point. `f` is
+// instantiated at the active scalar inside, so only doubles cross in and out.
+//
+// `f` must declare its return type. XAD's operators return expression templates
+// holding references to their operands, so a deduced return type hands back
+// references to temporaries that die on return, and reading the derivative then
+// picks up reused stack memory. The static_assert rejects that shape.
+template <typename F>
+double forward_derivative(double x, F&& f) {
+  using active_type = tangent_scalar<double>;
+  static_assert(
+      std::is_same_v<std::invoke_result_t<F&, active_type&>, active_type>,
+      "f must return the active scalar itself, not a deduced expression template");
+
+  active_type x_active = x;
+  seed_direction(x_active, 1.0);
+  active_type y = f(x_active);
+  return derivative_along(y);
 }
 
 }

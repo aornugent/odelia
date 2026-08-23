@@ -11,7 +11,7 @@
 #include <Rcpp.h>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_solver.hpp>
-#include <odelia/gradient.hpp>
+#include <odelia/calibration.hpp>
 #include <odelia/solver_interface.hpp>
 #include <examples/lorenz_system.hpp>
 

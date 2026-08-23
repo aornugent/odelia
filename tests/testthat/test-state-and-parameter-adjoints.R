@@ -20,7 +20,7 @@ compile_sap_interface <- function() {
     #include <Rcpp.h>
     #include <vector>
     #include <XAD/XAD.hpp>
-    #include <odelia/gradient.hpp>
+    #include <odelia/adjoint.hpp>
 
     using adouble = odelia::ode::active_scalar<double>;
 

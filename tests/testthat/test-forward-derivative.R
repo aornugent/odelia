@@ -9,7 +9,7 @@ compile_forward_derivative_interface <- function() {
     // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>
     #include <cmath>
-    #include <odelia/gradient.hpp>
+    #include <odelia/tangent.hpp>
 
     // [[Rcpp::export]]
     double fd_cubic(double x, double a, double b) {
