@@ -58,7 +58,7 @@ namespace interpolator {
 // calls set_nodes once and set_data per stage.
 //
 // eval takes either a double position or an active one; at an active position the
-// value is read at its passive part and the query's own derivative is grafted on
+// value is read at its passive part and the query's own derivative is carried on
 // through the slope, so d(value)/d(u) is recorded. slope and value_and_slope take a
 // double, because a query's derivative reaches a value and not a slope.
 template <typename S, int Order = 3>
@@ -197,12 +197,12 @@ public:
     if constexpr (std::is_same_v<U, double>) {
       return value_at(up);
     } else {
-      // One span load for both halves. The graft needs the slope too, and taking
+      // One span load for both halves. The with_query_derivative needs the slope too, and taking
       // them separately resolves the same position twice on the read this class
       // exists for.
       S value, dydu;
       value_and_slope(up, value, dydu);
-      return graft(value, dydu, u, up);
+      return with_query_derivative(value, dydu, u, up);
     }
   }
 
@@ -212,7 +212,7 @@ public:
   // dy/du at u -- the exact derivative of the polynomial eval() uses, as a value.
   //
   // The position is read passively and an active query is refused rather than
-  // answered with a silent zero. Grafting the query's derivative here would need
+  // answered with a silent zero. Carrying the query's derivative here would need
   // the span's second derivative, and that number is a derivative of the fit: the
   // read is C1 and not C2, so a curvature taken from it describes the interpolant
   // rather than what was interpolated.
@@ -230,7 +230,7 @@ public:
   // many positions pays one lookup each rather than two.
   //
   // Passive query only, for the reason slope() is: the pair's second half has no
-  // route for the query's derivative, so grafting it onto the first half alone
+  // route for the query's derivative, so carrying it onto the first half alone
   // would answer half the query and leave the other half reading exactly zero.
   template <typename U>
   void value_and_slope(const U& u, S& value, S& dydu) const {
@@ -296,7 +296,7 @@ private:
   // return type here would hand back an XAD expression template referencing the
   // temporaries of this return statement, which die on return.
   template <typename U>
-  static S graft(const S& value, const S& dydu, const U& u, double up) {
+  static S with_query_derivative(const S& value, const S& dydu, const U& u, double up) {
     static_assert(std::is_constructible_v<S, U>,
                   "hermite_interpolator: reading at an active position needs the "
                   "knot values on the same scalar, so the derivative of the query "

@@ -21,11 +21,11 @@ struct input_and_derivative {
   double derivative;
 };
 
-// What a graft could not record, beside the value it wrote. A row that cannot be
+// What a record could not record, beside the value it wrote. A row that cannot be
 // recorded is not an error here: the value is still the value, and whether a
 // consumer can go on without the row is the consumer's to decide -- one output's
 // rows can go missing while another's survive, and a stop takes both.
-struct graft_report {
+struct record_report {
   bool whole = true;
   // Which input's row is missing, and what was wrong with it. Meaningless where
   // `whole`.
@@ -52,7 +52,7 @@ struct graft_report {
 // The report is the return, so a caller cannot take the number without being
 // handed the reading of it.
 template <class S>
-[[nodiscard]] graft_report record_with_derivatives(
+[[nodiscard]] record_report record_with_derivatives(
     double value, const std::vector<input_and_derivative<S>>& against, S& into) {
   for (std::size_t i = 0; i < against.size(); ++i) {
     // Either half being non-finite poisons the VALUE and not only what is
@@ -99,13 +99,13 @@ template <class S>
 // this, which is the envelope theorem written as an omission rather than as a
 // term that has to come out to zero.
 template <class S>
-[[nodiscard]] graft_report implicit_root(
+[[nodiscard]] record_report implicit_root(
     double p, double residual_slope,
     std::vector<input_and_derivative<S>> against, S& into) {
   // Zero is the only threshold available: how small a slope is too small depends
   // on R's units, which the caller has and this does not. At a fold it
   // approaches zero and the quotient is garbage rather than large. Reported
-  // rather than stopped, for the reason the graft's own rows are: the point is
+  // rather than stopped, for the reason the record's own rows are: the point is
   // still the point, and a consumer whose other outputs do not read it can carry
   // on -- where a stop takes those too.
   if (!util::is_finite(residual_slope) || residual_slope == 0.0) {
@@ -131,7 +131,7 @@ template <class S>
 // double central difference at y*. The returned value is exactly y* bit for bit, so
 // a quantity no active parameter reaches introduces no shift, and a plain-double S
 // returns y* with nothing recorded. Reverse, forward and nested forward-over-reverse
-// scalars all thread dy*/dp through the graft below.
+// scalars all thread dy*/dp through the record below.
 //
 // dF/dy is what the theorem divides by, so a non-invertible operating point stops
 // here: at a fold it approaches zero and the quotient is garbage rather than large.
@@ -155,7 +155,7 @@ S implicit_value(double y_star, Equation&& F) {
     // own -- a nested implicit_value, say -- they must not be recorded here: their
     // values are discarded, so they would be orphan nodes on the active tape, and
     // probe x difference x nesting corrupts it. Stop recording across the probe;
-    // the one derivative-carrying evaluation of F is the graft below. The tape is
+    // the one derivative-carrying evaluation of F is the record below. The tape is
     // asked for through the scalar alias: a tape named here directly is the right
     // tape at one derivative width and, at any other, a different tape that
     // reports nothing active -- so the probe would record and nothing would say so.
@@ -182,7 +182,7 @@ S implicit_value(double y_star, Equation&& F) {
     // point: this IS the value the equation defines, so a caller handed y* with
     // no derivative has a structural zero and no way to know it. The two above
     // return a value a consumer already has another use for.
-    const graft_report report =
+    const record_report report =
         record_with_derivatives<S>(y_star, {{corr, -1.0}}, out);
     if (!report.whole) {
       util::stop("implicit_value: " + report.why);

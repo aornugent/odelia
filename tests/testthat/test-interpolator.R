@@ -300,7 +300,7 @@ testthat::test_that("setting the nodes once and the data per stage moves no valu
 testthat::test_that("a read at an active position records the derivative of the query", {
   compile_interpolator_interface()
 
-  # Without the graft the span is indexed at the passive position and nothing records
+  # Without the with_query_derivative the span is indexed at the passive position and nothing records
   # the query, so this adjoint would be exactly zero.
   h <- 1e-6
   for (z in knot_sets) {

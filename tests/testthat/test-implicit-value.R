@@ -98,7 +98,7 @@ compile_implicit_value_interface <- function() {
       tape.newRecording();
 
       adouble y;
-      const odelia::graft_report report =
+      const odelia::record_report report =
           odelia::record_with_derivatives<adouble>(value, {{u, du}, {v, dv}}, y);
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
@@ -127,10 +127,10 @@ compile_implicit_value_interface <- function() {
       tape.newRecording();
 
       adouble root;
-      const odelia::graft_report on_root = odelia::implicit_root<adouble>(
+      const odelia::record_report on_root = odelia::implicit_root<adouble>(
           p, residual_slope, {{u, dR_du}, {v, dR_dv}}, root);
       adouble y;
-      const odelia::graft_report on_y =
+      const odelia::record_report on_y =
           odelia::record_with_derivatives<adouble>(7.5, {{root, dy_dp}}, y);
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
@@ -261,7 +261,7 @@ testthat::test_that("implicit_root reports where the theorem does not apply", {
     testthat::expect_equal(at_fold$d_du, 0.0)
   }
 
-  # And a supplied slope that is not finite is still refused by the graft it
+  # And a supplied slope that is not finite is still refused by the record it
   # records through, after the quotient rather than before it.
   bad_slope <- implicit_root_gradient(1.0, -0.8, NaN, -3.5, 1.0)
   testthat::expect_false(bad_slope$root_whole)
