@@ -249,7 +249,6 @@ public:
   // it. Set before the run, because the state the run starts from is recorded as it
   // begins.
   void set_keep_states(bool keep) { solver.set_keep_states(keep); }
-  bool keeps_states() const { return solver.keeps_states(); }
   // The record the run kept: one row per accepted step, each carrying its time,
   // the size that reached it and the state there. What a sweep reads, and the
   // only place it reads them from.

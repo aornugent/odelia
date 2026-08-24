@@ -78,7 +78,6 @@ public:
   // caller's decision: a run whose gradient will be taken needs the states, and a
   // run that is only integrating does not.
   void set_keep_states(bool keep) { keep_states_ = keep; }
-  bool keeps_states() const { return keep_states_; }
   // The record itself, which is what a sweep reads. One row per accepted step,
   // carrying the time, the size that reached it and the state there -- so a
   // caller cannot pair one run's state with another run's size, and cannot be
