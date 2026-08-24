@@ -6,6 +6,7 @@
 #include <XAD/Tape.hpp>
 #include <cmath>
 #include <memory>
+#include <span>
 #include <type_traits>
 
 namespace odelia {
@@ -252,12 +253,18 @@ public:
   const ode::state_type<System>& recorded_state(std::size_t k) const {
     return solver.recorded_state(k);
   }
+  // The record the run kept: one row per accepted step, each carrying its time,
+  // the size that reached it and the state there. What a sweep reads, and the
+  // only place it reads them from.
+  std::span<const ode::step_record<System>> recording() const {
+    return solver.recording();
+  }
   std::size_t recorded_steps() const { return solver.recorded_steps(); }
 
   // The read-only surface behind the "forgot to record" guard: whether an adaptive
   // pass has resolved a schedule on this solver, and what it is. The schedule is the
   // grid a replay-gradient advances over (advance_fixed).
-  bool has_recording() const { return times().size() > 1; }
+  bool has_recording() const { return recorded_steps() > 1; }
 
   // Carry lambda back over recorded steps k_last down to k_first + 1, so on return
   // lambda is the adjoint of states[k_first]. states[k] is the state the run held
@@ -273,20 +280,17 @@ public:
   // recorded once however many are carried, and swept per seed. That is where the
   // saving is, because a recording is a model evaluation and a sweep is not. A
   // caller wanting a single row passes a batch of one.
-  void solve_adjoint(const std::vector<ode::state_type<System> >& states,
+  void solve_adjoint(std::span<const ode::step_record<System>> rec,
                      ode::row_batch& lambda,
                      ode::row_batch& parameter_adjoint,
                      size_t k_first, size_t k_last)
   {
-    if (!has_recording()) {
+    if (rec.size() < 2) {
       util::stop("no recorded steps to sweep; run the adaptive pass first");
     }
     if (lambda.empty()) {
       util::stop("solve_adjoint: needs at least one seed");
     }
-    const std::vector<double> t = times();
-    const std::vector<double> h = step_sizes();
-    util::check_length(states.size(), t.size());
     // Named, because a bare length mismatch here is read as the caller's and says
     // nothing about the seam it is really about: a batch carried at one width
     // against a System left at another. One width for every row, so this is asked
@@ -298,14 +302,15 @@ public:
                  util::to_string(static_cast<int>(system.ode_size())) +
                  ", so the two are not at the same widening");
     }
-    if (k_first >= k_last || k_last >= t.size()) {
+    if (k_first >= k_last || k_last >= rec.size()) {
       util::stop("the adjoint segment is not a range of recorded steps");
     }
     ode::row_batch lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
-      util::check_length(states[k - 1].size(), system.ode_size());
-      solver.step_adjoint(system, k, t[k - 1], h[k], states[k - 1], lambda,
-                          lambda_in, parameter_adjoint);
+      util::check_length(rec[k - 1].state.size(), system.ode_size());
+      solver.step_adjoint(system, k, rec[k - 1].time, rec[k].step_size,
+                          rec[k - 1].state, lambda, lambda_in,
+                          parameter_adjoint);
       lambda = std::move(lambda_in);
     }
   }

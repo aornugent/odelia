@@ -11,6 +11,7 @@
 #include <limits>
 #include <string>
 #include <utility>
+#include <span>
 #include <vector>
 #include <cstddef>
 
@@ -78,9 +79,22 @@ public:
   // run that is only integrating does not.
   void set_keep_states(bool keep) { keep_states_ = keep; }
   bool keeps_states() const { return keep_states_; }
-  // What the run held at accepted step k, out of the record it shares with the
-  // time and the size that reached it -- so a caller cannot pair one run's state
-  // with another run's size.
+  // The record itself, which is what a sweep reads. One row per accepted step,
+  // carrying the time, the size that reached it and the state there -- so a
+  // caller cannot pair one run's state with another run's size, and cannot be
+  // handed a time without the state it belongs to.
+  //
+  // Refused where the run was not asked to keep states, because a row without
+  // one is not a row a sweep can use and returning it would move the check to
+  // every caller.
+  std::span<const step_record<System>> recording() const {
+    if (!keep_states_) {
+      util::stop("recording(): this run was not asked to keep its states, so "
+                 "there is no record to sweep -- set_keep_states(true) before "
+                 "the run");
+    }
+    return {prev_steps.data(), prev_steps.size()};
+  }
   const state_type& recorded_state(std::size_t k) const {
     return prev_steps.at(k).state;
   }
@@ -163,12 +177,7 @@ private:
   // from a different run, and nothing says so -- so the store that held the states
   // had to be emptied as it was read, and every consumer after the first repeated
   // the whole run to refill it.
-  struct step_record {
-    double time;
-    double step_size;
-    state_type state;   // empty unless this run was asked to keep them
-  };
-  std::vector<step_record> prev_steps;
+  std::vector<step_record<System>> prev_steps;
   // Whether to keep the states. The caller's: a run whose gradient will be taken
   // needs them and a run that is only integrating does not.
   bool keep_states_ = false;
@@ -227,7 +236,7 @@ void SolverInternal<System>::set_state_from_system(System& system) {
 template <class System>
 void SolverInternal<System>::push_step(System& system, double time_,
                                        double step_size) {
-  step_record record{time_, step_size, state_type()};
+  step_record<System> record{{time_, step_size}, state_type()};
   if (keep_states_) {
     record.state.resize(system.ode_size());
     system.ode_state(record.state.begin());
@@ -239,7 +248,7 @@ template <class System>
 std::vector<double> SolverInternal<System>::get_times() const {
   std::vector<double> ret;
   ret.reserve(prev_steps.size());
-  for (const step_record& s : prev_steps) {
+  for (const step_record<System>& s : prev_steps) {
     ret.push_back(s.time);
   }
   return ret;
@@ -251,7 +260,7 @@ template <class System>
 std::vector<double> SolverInternal<System>::get_step_sizes() const {
   std::vector<double> ret;
   ret.reserve(prev_steps.size());
-  for (const step_record& s : prev_steps) {
+  for (const step_record<System>& s : prev_steps) {
     ret.push_back(s.step_size);
   }
   return ret;
@@ -586,7 +595,8 @@ void SolverInternal<System>::set_time(double t) {
     // No step reached the initial time, so it records no size. The state is
     // recorded by set_state_from_system, which calls this and then holds it.
     prev_steps.push_back(
-      step_record{time, std::numeric_limits<double>::quiet_NaN(), state_type()});
+      step_record<System>{{time, std::numeric_limits<double>::quiet_NaN()},
+                          state_type()});
   }
 }
 

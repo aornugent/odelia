@@ -128,6 +128,16 @@ struct recorded_step {
   double step_size;
 };
 
+// One row of a recording: the schedule row a replay would take, and the state the
+// run held there. A recording row IS a schedule row plus its state, so it derives
+// rather than repeating the two fields -- written out separately, they were two
+// structs differing by one member, and pairing a time from one container with a
+// state from another was a thing that compiled.
+template <typename System>
+struct step_record : recorded_step {
+  state_type<System> state;
+};
+
 // One insertion the run made: what it added, the recorded step it followed, and
 // that step's recorded time. `what` is the model's own and is never read here.
 //

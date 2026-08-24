@@ -166,24 +166,23 @@ compile_recording_interface <- function() {
       }
 
       // Replay the recorded sizes so a state is collected at each accepted step.
+      // Asked to keep its states, so the sweep reads the record the replay
+      // itself kept -- rather than copying a whole System per step out of the
+      // history to pull one state vector back out of it.
       odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
+      replay.set_keep_states(true);
       replay.set_state(y0, 0.0);
       replay.advance_recorded(recording);
-      std::vector<std::vector<double> > states;
-      for (size_t i = 0; i < replay.get_history_size(); ++i) {
-        std::vector<double> s(y0.size());
-        replay.get_history_step(i).ode_state(s.begin());
-        states.push_back(s);
-      }
+      const auto rec = replay.recording();
 
       odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
       replay.clear_recorded_rates();
-      replay.solve_adjoint(states, lambda, rows, 0, states.size() - 1);
+      replay.solve_adjoint(rec, lambda, rows, 0, rec.size() - 1);
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
       return Rcpp::List::create(Rcpp::_["n_steps"] = (int) h.size(),
-                                Rcpp::_["y_end"] = states.back(),
+                                Rcpp::_["y_end"] = rec.back().state,
                                 Rcpp::_["lambda"] = lambda.to_rows()[0],
                                 Rcpp::_["parameter_adjoint"] = parameter_adjoint,
                                 Rcpp::_["recorded_rates"] =
@@ -211,21 +210,20 @@ compile_recording_interface <- function() {
         recording.push_back({t_rec[i], h[i]});
       }
 
+      // Asked to keep its states, so the sweep reads the record the replay
+      // itself kept -- rather than copying a whole System per step out of the
+      // history to pull one state vector back out of it.
       odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
+      replay.set_keep_states(true);
       replay.set_state(y0, 0.0);
       replay.advance_recorded(recording);
-      std::vector<std::vector<double> > states;
-      for (size_t i = 0; i < replay.get_history_size(); ++i) {
-        std::vector<double> s(y0.size());
-        replay.get_history_step(i).ode_state(s.begin());
-        states.push_back(s);
-      }
+      const auto rec = replay.recording();
 
       odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
-      replay.solve_adjoint(states, lambda, rows, (size_t) split,
-                           states.size() - 1);
-      replay.solve_adjoint(states, lambda, rows, 0, (size_t) split);
+      replay.solve_adjoint(rec, lambda, rows, (size_t) split,
+                           rec.size() - 1);
+      replay.solve_adjoint(rec, lambda, rows, 0, (size_t) split);
       return lambda.to_rows()[0];
     }
 
