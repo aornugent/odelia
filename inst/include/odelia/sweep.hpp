@@ -19,45 +19,41 @@
 namespace odelia {
 namespace ode {
 
-// A range of the recording over which the state has one width.
-struct state_segment {
-  std::size_t first, last;
-};
-
-// The recording cut into one range per width, lowest first, by reading the widths
-// the run recorded. An insertion is the only thing that changes a state's width
-// during a run -- a System narrows only when a walk reconciles it to a recorded
-// step -- so a width that grows between two rows is where one happened, and the
-// record says so without being told.
+// The steps an insertion follows: where the width the run recorded grows. An
+// insertion is the only thing that widens a state during a run -- a System
+// narrows only when a walk reconciles it to a recorded step -- so the record
+// says where they happened without being told.
 //
-// A width that SHRINKS is refused. That is the check this shape exists for, and
-// it is the one an inferred boundary can still fail: the ranges have to partition
-// a recording whose width only ever climbs, or a sweep is transposing something
-// the run did not do.
+// A width that SHRINKS is refused. That is the check worth having here, and the
+// one an inferred boundary can still fail: the widths have to climb, or a sweep
+// is transposing something the run did not do.
+//
+// A recording of m insertions therefore has m + 1 pieces of constant width, and
+// a piece is `[first, last]` with first = steps[j - 1] or 0 and last = steps[j]
+// or the last recorded step. Derived where it is used rather than built into a
+// container: two subtractions read more easily than a vector of pairs whose
+// endpoints are shared between neighbours.
 template <class Record>
-std::vector<state_segment> state_segments(std::span<const Record> rec) {
+std::vector<std::size_t> insertion_steps(std::span<const Record> rec) {
     if (rec.size() < 2) {
-        util::stop("state_segments: no recorded steps to sweep");
+        util::stop("insertion_steps: no recorded steps to sweep");
     }
-    std::vector<state_segment> ret;
-    std::size_t first = 0;
+    std::vector<std::size_t> ret;
     for (std::size_t k = 0; k + 1 < rec.size(); ++k) {
         const std::size_t here = rec[k].state.size();
         const std::size_t above = rec[k + 1].state.size();
         if (above < here) {
-            util::stop("state_segments: the state is " +
+            util::stop("insertion_steps: the state is " +
                        util::to_string(static_cast<int>(above)) +
                        " wide at step " +
-                       util::to_string(static_cast<int>(k + 1)) +
-                       " against " + util::to_string(static_cast<int>(here)) +
+                       util::to_string(static_cast<int>(k + 1)) + " against " +
+                       util::to_string(static_cast<int>(here)) +
                        " below it, and a run does not narrow");
         }
         if (above > here) {
-            ret.push_back({first, k});
-            first = k;
+            ret.push_back(k);
         }
     }
-    ret.push_back({first, rec.size() - 1});
     return ret;
 }
 
@@ -100,8 +96,8 @@ double state_at_segment(System& system,
                         std::span<const step_record<System>> rec,
                         std::size_t segment,
                         std::vector<double>& base, std::size_t& start) {
-    const std::vector<state_segment> segments = state_segments(rec);
-    if (segment >= segments.size()) {
+    const std::vector<std::size_t> steps = insertion_steps(rec);
+    if (segment > steps.size()) {
         util::stop("state_at_segment: the recording has no such segment");
     }
     if (segment == 0) {
@@ -114,7 +110,7 @@ double state_at_segment(System& system,
     // The state between an insertion and the step after it, which no record
     // holds. It is the insertion's own map at the state below it, so the width
     // is the one recorded at the step above -- checked by asking for it.
-    start = segments[segment].first;
+    start = steps[segment - 1];
     if (start + 1 >= rec.size()) {
         util::stop("state_at_segment: the insertion after step " +
                    util::to_string(static_cast<int>(start)) +
@@ -147,15 +143,23 @@ std::size_t solve_adjoint_over_insertions(
     using scalar = active_scalar<double>;
     using record = step_record<typename Solver::system_type>;
     auto& system = solver.get_system_ref();
-    const std::vector<state_segment> segments = state_segments(rec);
+    const std::vector<std::size_t> steps = insertion_steps(rec);
+    // One piece per width, lowest first: piece j runs from the insertion below
+    // it to the one above, and the outermost two reach the recording's ends.
+    const std::size_t n_piece = steps.size() + 1;
+    auto piece_first = [&](std::size_t j) -> std::size_t {
+        return j == 0 ? 0 : steps[j - 1];
+    };
+    auto piece_last = [&](std::size_t j) -> std::size_t {
+        return j < steps.size() ? steps[j] : rec.size() - 1;
+    };
 
     // The state each insertion produced, which the sweep starting inside a
-    // segment runs from and no record holds. It is the insertion's own map,
+    // piece runs from and no record holds. It is the insertion's own map,
     // evaluated here at the passive scalar for its value and transposed below
     // for its rows -- one function, so the two cannot disagree.
     std::vector<record> with_insertions(rec.begin(), rec.end());
-    for (std::size_t j = 1; j < segments.size(); ++j) {
-        const std::size_t at = segments[j].first;
+    for (const std::size_t at : steps) {
         be_at_step(system, rec, at);
         system.inserted_state(rec[at].time, rec[at].state.begin(),
                              with_insertions[at].state);
@@ -172,7 +176,7 @@ std::size_t solve_adjoint_over_insertions(
     // regrows it.
     // ⚠️ THE WIDTH ON EXIT IS A PROMISE, AND A THROW IS AN EXIT. The descent
     // below starts at the run's own width and narrows as it goes, so a sweep
-    // abandoned in the highest segment leaves the System at its widest -- where
+    // abandoned in the highest piece leaves the System at its widest -- where
     // every caller's tail widens back from the lowest and reads the mismatch as a
     // length error one call later, naming neither this walk nor what refused.
     struct restore_on_exit {
@@ -193,36 +197,36 @@ std::size_t solve_adjoint_over_insertions(
 
     std::size_t swept = 0;
     typename scalar::tape_type tape(false);
-    for (std::size_t j = segments.size(); j-- > 0;) {
-        const state_segment& segment = segments[j];
-        // Stopped and resumed at each requested step inside this segment, highest
+    for (std::size_t j = n_piece; j-- > 0;) {
+        const std::size_t lower = piece_first(j), upper_end = piece_last(j);
+        // Stopped and resumed at each requested step inside this piece, highest
         // first, so the pieces compose in the order the whole sweep would take.
         std::vector<std::size_t> cuts;
         for (const std::size_t s : extra_splits) {
-            if (s > segment.first && s < segment.last) {
+            if (s > lower && s < upper_end) {
                 cuts.push_back(s);
             }
         }
         std::sort(cuts.begin(), cuts.end());
-        std::size_t upper = segment.last;
+        std::size_t upper = upper_end;
         for (std::size_t c = cuts.size(); c-- > 0;) {
             solver.solve_adjoint(sweep_rec, lambda, parameter_adjoint, cuts[c],
                                  upper);
             upper = cuts[c];
             ++swept;
         }
-        // A widening at the first recorded step leaves the lowest segment with no
-        // step in it, which is what a run from an empty state gives.
-        if (segment.first < upper) {
-            solver.solve_adjoint(sweep_rec, lambda, parameter_adjoint,
-                                 segment.first, upper);
+        // An insertion at the first recorded step leaves the lowest piece with
+        // no step in it, which is what a run from an empty state gives.
+        if (lower < upper) {
+            solver.solve_adjoint(sweep_rec, lambda, parameter_adjoint, lower,
+                                 upper);
             ++swept;
         }
         if (j == 0) {
             break;
         }
 
-        const std::size_t at = segments[j].first;
+        const std::size_t at = steps[j - 1];
         be_at_step(system, rec, at);
         const double when = rec[at].time;
         auto insert = [&](auto& active_system,
@@ -238,7 +242,7 @@ std::size_t solve_adjoint_over_insertions(
     return swept;
 }
 
-// Step `forward` over the recording's segments from `from_segment` on, at the
+// Step `forward` over the recording's pieces from `from_piece` on, at the
 // sizes the run took, widening where the run widened. `first` is the recorded
 // step the walk begins at, which the caller has already put the System on. The
 // schedule is read off the recording, because a recording row is a schedule row
@@ -250,26 +254,32 @@ std::size_t solve_adjoint_over_insertions(
 // the model does not contain.
 template <class Solver, class Record>
 void advance_over_insertions(
-    Solver& forward, std::span<const Record> rec, std::size_t from_segment,
+    Solver& forward, std::span<const Record> rec, std::size_t from_piece,
     std::size_t first) {
-    const std::vector<state_segment> segments = state_segments(rec);
-    if (from_segment >= segments.size()) {
-        util::stop("advance_over_insertions: the recording has no such segment");
+    const std::vector<std::size_t> steps = insertion_steps(rec);
+    // One piece per width, lowest first: piece j runs from the insertion below
+    // it to the one above, and the outermost two reach the recording's ends.
+    const std::size_t n_piece = steps.size() + 1;
+    auto piece_last = [&](std::size_t j) -> std::size_t {
+        return j < steps.size() ? steps[j] : rec.size() - 1;
+    };
+    if (from_piece >= n_piece) {
+        util::stop("advance_over_insertions: the recording has no such piece");
     }
-    for (std::size_t j = from_segment; j < segments.size(); ++j) {
+    for (std::size_t j = from_piece; j < n_piece; ++j) {
         // The first entry is the start no step reached, which is how a recorded
         // run reads back.
-        std::vector<recorded_step> segment_steps{
+        std::vector<recorded_step> piece_steps{
             {forward.time(), std::numeric_limits<double>::quiet_NaN()}};
-        for (std::size_t k = first + 1; k <= segments[j].last; ++k) {
+        for (std::size_t k = first + 1; k <= piece_last(j); ++k) {
             // A recording row is a schedule row plus its state, so the schedule
             // is read off it rather than built beside it.
-            segment_steps.push_back(rec[k]);
+            piece_steps.push_back(rec[k]);
         }
-        if (segment_steps.size() > 1) {
-            forward.advance_recorded(segment_steps);
+        if (piece_steps.size() > 1) {
+            forward.advance_recorded(piece_steps);
         }
-        if (j + 1 < segments.size()) {
+        if (j + 1 < n_piece) {
             // The same map the sweep transposes, so a tangent traverses exactly
             // the function under test rather than a second spelling of it.
             auto& sys = forward.get_system_ref();
@@ -277,9 +287,9 @@ void advance_over_insertions(
             std::vector<value_type> before(sys.ode_size());
             sys.ode_state(before.begin());
             std::vector<value_type> after;
-            sys.inserted_state(rec[segments[j].last].time, before.begin(), after);
+            sys.inserted_state(rec[piece_last(j)].time, before.begin(), after);
             forward.set_state_from_system();
-            first = segments[j].last;
+            first = piece_last(j);
         }
     }
 }
