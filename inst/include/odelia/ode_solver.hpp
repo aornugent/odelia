@@ -250,9 +250,6 @@ public:
   // begins.
   void set_keep_states(bool keep) { solver.set_keep_states(keep); }
   bool keeps_states() const { return solver.keeps_states(); }
-  const ode::state_type<System>& recorded_state(std::size_t k) const {
-    return solver.recorded_state(k);
-  }
   // The record the run kept: one row per accepted step, each carrying its time,
   // the size that reached it and the state there. What a sweep reads, and the
   // only place it reads them from.
@@ -260,11 +257,6 @@ public:
     return solver.recording();
   }
   std::size_t recorded_steps() const { return solver.recorded_steps(); }
-
-  // The read-only surface behind the "forgot to record" guard: whether an adaptive
-  // pass has resolved a schedule on this solver, and what it is. The schedule is the
-  // grid a replay-gradient advances over (advance_fixed).
-  bool has_recording() const { return recorded_steps() > 1; }
 
   // Carry lambda back over recorded steps k_last down to k_first + 1, so on return
   // lambda is the adjoint of states[k_first]. states[k] is the state the run held

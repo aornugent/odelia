@@ -95,9 +95,6 @@ public:
     }
     return {prev_steps.data(), prev_steps.size()};
   }
-  const state_type& recorded_state(std::size_t k) const {
-    return prev_steps.at(k).state;
-  }
   std::size_t recorded_steps() const { return prev_steps.size(); }
 
   // One accepted step, into the record: the time it reached, the size that

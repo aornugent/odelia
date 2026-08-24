@@ -114,7 +114,11 @@ int Canopy_record(SEXP solver_xp, double Tmax) {
 // [[Rcpp::export]]
 Rcpp::List Canopy_replay_gradient(SEXP solver_xp, bool reuse_light = false) {
   Rcpp::XPtr<ode::Solver<SystemType>> d(solver_xp);
-  if (!d->has_recording()) {
+  // Guarded here rather than by the solver, because it is this call that knows
+  // which recorder to name. A one-entry schedule replays nothing and returns a
+  // gradient of it, which is the plausible number a missing record would
+  // otherwise produce.
+  if (d->recorded_steps() < 2) {
     util::stop("Canopy_replay_gradient: call Canopy_record() first");
   }
   auto& rec = d->get_system_ref();

@@ -165,10 +165,9 @@ compile_recording_interface <- function() {
         recording.push_back({t_rec[i], h[i]});
       }
 
-      // Replay the recorded sizes so a state is collected at each accepted step.
-      // Asked to keep its states, so the sweep reads the record the replay
-      // itself kept -- rather than copying a whole System per step out of the
-      // history to pull one state vector back out of it.
+      // Replays the recorded sizes, keeping its states, so the sweep reads the
+      // record the replay itself kept -- rather than copying a whole System per
+      // step out of the history to pull one state vector back out of it.
       odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
       replay.set_keep_states(true);
       replay.set_state(y0, 0.0);
@@ -210,9 +209,7 @@ compile_recording_interface <- function() {
         recording.push_back({t_rec[i], h[i]});
       }
 
-      // Asked to keep its states, so the sweep reads the record the replay
-      // itself kept -- rather than copying a whole System per step out of the
-      // history to pull one state vector back out of it.
+      // Keeps its states, so the sweep reads the record this replay kept.
       odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
       replay.set_keep_states(true);
       replay.set_state(y0, 0.0);
