@@ -19,103 +19,66 @@
 namespace odelia {
 namespace ode {
 
-template <class Widening>
-struct recorded_widening {
-  std::size_t after_step;
-  Widening event;
-};
-
 // A range of the recording over which the state has one width.
 struct state_segment {
   std::size_t first, last;
 };
 
-// The recording cut into one range per width, lowest first. There is one more
-// range than there are widenings, so the lowest runs down to the initial state
-// whether or not a widening sits at the first recorded step.
+// The recording cut into one range per width, lowest first, by reading the widths
+// the run recorded. An insertion is the only thing that changes a state's width
+// during a run -- a System narrows only when a walk reconciles it to a recorded
+// step -- so a width that grows between two rows is where one happened, and the
+// record says so without being told.
 //
-// This is where a recording and the widenings claimed for it are checked against
-// each other, and it is the check the shape exists for: the ranges have to
-// partition the recording, or a sweep silently covers less of it than the
-// trajectory it is transposing. Inferring the widenings from the state's width
-// instead -- which is what a caller without a declared list must do -- cannot
-// fail this test, because it defines the answer.
-template <class Insertion>
-std::vector<state_segment> state_segments(
-    const std::vector<Insertion>& widenings, std::size_t n_recorded) {
-    if (n_recorded < 2) {
+// A width that SHRINKS is refused. That is the check this shape exists for, and
+// it is the one an inferred boundary can still fail: the ranges have to partition
+// a recording whose width only ever climbs, or a sweep is transposing something
+// the run did not do.
+template <class Record>
+std::vector<state_segment> state_segments(std::span<const Record> rec) {
+    if (rec.size() < 2) {
         util::stop("state_segments: no recorded steps to sweep");
     }
     std::vector<state_segment> ret;
-    ret.reserve(widenings.size() + 1);
     std::size_t first = 0;
-    for (std::size_t j = 0; j < widenings.size(); ++j) {
-        const std::size_t at = widenings[j].after_step;
-        if (at + 1 >= n_recorded) {
-            util::stop("state_segments: a widening follows a step the recording "
-                       "does not have");
+    for (std::size_t k = 0; k + 1 < rec.size(); ++k) {
+        const std::size_t here = rec[k].state.size();
+        const std::size_t above = rec[k + 1].state.size();
+        if (above < here) {
+            util::stop("state_segments: the state is " +
+                       util::to_string(static_cast<int>(above)) +
+                       " wide at step " +
+                       util::to_string(static_cast<int>(k + 1)) +
+                       " against " + util::to_string(static_cast<int>(here)) +
+                       " below it, and a run does not narrow");
         }
-        if (j > 0 && at <= widenings[j - 1].after_step) {
-            util::stop("state_segments: the widenings are not in the order the "
-                       "run took them");
+        if (above > here) {
+            ret.push_back({first, k});
+            first = k;
         }
-        ret.push_back({first, at});
-        first = at;
     }
-    ret.push_back({first, n_recorded - 1});
+    ret.push_back({first, rec.size() - 1});
     return ret;
 }
 
-// The insertions the declared widenings are, each paired with the recorded time of
-// the step it followed. Derived here rather than declared by the run, so the time
-// cannot disagree with the step it is read from.
-template <class Widening, class Record>
-std::vector<recorded_insertion<Widening>>
-insertions_of(const std::vector<recorded_widening<Widening>>& widenings,
-              std::span<const Record> rec) {
-    std::vector<recorded_insertion<Widening>> ret;
-    ret.reserve(widenings.size());
-    for (const recorded_widening<Widening>& w : widenings) {
-        if (w.after_step >= rec.size()) {
-            util::stop("insertions_of: widening " +
-                       util::to_string(static_cast<int>(ret.size())) +
-                       " follows step " +
-                       util::to_string(static_cast<int>(w.after_step)) +
-                       ", which the recording of " +
-                       util::to_string(static_cast<int>(rec.size())) +
-                       " steps does not have");
-        }
-        ret.push_back({w.event, w.after_step, rec[w.after_step].time});
-    }
-    return ret;
-}
-
-// Put the System on the state the run recorded at `step`, carrying exactly the
-// insertions that had happened by then -- one call for what a narrow or a widen
-// sequence used to be. An insertion recorded after step k had not happened at k,
-// so the count is those strictly below it.
+// Put the System on the state the run recorded at `step`. The System reconciles
+// itself to that time -- which insertions had happened by then is derived from the
+// schedule it was driven by, not handed to it -- and the width it arrives at is
+// checked against the width recorded there.
 //
 // Idempotent, and that is the whole reason it is a load: the System reconciles to
 // the step rather than stepping toward it, so arriving twice is arriving once and
 // a walk can be run again over the recording it has already walked.
-template <class System, class Widening>
-  requires WidensState<System>
-void be_at_step(System& system,
-                const std::vector<recorded_insertion<Widening>>& insertions,
-                std::span<const step_record<System>> rec, std::size_t step) {
+template <class System>
+void be_at_step(System& system, std::span<const step_record<System>> rec,
+                std::size_t step) {
     if (step >= rec.size()) {
         util::stop("be_at_step: step " +
                    util::to_string(static_cast<int>(step)) +
                    " is outside a recording of " +
                    util::to_string(static_cast<int>(rec.size())) + " steps");
     }
-    std::size_t applied = 0;
-    while (applied < insertions.size() &&
-           insertions[applied].after_step < step) {
-        ++applied;
-    }
-    system.set_recorded_state(rec[step].state, rec[step].time, insertions,
-                              applied);
+    system.set_recorded_state(rec[step].state, rec[step].time);
     // Named, because a bare length mismatch reads as a caller's error one call
     // away and says nothing about which walk or which step refused.
     if (system.ode_size() != rec[step].state.size()) {
@@ -124,10 +87,7 @@ void be_at_step(System& system,
                    " wide at step " +
                    util::to_string(static_cast<int>(step)) + " against " +
                    util::to_string(static_cast<int>(rec[step].state.size())) +
-                   " recorded there, after " +
-                   util::to_string(static_cast<int>(applied)) + " of " +
-                   util::to_string(static_cast<int>(insertions.size())) +
-                   " insertions");
+                   " recorded there");
     }
 }
 
@@ -135,18 +95,17 @@ void be_at_step(System& system,
 // the run reached between a widening and the step after it, so no record holds
 // it and it is replayed. The System is left at that segment's width, because a
 // caller reading this state wants to run from it.
-template <class System, class Widening>
-  requires WidensState<System>
+template <class System>
 double state_at_segment(System& system,
-                        const std::vector<recorded_insertion<Widening>>& insertions,
                         std::span<const step_record<System>> rec,
                         std::size_t segment,
                         std::vector<double>& base, std::size_t& start) {
-    if (segment > insertions.size()) {
+    const std::vector<state_segment> segments = state_segments(rec);
+    if (segment >= segments.size()) {
         util::stop("state_at_segment: the recording has no such segment");
     }
     if (segment == 0) {
-        be_at_step(system, insertions, rec, 0);
+        be_at_step(system, rec, 0);
         start = 0;
         base.assign(system.ode_size(), 0.0);
         system.ode_state(base.begin());
@@ -155,8 +114,7 @@ double state_at_segment(System& system,
     // The state between an insertion and the step after it, which no record
     // holds. It is the insertion's own map at the state below it, so the width
     // is the one recorded at the step above -- checked by asking for it.
-    const recorded_insertion<Widening>& w = insertions[segment - 1];
-    start = w.after_step;
+    start = segments[segment].first;
     if (start + 1 >= rec.size()) {
         util::stop("state_at_segment: the insertion after step " +
                    util::to_string(static_cast<int>(start)) +
@@ -164,8 +122,8 @@ double state_at_segment(System& system,
                    util::to_string(static_cast<int>(rec.size())) +
                    ", so there is no width to check it against");
     }
-    be_at_step(system, insertions, rec, start);
-    system.widened_state(w, rec[start].state.begin(), base);
+    be_at_step(system, rec, start);
+    system.inserted_state(rec[start].time, rec[start].state.begin(), base);
     util::check_length(base.size(), rec[start + 1].state.size());
     return rec[start].time;
 }
@@ -180,35 +138,29 @@ double state_at_segment(System& system,
 // stops and resumes; a split outside every segment's interior cuts nothing.
 // Returns how many ranges were swept, which is not the segment count -- an empty
 // lowest segment is swept zero times, and a split adds one.
-template <class Solver, class Widening>
-  requires WidensState<typename Solver::system_type>
-std::size_t solve_adjoint_over_widenings(
+template <class Solver>
+std::size_t solve_adjoint_over_insertions(
     Solver& solver,
     std::span<const step_record<typename Solver::system_type>> rec,
-    const std::vector<recorded_widening<Widening>>& widenings,
     row_batch& lambda, row_batch& parameter_adjoint,
     const std::vector<std::size_t>& extra_splits = {}) {
     using scalar = active_scalar<double>;
     using record = step_record<typename Solver::system_type>;
     auto& system = solver.get_system_ref();
-    const std::vector<state_segment> segments =
-        state_segments(widenings, rec.size());
-
-    const std::vector<recorded_insertion<Widening>> insertions =
-        insertions_of(widenings, rec);
+    const std::vector<state_segment> segments = state_segments(rec);
 
     // The state each insertion produced, which the sweep starting inside a
     // segment runs from and no record holds. It is the insertion's own map,
     // evaluated here at the passive scalar for its value and transposed below
     // for its rows -- one function, so the two cannot disagree.
     std::vector<record> with_insertions(rec.begin(), rec.end());
-    for (std::size_t j = 0; j < insertions.size(); ++j) {
-        const std::size_t at = insertions[j].after_step;
-        be_at_step(system, insertions, rec, at);
-        system.widened_state(insertions[j], rec[at].state.begin(),
+    for (std::size_t j = 1; j < segments.size(); ++j) {
+        const std::size_t at = segments[j].first;
+        be_at_step(system, rec, at);
+        system.inserted_state(rec[at].time, rec[at].state.begin(),
                              with_insertions[at].state);
-        // state_segments above refuses a widening whose step has none above it,
-        // so at + 1 is a step this recording has.
+        // A boundary is a step whose width grows, so at + 1 is a step this
+        // recording has and is the width the insertion has to reach.
         util::check_length(with_insertions[at].state.size(),
                            rec[at + 1].state.size());
     }
@@ -227,18 +179,17 @@ std::size_t solve_adjoint_over_widenings(
         // Named apart from what it binds to: a member named `system` would change
         // what `system` means inside its own declaration.
         decltype(system) sys;
-        const std::vector<recorded_insertion<Widening>>& insertions;
         std::span<const record> rec;
         ~restore_on_exit() {
             // This runs with another exception possibly in flight, so a failure
             // here cannot be raised: it would end the process rather than the
             // call that is already failing.
             try {
-                be_at_step(sys, insertions, rec, rec.size() - 1);
+                be_at_step(sys, rec, rec.size() - 1);
             } catch (...) {
             }
         }
-    } restore{system, insertions, rec};
+    } restore{system, rec};
 
     std::size_t swept = 0;
     typename scalar::tape_type tape(false);
@@ -271,17 +222,17 @@ std::size_t solve_adjoint_over_widenings(
             break;
         }
 
-        const recorded_insertion<Widening>& w = insertions[j - 1];
-        be_at_step(system, insertions, rec, w.after_step);
-        auto widen = [&](auto& active_system,
-                         typename std::vector<scalar>::const_iterator x,
-                         std::vector<scalar>& y) -> void {
-            active_system.widened_state(w, x, y);
+        const std::size_t at = segments[j].first;
+        be_at_step(system, rec, at);
+        const double when = rec[at].time;
+        auto insert = [&](auto& active_system,
+                          typename std::vector<scalar>::const_iterator x,
+                          std::vector<scalar>& y) -> void {
+            active_system.inserted_state(when, x, y);
         };
         row_batch narrowed;
-        state_and_parameter_adjoints(tape, system, rec[w.after_step].state,
-                                     lambda, widen, narrowed,
-                                     parameter_adjoint);
+        state_and_parameter_adjoints(tape, system, rec[at].state, lambda,
+                                     insert, narrowed, parameter_adjoint);
         lambda = std::move(narrowed);
     }
     return swept;
@@ -297,17 +248,13 @@ std::size_t solve_adjoint_over_widenings(
 // of two recorded times is not the size that was taken, since fl(fl(t + h) - t)
 // is not h, and a walk that chose its own would be differentiating a controller
 // the model does not contain.
-template <class Solver, class Widening, class Record>
-  requires WidensState<typename Solver::system_type>
-void advance_over_widenings(
-    Solver& forward,
-    const std::vector<recorded_insertion<Widening>>& insertions,
-    std::span<const Record> rec, std::size_t from_segment,
+template <class Solver, class Record>
+void advance_over_insertions(
+    Solver& forward, std::span<const Record> rec, std::size_t from_segment,
     std::size_t first) {
-    const std::vector<state_segment> segments =
-        state_segments(insertions, rec.size());
+    const std::vector<state_segment> segments = state_segments(rec);
     if (from_segment >= segments.size()) {
-        util::stop("advance_over_widenings: the recording has no such segment");
+        util::stop("advance_over_insertions: the recording has no such segment");
     }
     for (std::size_t j = from_segment; j < segments.size(); ++j) {
         // The first entry is the start no step reached, which is how a recorded
@@ -330,7 +277,7 @@ void advance_over_widenings(
             std::vector<value_type> before(sys.ode_size());
             sys.ode_state(before.begin());
             std::vector<value_type> after;
-            sys.widened_state(insertions[j], before.begin(), after);
+            sys.inserted_state(rec[segments[j].last].time, before.begin(), after);
             forward.set_state_from_system();
             first = segments[j].last;
         }

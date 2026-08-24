@@ -138,56 +138,23 @@ struct step_record : recorded_step {
   state_type<System> state;
 };
 
-// One insertion the run made: what it added, the recorded step it followed, and
-// that step's recorded time. `what` is the model's own and is never read here.
+// A System whose state vector gains entries during a run does not declare a
+// concept for it. Two members carry the whole of it, and they are as mandatory as
+// ode_size() for a System a sweep is asked to walk, so they are called directly
+// like it:
 //
-// The time sits beside the widening rather than being looked up beside it because
-// the two are one fact -- the run inserts at the step it has just recorded. It is
-// derived from the record rather than declared, so it cannot disagree with the
-// step it belongs to.
-template <typename Widening>
-struct recorded_insertion {
-  Widening what;
-  std::size_t after_step;
-  double time;
-};
-
-// A System whose state vector gains entries at times the RUN schedules. The
-// entries are the model's -- what they mean, and how many one widening adds, is
-// never read here; `widening` is opaque and only ever handed back.
+//   set_recorded_state(y, time)  -- be the shape this recorded time implies, then
+//                                   take these values. A run loads into the shape
+//                                   it already built; a replay does not know it,
+//                                   and derives it from the schedule the run was
+//                                   driven by.
+//   inserted_state(time, x, y)   -- the insertion as a map, the state below it in
+//                                   and the whole wider state out, so it runs at
+//                                   any scalar and the sweep can transpose it.
 //
-// Two members, and both are loads. There is no widen() and no narrow(): a walk
-// says which recorded step to be at and the System reconciles itself to it, so
-// nothing sequences insertions, nothing undoes them in reverse, and there is no
-// claim that one is the other's inverse for a round trip to have to check.
-//
-// set_recorded_state() puts the System on the state the run recorded at a step,
-// carrying the insertions that had happened by then. It is one call and not a
-// load beside a widening because a run carries more than its state vector: what
-// an inserted entry is stamped with, and a quantity the rates evaluate twice,
-// are the model's and are in neither the state nor the width. Reconciling to a
-// target rather than stepping from a cursor is what makes it idempotent -- being
-// at a step twice is being there once.
-//
-// widened_state() is the insertion alone as a map -- the state before it in, the
-// whole widened state out, nothing else rebuilt -- so it can be evaluated at an
-// active scalar and taped. It is the one the sweep transposes.
-//
-// A widening whose TIME depends on the parameters is a different map: its
+// An insertion whose TIME depends on the parameters is a different map: its
 // adjoint carries a term through that time which nothing here computes. A System
-// satisfying this asserts its insertions are scheduled, not triggered.
-template <typename System>
-concept WidensState =
-  requires(System s, const recorded_insertion<typename System::widening>& one,
-           const std::vector<recorded_insertion<typename System::widening>>& all,
-           std::size_t n, double time,
-           const std::vector<typename System::value_type>& y,
-           typename std::vector<typename System::value_type>::const_iterator in,
-           std::vector<typename System::value_type>& out) {
-    typename System::widening;
-    s.set_recorded_state(y, time, all, n);
-    s.widened_state(one, in, out);
-  };
+// walked by the sweep asserts its insertions are scheduled, not triggered.
 
 // Opt-in domain check. A system may declare
 //
