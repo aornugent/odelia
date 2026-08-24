@@ -257,6 +257,9 @@ public:
     return solver.recording();
   }
   std::size_t recorded_steps() const { return solver.recorded_steps(); }
+  // The schedule a replay of this run would take. Read off the record, so the
+  // time and the size that reached it cannot be paired across two runs.
+  std::vector<ode::recorded_step> schedule() const { return solver.schedule(); }
 
   // Carry lambda back over recorded steps k_last down to k_first + 1, so on return
   // lambda is the adjoint of states[k_first]. states[k] is the state the run held

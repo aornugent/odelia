@@ -157,13 +157,7 @@ compile_recording_interface <- function() {
       odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<double> h = solver.step_sizes();
-      const std::vector<double> t_rec = solver.times();
-      std::vector<odelia::ode::recorded_step> recording;
-      recording.reserve(t_rec.size());
-      for (size_t i = 0; i < t_rec.size(); ++i) {
-        recording.push_back({t_rec[i], h[i]});
-      }
+      const std::vector<odelia::ode::recorded_step> recording = solver.schedule();
 
       // Replays the recorded sizes, keeping its states, so the sweep reads the
       // record the replay itself kept -- rather than copying a whole System per
@@ -180,7 +174,7 @@ compile_recording_interface <- function() {
       replay.solve_adjoint(rec, lambda, rows, 0, rec.size() - 1);
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
-      return Rcpp::List::create(Rcpp::_["n_steps"] = (int) h.size(),
+      return Rcpp::List::create(Rcpp::_["n_steps"] = (int) recording.size(),
                                 Rcpp::_["y_end"] = rec.back().state,
                                 Rcpp::_["lambda"] = lambda.to_rows()[0],
                                 Rcpp::_["parameter_adjoint"] = parameter_adjoint,
@@ -201,13 +195,7 @@ compile_recording_interface <- function() {
       odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<double> h = solver.step_sizes();
-      const std::vector<double> t_rec = solver.times();
-      std::vector<odelia::ode::recorded_step> recording;
-      recording.reserve(t_rec.size());
-      for (size_t i = 0; i < t_rec.size(); ++i) {
-        recording.push_back({t_rec[i], h[i]});
-      }
+      const std::vector<odelia::ode::recorded_step> recording = solver.schedule();
 
       // Keeps its states, so the sweep reads the record this replay kept.
       odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
@@ -239,13 +227,7 @@ compile_recording_interface <- function() {
       odelia::ode::Solver<LotkaVolterra<double> > solver(schedule_system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<double> h = solver.step_sizes();
-      const std::vector<double> t_rec = solver.times();
-      std::vector<odelia::ode::recorded_step> recording;
-      recording.reserve(t_rec.size());
-      for (size_t i = 0; i < t_rec.size(); ++i) {
-        recording.push_back({t_rec[i], h[i]});
-      }
+      const std::vector<odelia::ode::recorded_step> recording = solver.schedule();
 
       LotkaVolterra<double> run_system(run_pars[0], run_pars[1], run_pars[2],
                                        run_pars[3]);
@@ -266,13 +248,7 @@ compile_recording_interface <- function() {
       odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<double> h = solver.step_sizes();
-      const std::vector<double> t_rec = solver.times();
-      std::vector<odelia::ode::recorded_step> recording;
-      recording.reserve(t_rec.size());
-      for (size_t i = 0; i < t_rec.size(); ++i) {
-        recording.push_back({t_rec[i], h[i]});
-      }
+      const std::vector<odelia::ode::recorded_step> recording = solver.schedule();
 
       odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
       replay.set_state(y_start, 0.0);

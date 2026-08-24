@@ -97,6 +97,14 @@ public:
   }
   std::size_t recorded_steps() const { return prev_steps.size(); }
 
+  // The schedule a replay of this run would take: each recorded time and the
+  // size that reached it, paired as the run paired them. Available whether or
+  // not states were kept, because a schedule is what the run decided and a
+  // state is what it held.
+  std::vector<recorded_step> schedule() const {
+    return {prev_steps.begin(), prev_steps.end()};
+  }
+
   // One accepted step, into the record: the time it reached, the size that
   // reached it, and the state there where the run was asked to keep states.
   void push_step(System& system, double time_, double step_size);
