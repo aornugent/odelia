@@ -10,6 +10,7 @@
 #include <XAD/XAD.hpp>
 #include <odelia/ode_interface.hpp>
 #include <odelia/ode_util.hpp>
+#include <odelia/tangent.hpp>
 
 namespace odelia {
 
@@ -126,49 +127,58 @@ template <class S>
 // caller already has; this returns it on the tape carrying the derivative the
 // implicit function theorem gives:
 //     dy*/dp = -(dF/dp) / (dF/dy).
-// F is a callable F(S y) evaluating the equation at the active parameters, which it
-// reaches through its enclosing scope rather than an enumerated vector; dF/dy is a
-// double central difference at y*. The returned value is exactly y* bit for bit, so
-// a quantity no active parameter reaches introduces no shift, and a plain-double S
-// returns y* with nothing recorded. Reverse, forward and nested forward-over-reverse
-// scalars all thread dy*/dp through the record below.
+//
+// F is a template on its scalar, evaluated twice: at a tangent with the
+// parameters rebound -- which drops their derivatives, so this is dF/dy exactly --
+// and at S with them active, which is dF/dp. `p` holds the residual's ACTIVE
+// inputs and nothing else; anything already double is the residual's own to
+// capture, and a struct rather than a list because the residual reads them by
+// name. The returned value is exactly y* bit for bit, so a quantity no active
+// parameter reaches introduces no shift, and a plain-double S returns y* with
+// nothing recorded. Reverse, forward and nested forward-over-reverse scalars all
+// thread dy*/dp through the record below.
+//
+// ⚠️ THE DENOMINATOR IS TAKEN ON A SCALAR THAT CANNOT RECORD, and that is why the
+// parameters are passed rather than captured. Taken at S and stripped it would put
+// every step of the probe on the active tape, and the only defence is a
+// deactivate/reactivate bracket that is silent when it is forgotten. Taken as a
+// difference it costs two evaluations and 1e-6 of accuracy. A tangent carries
+// dF/dy exactly and holds no tape -- and XAD offers no lift from an active scalar
+// into a tangent above it, so one evaluation cannot serve both.
+//
+// dF/dy is read at the point, so its own dependence on p belongs to the second
+// derivative rather than to this one.
 //
 // dF/dy is what the theorem divides by, so a non-invertible operating point stops
 // here: at a fold it approaches zero and the quotient is garbage rather than large.
-template <class S, class Equation>
-S implicit_value(double y_star, Equation&& F) {
-  // A lambda written `[&](S y) { return ...; }` deduces an XAD expression-template
-  // return type holding references to the temporaries of its return statement;
-  // those die when it returns, so evaluating F here would read a destroyed tape
-  // slot -- a segfault on the reverse sweep, not a wrong number. Requiring S
-  // exactly makes that a compile error.
-  static_assert(std::is_same_v<std::invoke_result_t<Equation&, S>, S>,
-                "implicit_value: the residual callable must return S exactly -- "
-                "declare the lambda's return type (e.g. [&](S y) -> S { ... }). "
-                "A deduced return type is an expression template referencing "
-                "temporaries that are dead by the time this evaluates it.");
+template <class S, class Params, class Residual>
+  requires ode::Rebindable<Params, ode::tangent_scalar<double>>
+S implicit_value(double y_star, const Params& p, Residual&& F) {
   if constexpr (std::is_same_v<S, double>) {
     return y_star;
   } else {
-    const double eps = 1e-6 * (std::abs(y_star) + 1.0);
-    // The central difference is a pure double probe. If F builds tape nodes of its
-    // own -- a nested implicit_value, say -- they must not be recorded here: their
-    // values are discarded, so they would be orphan nodes on the active tape, and
-    // probe x difference x nesting corrupts it. Stop recording across the probe;
-    // the one derivative-carrying evaluation of F is the record below. The tape is
-    // asked for through the scalar alias: a tape named here directly is the right
-    // tape at one derivative width and, at any other, a different tape that
-    // reports nothing active -- so the probe would record and nothing would say so.
-    auto* tape = ode::adjoint_tape<double>::getActive();
-    const bool was_recording = (tape != nullptr) && tape->isActive();
-    if (was_recording) tape->deactivate();
-    auto Fd = [&](double y) -> double { return util::to_passive(F(S(y))); };
-    const double dFdy = (Fd(y_star + eps) - Fd(y_star - eps)) / (2.0 * eps);
-    if (was_recording) tape->activate();
-    // Zero is the only threshold available here: a smooth F differenced over eps
-    // returns exactly zero only where it has no slope at the probe's own scale, and
-    // how small a nonzero slope is too small depends on F's units, which the caller
-    // has and this does not.
+    using D = ode::tangent_scalar<double>;
+    // A residual written `[](auto y, auto p) { return ...; }` deduces an XAD
+    // expression-template return type holding references to the temporaries of its
+    // return statement; those die when it returns, so evaluating it here would read
+    // a destroyed tape slot -- a segfault on the reverse sweep, not a wrong number.
+    // Requiring the scalar back exactly makes that a compile error.
+    static_assert(
+        std::is_same_v<std::invoke_result_t<Residual&, const D&,
+                                            decltype(p.template rebind_from<D>())>,
+                       D> &&
+            std::is_same_v<std::invoke_result_t<Residual&, const S&, const Params&>,
+                           S>,
+        "implicit_value: the residual must return its own scalar exactly at both "
+        "evaluations -- declare the return type "
+        "([]<class T>(const T& y, const inputs<T>& p) -> T { ... }). A deduced "
+        "return type is an expression template referencing temporaries that are "
+        "dead by the time this evaluates it.");
+    D probe = y_star;
+    ode::seed_direction(probe, 1.0);
+    const double dFdy = ode::derivative_along(F(probe, p.template rebind_from<D>()));
+    // Zero is the only threshold available here: how small a nonzero slope is too
+    // small depends on F's units, which the caller has and this does not.
     if (!util::is_finite(dFdy) || dFdy == 0.0) {
       util::stop("implicit_value: dF/dy is zero at the operating point, so the "
                  "implicit function theorem does not apply there (a fold?)");
@@ -176,7 +186,7 @@ S implicit_value(double y_star, Equation&& F) {
     // corr's value is ~0, since y* is the root; its derivative is (dF/dp)/(dF/dy),
     // so y* against it with a coefficient of -1 is the theorem's own quotient.
     // to_passive strips every layer, so this composes at a nested scalar too.
-    const S corr = F(S(y_star)) / dFdy;
+    const S corr = F(S(y_star), p) / dFdy;
     S out;
     // Stopped rather than reported, and the asymmetry with the two above is the
     // point: this IS the value the equation defines, so a caller handed y* with

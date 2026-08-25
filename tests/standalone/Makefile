@@ -60,5 +60,9 @@ probe_width: probe_width.cpp ../../src/Tape.cpp $(HEADERS)
 	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
 	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $<
 
+probe_implicit_tangent: probe_implicit_tangent.cpp ../../src/Tape.cpp $(HEADERS)
+	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
+	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $<
+
 clean:
 	rm -f r_free r_free.o Tape.o probe_width
