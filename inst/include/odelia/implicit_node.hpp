@@ -122,6 +122,12 @@ template <class S>
   return record_with_derivatives<S>(p, against, into);
 }
 
+// A scalar whose derivative is itself active, which is the only reason to build
+// one: a second derivative. It is what decides how many corrections an implicit
+// node has to record -- see there.
+template <class S>
+concept SecondOrder = !std::is_same_v<typename S::derivative_type, double>;
+
 // The value y* defined implicitly by a scalar equation F(y; p) = 0, made
 // differentiable. y* is solved in double, off the tape, by whatever root-find the
 // caller already has; this returns it on the tape carrying the derivative the
@@ -186,14 +192,35 @@ S implicit_value(double y_star, const Params& p, Residual&& F) {
     // corr's value is ~0, since y* is the root; its derivative is (dF/dp)/(dF/dy),
     // so y* against it with a coefficient of -1 is the theorem's own quotient.
     // to_passive strips every layer, so this composes at a nested scalar too.
+    std::vector<input_and_derivative<S>> corrections;
     const S corr = F(S(y_star), p) / dFdy;
+    corrections.push_back({corr, -1.0});
+    // ⚠️ ONE CORRECTION IS RIGHT TO FIRST ORDER AND WRONG TO SECOND, because the
+    // denominator is a constant: what it records is the theorem linearised, whose
+    // curvature is -F_pp/F_y where the true one carries F_yy and F_py too. A
+    // second correction taken at the first one's own value supplies exactly those,
+    // and its first derivative is zero -- so this changes no gradient, only the
+    // curvature of one.
+    //
+    // Recorded only where the scalar can hold a second derivative: on a plain
+    // adjoint it would double the residual's tape to carry something nothing can
+    // read.
+    if constexpr (SecondOrder<S>) {
+      S once;
+      const record_report first =
+          record_with_derivatives<S>(y_star, corrections, once);
+      if (!first.whole) {
+        util::stop("implicit_value: " + first.why);
+      }
+      corrections.push_back({F(once, p) / dFdy, -1.0});
+    }
     S out;
     // Stopped rather than reported, and the asymmetry with the two above is the
     // point: this IS the value the equation defines, so a caller handed y* with
     // no derivative has a structural zero and no way to know it. The two above
     // return a value a consumer already has another use for.
     const record_report report =
-        record_with_derivatives<S>(y_star, {{corr, -1.0}}, out);
+        record_with_derivatives<S>(y_star, corrections, out);
     if (!report.whole) {
       util::stop("implicit_value: " + report.why);
     }
