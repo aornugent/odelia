@@ -176,8 +176,11 @@ std::size_t solve_adjoint_over_insertions(
                           std::vector<scalar>& y) -> void {
             active_system.inserted_state(when, x, y);
         };
+        // Lifted at the width below the widening, which is where be_at_step has
+        // just put the System, and used for this one recording.
+        lifted_system<typename Solver::system_type> active{system, tape};
         row_batch narrowed;
-        state_and_parameter_adjoints(tape, system, rec[at].state, lambda,
+        state_and_parameter_adjoints(tape, active, rec[at].state, lambda,
                                      insert, narrowed, parameter_adjoint);
         lambda = std::move(narrowed);
     }

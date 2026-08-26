@@ -43,6 +43,12 @@ compile_sap_interface <- function() {
       std::vector<T*> ad_parameters() { return {&a, &b}; }
       void refresh() { square = a * a; }
 
+      // What a walk hands back before it clears the tape. `square` is the one
+      // that matters: it is only ever written from an expression, so a write
+      // leaves it holding whatever slot it already had.
+      template <class F>
+      void for_each_active(F&& f) { f(a); f(b); f(square); }
+
       template <typename> friend struct TinySystem;
 
       template <class U>
@@ -74,6 +80,7 @@ compile_sap_interface <- function() {
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
       tiny_rebinds = 0;
+      odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
       for (int k = 0; k < n_calls; ++k) {
         auto evaluate = [&](TinySystem<adouble>& sys,
                             std::vector<adouble>::const_iterator x,
@@ -85,7 +92,7 @@ compile_sap_interface <- function() {
           y[1] = x[0] * x[1] + sys.square;
         };
         recording = double(odelia::ode::state_and_parameter_adjoints(
-            tape, system, state, seeds, evaluate, state_adjoint,
+            tape, active, state, seeds, evaluate, state_adjoint,
             parameter_adjoint));
       }
       return Rcpp::List::create(
@@ -105,6 +112,7 @@ compile_sap_interface <- function() {
       odelia::ode::row_batch parameter_adjoint(2, 2);
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
+      odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
 
       for (int k = 0; k < 2; ++k) {
         const int width = (k == 0) ? first_width : 1;
@@ -120,7 +128,7 @@ compile_sap_interface <- function() {
         if (k == 1) {
           parameter_adjoint.assign(2, 2);
         }
-        odelia::ode::state_and_parameter_adjoints(tape, system, state, seeds,
+        odelia::ode::state_and_parameter_adjoints(tape, active, state, seeds,
                                                   evaluate, state_adjoint,
                                                   parameter_adjoint);
       }
@@ -156,9 +164,10 @@ compile_sap_interface <- function() {
       };
 
       xad::adj<double>::tape_type tape(false);
+      odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
       odelia::ode::row_batch& out =
           (which == 2) ? parameter_adjoint : state_adjoint;
-      odelia::ode::state_and_parameter_adjoints(tape, system, state, seeds,
+      odelia::ode::state_and_parameter_adjoints(tape, active, state, seeds,
                                                 evaluate, out,
                                                 parameter_adjoint);
     }', verbose = FALSE)
@@ -207,22 +216,23 @@ testthat::test_that("the parameter half accumulates and the state half does not"
                            matrix(c(10, 10, 20, 20), nrow = 2))
 })
 
-testthat::test_that("the System is lifted once per recording, so no recording inherits another's slots", {
+testthat::test_that("one lift serves a whole walk, and no recording inherits another's slots", {
   compile_sap_interface()
 
   rows <- function(x) do.call(rbind, x)
 
-  # One lift per call, taken here rather than by the caller. A caller holding one
-  # System across calls is what this replaced, and it cannot be expressed: the
-  # copy is made where the requirement is.
+  # One lift however many recordings the walk takes. The lift is the caller's
+  # because its lifetime is: a walk that narrows rebuilds it where it narrows,
+  # and nothing inside one recording knows that.
   testthat::expect_identical(sap_products(c(5, 7), c(0, 0), 1L, 1L)$rebinds, 1L)
-  testthat::expect_identical(sap_products(c(5, 7), c(0, 0), 3L, 1L)$rebinds, 3L)
+  testthat::expect_identical(sap_products(c(5, 7), c(0, 0), 3L, 1L)$rebinds, 1L)
 
-  # A recording that follows a WIDER one has to give the same rows as one that
-  # follows nothing. This is the case a carried System gets wrong: clearing the
-  # tape returns its slot counter to zero, and a derived scalar still holding the
-  # wider recording's slot is handed the same number as a live variable in this
-  # one. The rows stay finite and plausible; only the numbers move.
+  # A recording that follows a WIDER one, on the same lifted System, has to give
+  # the same rows as one that follows nothing. That is what carrying a System
+  # asks, and what the release before each clear is for: `square` is written only
+  # from an expression, so writing it leaves the slot it already held, and a
+  # clear reissues that slot to something else. The rows would stay finite and
+  # plausible and stop being the model's.
   after_wide <- rows(sap_after_wider(c(5, 7), 4L)$parameter)
   alone <- rows(sap_products(c(5, 7), c(0, 0), 1L, 1L)$parameter)
   testthat::expect_equal(after_wide, alone)

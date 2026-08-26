@@ -281,13 +281,17 @@ public:
     if (k_first >= k_last || k_last >= rec.size()) {
       util::stop("the adjoint segment is not a range of recorded steps");
     }
+    // Lifted once for this range rather than once per step. The width is
+    // constant across a range -- checked above -- so one copy serves every step
+    // in it, and each recording releases its slots before taking the next.
+    ode::lifted_system<System> active{system, solver.recording_tape()};
     ode::row_batch lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       // What the run's step k ran from, which is the wider state where an
       // insertion followed row k - 1 and that row's own where none did.
       const state_type<System>& from = rec[k - 1].ran_from();
       util::check_length(from.size(), system.ode_size());
-      solver.step_adjoint(system, k, rec[k - 1].time, rec[k].step_size, from,
+      solver.step_adjoint(active, k, rec[k - 1].time, rec[k].step_size, from,
                           lambda, lambda_in, parameter_adjoint);
       lambda = std::move(lambda_in);
     }

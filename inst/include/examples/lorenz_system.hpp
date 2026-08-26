@@ -96,6 +96,16 @@ public:
   // The parameters a pass can seed active, in the order it indexes them.
   std::vector<T*> ad_parameters() { return {&sigma, &R, &b}; }
 
+  // Everything here that carries the scalar, which is what a walk holding this
+  // System across recordings hands back before it clears the tape.
+  template <class F>
+  void for_each_active(F&& f) {
+    f(sigma); f(R); f(b);
+    f(y0); f(y1); f(y2);
+    f(dy0dt); f(dy1dt); f(dy2dt);
+    f(y0_init); f(y1_init); f(y2_init);
+  }
+
   template <typename Iterator>
   Iterator ode_state(Iterator it) const {
     *it++ = y0;

@@ -136,6 +136,109 @@ private:
   std::unique_ptr<tape_type> tape;
 };
 
+// Hand a value's tape slot back, leaving its number. Move-assigning a freshly
+// constructed scalar swaps the two slots, so the temporary carries the old one
+// away and its destructor releases it, and nothing is recorded against either.
+//
+// ⚠️ BEFORE A TAPE RESET AND NOT AFTER. Clearing a tape returns its slot counter
+// to zero, and handing back a slot the counter no longer knows about takes it
+// below zero; where the library is built to reuse freed slots it then issues the
+// same number twice. Released first and cleared second, both stay consistent.
+template <class S>
+void release_slot(S& x) {
+  x = S(util::to_passive(x));
+}
+
+// A System lifted to the adjoint scalar, with the addresses of the parameters a
+// recording writes through. Both come off one object, so a caller cannot pair a
+// System with another System's parameter addresses.
+//
+// Held across the recordings a walk takes on it, where a copy per recording costs
+// every allocation the System owns -- for a stand, every cohort and the light
+// field with them.
+//
+// ⚠️ WHAT MAKES THAT LEGAL IS `release`, AND NOTHING ELSE. Writing a member does
+// not refresh the slot it carries: assignment keeps the slot the target already
+// had, so a member that survives a tape clear writes through a number the next
+// recording issues to something else. The rows stay finite and stop being the
+// model's, and only once two recordings differ in shape -- which is every sweep
+// that narrows. So every active value the System holds is released before the
+// clear, and the tape is asked whether any was missed.
+template <class System>
+struct lifted_system {
+  using scalar = active_scalar<double>;
+  using system_type = typename rebound_system<System, scalar>::type;
+
+  // Declared first, so the destructor's tape is initialised before the System it
+  // releases.
+  adjoint_tape<double>* tape_;
+
+  lifted_system(const System& passive, adjoint_tape<double>& tape)
+      : tape_(&tape), system(passive.template rebind_from<scalar>()),
+        parameters(system.ad_parameters()) {
+    static_assert(Rebindable<System, scalar>,
+                  "a recording is taken on this System at the adjoint scalar; "
+                  "it has no rebind_from()");
+  }
+
+  // Handed back on the way out, so a walk that builds one of these per width
+  // leaves the tape as it found it. Without this, every width but the last stays
+  // registered -- nothing is active when the object goes, so nothing hands its
+  // slots back, and the tape zero-fills them on every later recording.
+  //
+  // Refused where another tape is active: these slots are not on it, and
+  // handing them back would decrement its count instead.
+  ~lifted_system() {
+    adjoint_tape<double>* const running = adjoint_tape<double>::getActive();
+    if (running != nullptr && running != tape_) {
+      return;
+    }
+    if (running == nullptr) {
+      tape_->activate();
+    }
+    system.for_each_active([](scalar& x) { release_slot(x); });
+    if (running == nullptr) {
+      tape_->deactivate();
+    }
+  }
+
+  // The parameter addresses point into `system`, so a copy would hand its own
+  // parameters to the object it was copied from. Declaring the destructor above
+  // suppresses the move operations, which would leave those addresses pointing
+  // into the object moved from.
+  lifted_system(const lifted_system&) = delete;
+  lifted_system& operator=(const lifted_system&) = delete;
+
+  // Every active value back to unregistered, so the clear below it is safe and
+  // the next recording registers them fresh.
+  //
+  // The check is the point. Releasing every value `for_each_active` reaches has
+  // to return the tape to the number of values it counted before this System
+  // existed -- so a System holding one the walk does not reach says so here,
+  // rather than in a row that is finite and no longer the model's. That is an
+  // audit of the model turned into one number.
+  //
+  // Against zero, which the destructor above is what makes true: every clear
+  // returns the count to zero, every recording registers this System's values,
+  // and the temporaries a recording makes are gone by the time it ends.
+  void release(adjoint_tape<double>& tape) {
+    system.for_each_active([](scalar& x) { release_slot(x); });
+    const std::size_t still = tape.getNumVariables();
+    if (still != 0) {
+      util::stop(
+          "lifted_system::release: " +
+          util::to_string(static_cast<int>(still)) +
+          " active values of this System are still registered after releasing "
+          "every one for_each_active reaches, so it holds some the walk does "
+          "not. A recording that reads one of those reads a slot the next clear "
+          "issues to something else.");
+    }
+  }
+
+  system_type system;
+  std::vector<scalar*> parameters;
+};
+
 // One block of `f`, recorded ONCE on the tape handed in and swept once per seed:
 // `input_adjoints[m]` receives transpose(jacobian) * output_adjoints[m], and the return
 // value is the recording's size. `f` is instantiated at the active scalar here, so only
@@ -227,19 +330,9 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // A transpose taken with respect to a System's state AND the parameters its
 // active-scalar lists: one recording over both, swept once per seed.
 //
-// The System is lifted to the adjoint scalar HERE, per recording, and the lifted
-// copy is what `evaluate` is handed. That placement is the whole of why the
-// recording is safe. Clearing the tape returns its slot counter to zero, so
-// every scalar a recording writes has to arrive holding no slot; one still
-// holding the last recording's is handed the same number as some other variable
-// in this one, their adjoints add together, and the sweep comes back wrong with
-// nothing raised. A System built for the recording has that by construction. A
-// System carried between recordings has it only for the scalars its copy writes
-// through a fresh value -- which leaves out every quantity it DERIVES, because
-// assigning from an expression keeps the slot the target already had, and
-// keeping it is invisible until two recordings differ in shape. That is a rule
-// no signature can state and nothing here can check, so the copy is taken where
-// the requirement is instead of being asked of the caller.
+// The lifted System is the caller's, held across the recordings a walk takes on
+// it. It is released here rather than there, because the release has to sit
+// immediately before the clear and the clear is inside the product below.
 //
 // `evaluate` is handed that System, the state half of the recorded inputs, and
 // the output buffer, with the System's parameters ALREADY written from the other
@@ -263,16 +356,12 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // neighbours, so there is nothing to test per row.
 template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
-    adjoint_tape<double>& tape, const System& system,
+    adjoint_tape<double>& tape, lifted_system<System>& active,
     const std::vector<double>& state,
     const row_batch& output_adjoints, Evaluate&& evaluate,
     row_batch& state_adjoint, row_batch& parameter_adjoint) {
     using scalar = active_scalar<double>;
-    static_assert(Rebindable<System, scalar>,
-                  "a recording is taken on the System at the adjoint scalar; "
-                  "this System has no rebind_from()");
-    auto active_system = system.template rebind_from<scalar>();
-    const std::vector<scalar*> parameters = active_system.ad_parameters();
+    const std::vector<scalar*>& parameters = active.parameters;
     const std::size_t n_state = state.size();
     const std::size_t n_parameter = parameters.size();
     const std::size_t n_seed = output_adjoints.rows();
@@ -294,13 +383,27 @@ std::size_t state_and_parameter_adjoints(
         in.push_back(util::to_passive(*p));
     }
 
+    // Released in a scope of its own, so the tape is deactivated again before the
+    // product below activates it -- activating a tape that is already active
+    // raises, and the release has to happen first.
+    //
+    // Active while it happens, because a slot is handed back by the destructor of
+    // the temporary that takes it, and that destructor does nothing with no tape
+    // active. Without it the count the release checks would stand and the check
+    // would refuse a System that is in fact complete.
+    {
+        tape.activate();
+        tape_guard<adjoint_tape<double>> guard{&tape};
+        active.release(tape);
+    }
+
     auto record = [&](const std::vector<scalar>& x,
                       std::vector<scalar>& y) -> void {
         std::size_t at = n_state;
         for (scalar* p : parameters) {
             *p = x[at++];
         }
-        evaluate(active_system, x.begin(), y);
+        evaluate(active.system, x.begin(), y);
     };
 
     row_batch in_adjoint;
@@ -335,7 +438,7 @@ std::size_t state_and_parameter_adjoints(
 // copy cannot have.
 template <class System>
 std::size_t rates_adjoint(
-    adjoint_tape<double>& tape, const System& system,
+    adjoint_tape<double>& tape, lifted_system<System>& active,
     const std::vector<double>& state, double time,
     const row_batch& rate_adjoints, row_batch& state_adjoint,
     row_batch& parameter_adjoint) {
@@ -349,7 +452,7 @@ std::size_t rates_adjoint(
         std::vector<scalar> y(x, x + static_cast<std::ptrdiff_t>(n_state));
         ode::derivs(active_system, y, dydt, time);
     };
-    return state_and_parameter_adjoints(tape, system, state, rate_adjoints, rates,
+    return state_and_parameter_adjoints(tape, active, state, rate_adjoints, rates,
                                         state_adjoint, parameter_adjoint);
 }
 

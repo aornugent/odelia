@@ -23,6 +23,7 @@ compile_step_adjoint_interface <- function() {
   Rcpp::sourceCpp(code = '
     // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>
+    #include <type_traits>
     #include <vector>
     #include <odelia/ode_step.hpp>
     #include <examples/lorenz_system.hpp>
@@ -86,7 +87,9 @@ compile_step_adjoint_interface <- function() {
         odelia::ode::row_batch::one_row(lambda_out);
       odelia::ode::row_batch swept;
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
-      stepper.step_adjoint(system, 1, time, step_size, y, seeds, swept, rows);
+      odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
+          system, stepper.recording_tape()};
+      stepper.step_adjoint(active, 1, time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
       Rcpp::List recorded(6);
@@ -116,7 +119,9 @@ compile_step_adjoint_interface <- function() {
         odelia::ode::row_batch::one_row(lambda_out);
       odelia::ode::row_batch swept;
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
-      stepper.step_adjoint(system, 1, time, step_size, y, seeds, swept, rows);
+      odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
+          system, stepper.recording_tape()};
+      stepper.step_adjoint(active, 1, time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
@@ -217,6 +222,7 @@ compile_step_adjoint_on <- function(rebind_body) {
   Rcpp::sourceCpp(code = sprintf('
     // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>
+    #include <type_traits>
     #include <vector>
     #include <odelia/ode_step.hpp>
 
@@ -240,7 +246,9 @@ compile_step_adjoint_on <- function(rebind_body) {
         odelia::ode::row_batch::one_row(lambda_out);
       odelia::ode::row_batch swept;
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
-      stepper.step_adjoint(system, 1, 0.0, 0.1, y, seeds, swept, rows);
+      odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
+          system, stepper.recording_tape()};
+      stepper.step_adjoint(active, 1, 0.0, 0.1, y, seeds, swept, rows);
       return swept.to_rows()[0];
     }
   ', rebind_body))

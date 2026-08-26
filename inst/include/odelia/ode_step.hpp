@@ -29,11 +29,12 @@ public:
 	    state_type &dydt_out);
 
   // The step transposed, for as many seeds as are handed in: one recording of the
-  // whole step, swept once per seed. A caller wanting one row passes a batch of
+  // whole step, swept once per seed. The lifted System is the walk's, held across
+  // every step of one width. A caller wanting one row passes a batch of
   // one; there is no separate entry point for that, because a second signature
   // over the same recording is a second place for the seam between the state and
   // the parameter halves to be got wrong.
-  void step_adjoint(System& system, std::size_t step,
+  void step_adjoint(lifted_system<System>& active, std::size_t step,
                     double time, double step_size,
                     const state_type &y, const row_batch& lambda_out,
                     row_batch& lambda_in, row_batch& parameter_adjoint);
@@ -45,6 +46,10 @@ public:
   // divides this by six, and no gradient check can see that, because a tangent and
   // a sweep apply the same multiplier.
   std::size_t recorded_rates = 0;
+
+  // The tape a sweep's recordings are taken on, so the walk above can lift its
+  // System against the same one it will be released from.
+  scratch_tape::tape_type& recording_tape() { return adjoint_tape.get(); }
 
   static const bool can_use_dydt_in = true;
   static const bool first_same_as_last = true;
@@ -215,7 +220,7 @@ void Step<System>::step_end(const std::vector<S>& y,
 // writes a transpose of its own; and the parameters ride in the same recording,
 // so a stage the parameters reach carries their rows too.
 template <class System>
-void Step<System>::step_adjoint(System& system, std::size_t step,
+void Step<System>::step_adjoint(lifted_system<System>& active, std::size_t step,
                                 double time, double step_size,
                                 const state_type &y, const row_batch& lambda_out,
                                 row_batch& lambda_in,
@@ -253,12 +258,8 @@ void Step<System>::step_adjoint(System& system, std::size_t step,
     step_end(y0, rate, h, y_end);
   };
 
-  ode::state_and_parameter_adjoints(adjoint_tape.get(), system, y, lambda_out,
+  ode::state_and_parameter_adjoints(adjoint_tape.get(), active, y, lambda_out,
                                     whole_step, lambda_in, parameter_adjoint);
-
-  // The double System is left as it was found. The stages run on the lifted copy,
-  // so this one is never walked through them, and a sweep is handed each step's
-  // state and reads this System for its width alone.
 }
 
 // RKCK coefficients, from GSL

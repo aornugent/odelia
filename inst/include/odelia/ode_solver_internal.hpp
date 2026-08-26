@@ -53,7 +53,7 @@ public:
   // The adjoint of one step, from the state that step started at, for several
   // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
   // counterpart.
-  void step_adjoint(System& system, std::size_t step, double time,
+  void step_adjoint(lifted_system<System>& active, std::size_t step, double time,
                     double step_size, const state_type& y,
                     const row_batch& lambda_out, row_batch& lambda_in,
                     row_batch& parameter_adjoint) {
@@ -65,9 +65,12 @@ public:
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
     resize(lambda_out.width());
-    stepper.step_adjoint(system, step, time, step_size, y, lambda_out,
+    stepper.step_adjoint(active, step, time, step_size, y, lambda_out,
                          lambda_in, parameter_adjoint);
   }
+
+  // The tape a sweep's recordings are taken on.
+  scratch_tape::tape_type& recording_tape() { return stepper.recording_tape(); }
 
   // Rate evaluations recorded since the count was last cleared.
   std::size_t recorded_rates() const { return stepper.recorded_rates; }

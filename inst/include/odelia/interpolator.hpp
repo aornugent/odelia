@@ -343,6 +343,22 @@ private:
   std::vector<double> x;   // knot positions, contiguous for the search
   std::vector<S> y, m;     // knot values and slopes, as supplied
   std::vector<Span> spans;
+
+public:
+  // Every value here that carries the working scalar. The knot positions are not
+  // among them: they stay double, which is what keeps the grid out of the
+  // derivative.
+  template <class F>
+  void for_each_active(F&& f) {
+    for (S& v : y) { f(v); }
+    for (S& v : m) { f(v); }
+    for (Span& span : spans) {
+      f(span.y0);
+      for (S& coefficient : span.c) { f(coefficient); }
+    }
+  }
+
+private:
   double inv_h0 = 0.0;
   bool uniform = false;
   bool initialised = false;

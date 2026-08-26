@@ -43,6 +43,15 @@ lv_system <- '
 
     std::vector<T*> ad_parameters() { return {&a, &b, &c, &d}; }
 
+    // Everything carrying the scalar. The rates are among them: a recording
+    // writes them, and writing leaves whatever slot the value already held.
+    template <class F>
+    void for_each_active(F&& f) {
+      f(a); f(b); f(c); f(d);
+      f(n); f(p);
+      f(dndt); f(dpdt);
+    }
+
     size_t ode_size() const { return 2; }
     double ode_time() const { return time; }
     void reset() { n = 10.0; p = 5.0; time = 0.0; compute_rates(); }
@@ -134,7 +143,9 @@ compile_recording_interface <- function() {
         odelia::ode::row_batch::one_row(lambda_out);
       odelia::ode::row_batch swept;
       odelia::ode::row_batch rows(1, adj.ad_parameters().size());
-      stepper.step_adjoint(adj, 1, time, step_size, y, seeds, swept, rows);
+      odelia::ode::lifted_system<LotkaVolterra<double>> lifted{
+          adj, stepper.recording_tape()};
+      stepper.step_adjoint(lifted, 1, time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
