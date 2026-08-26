@@ -143,8 +143,8 @@ compile_recording_interface <- function() {
         odelia::ode::row_batch::one_row(lambda_out);
       odelia::ode::row_batch swept;
       odelia::ode::row_batch rows(1, adj.ad_parameters().size());
-      odelia::ode::lifted_system<LotkaVolterra<double>> lifted{
-          adj, stepper.recording_tape()};
+      odelia::ode::adjoint_tape<double> step_tape(false);
+      odelia::ode::lifted_system<LotkaVolterra<double>> lifted{adj, step_tape};
       stepper.step_adjoint(lifted, 1, time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
@@ -182,7 +182,8 @@ compile_recording_interface <- function() {
       odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
       replay.clear_recorded_rates();
-      replay.solve_adjoint(rec, lambda, rows, 0, rec.size() - 1);
+      odelia::ode::adjoint_tape<double> tape(false);
+      replay.solve_adjoint(tape, rec, lambda, rows, 0, rec.size() - 1);
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
       return Rcpp::List::create(Rcpp::_["n_steps"] = (int) recording.size(),
@@ -217,9 +218,10 @@ compile_recording_interface <- function() {
 
       odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
-      replay.solve_adjoint(rec, lambda, rows, (size_t) split,
+      odelia::ode::adjoint_tape<double> tape(false);
+      replay.solve_adjoint(tape, rec, lambda, rows, (size_t) split,
                            rec.size() - 1);
-      replay.solve_adjoint(rec, lambda, rows, 0, (size_t) split);
+      replay.solve_adjoint(tape, rec, lambda, rows, 0, (size_t) split);
       return lambda.to_rows()[0];
     }
 

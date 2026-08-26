@@ -256,7 +256,8 @@ public:
   // recorded once however many are carried, and swept per seed. That is where the
   // saving is, because a recording is a model evaluation and a sweep is not. A
   // caller wanting a single row passes a batch of one.
-  void solve_adjoint(std::span<const ode::step_record<System>> rec,
+  void solve_adjoint(ode::adjoint_tape<double>& tape,
+                     std::span<const ode::step_record<System>> rec,
                      ode::row_batch& lambda,
                      ode::row_batch& parameter_adjoint,
                      size_t k_first, size_t k_last)
@@ -284,7 +285,7 @@ public:
     // Lifted once for this range rather than once per step. The width is
     // constant across a range -- checked above -- so one copy serves every step
     // in it, and each recording releases its slots before taking the next.
-    ode::lifted_system<System> active{system, solver.recording_tape()};
+    ode::lifted_system<System> active{system, tape};
     ode::row_batch lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       // What the run's step k ran from, which is the wider state where an

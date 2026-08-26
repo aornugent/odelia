@@ -70,7 +70,6 @@ public:
   }
 
   // The tape a sweep's recordings are taken on.
-  scratch_tape::tape_type& recording_tape() { return stepper.recording_tape(); }
 
   // Rate evaluations recorded since the count was last cleared.
   std::size_t recorded_rates() const { return stepper.recorded_rates; }

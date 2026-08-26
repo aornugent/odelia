@@ -92,7 +92,7 @@ compile_sap_interface <- function() {
           y[1] = x[0] * x[1] + sys.square;
         };
         recording = double(odelia::ode::state_and_parameter_adjoints(
-            tape, active, state, seeds, evaluate, state_adjoint,
+            active, state, seeds, evaluate, state_adjoint,
             parameter_adjoint));
       }
       return Rcpp::List::create(
@@ -128,7 +128,7 @@ compile_sap_interface <- function() {
         if (k == 1) {
           parameter_adjoint.assign(2, 2);
         }
-        odelia::ode::state_and_parameter_adjoints(tape, active, state, seeds,
+        odelia::ode::state_and_parameter_adjoints(active, state, seeds,
                                                   evaluate, state_adjoint,
                                                   parameter_adjoint);
       }
@@ -167,7 +167,7 @@ compile_sap_interface <- function() {
       odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
       odelia::ode::row_batch& out =
           (which == 2) ? parameter_adjoint : state_adjoint;
-      odelia::ode::state_and_parameter_adjoints(tape, active, state, seeds,
+      odelia::ode::state_and_parameter_adjoints(active, state, seeds,
                                                 evaluate, out,
                                                 parameter_adjoint);
     }', verbose = FALSE)

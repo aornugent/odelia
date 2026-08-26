@@ -153,16 +153,17 @@ std::size_t solve_adjoint_over_insertions(
 
     std::size_t swept = 0;
     std::size_t upper = rec.size() - 1;
-    // One tape for every widening this walk crosses. Clearing it returns it to an
-    // empty recording and keeps the capacity, where one built per widening
-    // regrows it.
+    // One tape for the whole walk, held active across every recording it takes.
+    // Clearing between recordings keeps the capacity the largest of them grew,
+    // where one tape per recording regrows it every time.
     typename scalar::tape_type tape(false);
+    tape_scope<typename scalar::tape_type> running{tape};
     for (std::size_t j = stops.size(); j-- > 0;) {
         const std::size_t at = stops[j];
         // A stop with no step above it cuts nothing, which is what an insertion
         // at the last recorded row gives.
         if (at < upper) {
-            solver.solve_adjoint(rec, lambda, parameter_adjoint, at, upper);
+            solver.solve_adjoint(tape, rec, lambda, parameter_adjoint, at, upper);
             ++swept;
         }
         upper = at;
@@ -180,14 +181,14 @@ std::size_t solve_adjoint_over_insertions(
         // just put the System, and used for this one recording.
         lifted_system<typename Solver::system_type> active{system, tape};
         row_batch narrowed;
-        state_and_parameter_adjoints(tape, active, rec[at].state, lambda,
-                                     insert, narrowed, parameter_adjoint);
+        state_and_parameter_adjoints(active, rec[at].state, lambda, insert,
+                                     narrowed, parameter_adjoint);
         lambda = std::move(narrowed);
     }
     // An insertion at the first recorded row leaves nothing below it, which is
     // what a run from an empty state gives.
     if (upper > 0) {
-        solver.solve_adjoint(rec, lambda, parameter_adjoint, 0, upper);
+        solver.solve_adjoint(tape, rec, lambda, parameter_adjoint, 0, upper);
         ++swept;
     }
     return swept;

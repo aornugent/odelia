@@ -101,39 +101,35 @@ private:
   std::vector<double> store_;
 };
 
-// Deactivates the tape on every exit from the product below, exceptions included.
-template <typename Tape>
-struct tape_guard {
-  Tape* tape;
-  ~tape_guard() { tape->deactivate(); }
-};
-
-// A tape held across the recordings taken on it, and built on first use.
-// Clearing between recordings keeps the capacity the largest of them grew,
-// where one built per recording regrows it every time.
+// The tape running for the duration, on every exit and exceptions included.
 //
-// A copy gets its own rather than sharing: two holders recording on one tape
-// would each clear the other's recording, and the check that a foreign tape is
-// active would not fire, because it is not foreign.
-class scratch_tape {
-public:
-  using tape_type = adjoint_tape<double>;
-
-  scratch_tape() = default;
-  scratch_tape(const scratch_tape&) {}
-  scratch_tape& operator=(const scratch_tape&) { tape.reset(); return *this; }
-  scratch_tape(scratch_tape&&) = default;
-  scratch_tape& operator=(scratch_tape&&) = default;
-
-  tape_type& get() {
-    if (!tape) {
-      tape = std::make_unique<tape_type>(false);
+// ⚠️ ACTIVATED HERE ONLY IF NOTHING ELSE HOLDS IT, AND DEACTIVATED ONLY WHERE
+// ACTIVATED. Activating a tape twice raises, so a caller holding one across
+// several recordings cannot be nested inside by anything that activates; and
+// deactivating one an outer scope is holding stops recording mid-recording,
+// which reads as a missing derivative term and raises nothing.
+template <typename Tape>
+struct tape_scope {
+  explicit tape_scope(Tape& tape) {
+    Tape* const running = Tape::getActive();
+    if (running == nullptr) {
+      tape.activate();
+      held_ = &tape;
+    } else if (running != &tape) {
+      util::stop("a tape is already active and it is not the one being "
+                 "recorded on");
     }
-    return *tape;
   }
+  ~tape_scope() {
+    if (held_ != nullptr) {
+      held_->deactivate();
+    }
+  }
+  tape_scope(const tape_scope&) = delete;
+  tape_scope& operator=(const tape_scope&) = delete;
 
 private:
-  std::unique_ptr<tape_type> tape;
+  Tape* held_ = nullptr;
 };
 
 // Hand a value's tape slot back, leaving its number. Move-assigning a freshly
@@ -170,8 +166,10 @@ struct lifted_system {
   using system_type = typename rebound_system<System, scalar>::type;
 
   // Declared first, so the destructor's tape is initialised before the System it
-  // releases.
+  // releases. Read back rather than handed to a transpose beside the System: the
+  // two arriving separately is a pairing a caller can get wrong.
   adjoint_tape<double>* tape_;
+  adjoint_tape<double>& tape() const { return *tape_; }
 
   lifted_system(const System& passive, adjoint_tape<double>& tape)
       : tape_(&tape), system(passive.template rebind_from<scalar>()),
@@ -193,13 +191,8 @@ struct lifted_system {
     if (running != nullptr && running != tape_) {
       return;
     }
-    if (running == nullptr) {
-      tape_->activate();
-    }
+    tape_scope<adjoint_tape<double>> holding{*tape_};
     system.for_each_active([](scalar& x) { release_slot(x); });
-    if (running == nullptr) {
-      tape_->deactivate();
-    }
   }
 
   // The parameter addresses point into `system`, so a copy would hand its own
@@ -221,9 +214,9 @@ struct lifted_system {
   // Against zero, which the destructor above is what makes true: every clear
   // returns the count to zero, every recording registers this System's values,
   // and the temporaries a recording makes are gone by the time it ends.
-  void release(adjoint_tape<double>& tape) {
+  void release() {
     system.for_each_active([](scalar& x) { release_slot(x); });
-    const std::size_t still = tape.getNumVariables();
+    const std::size_t still = tape_->getNumVariables();
     if (still != 0) {
       util::stop(
           "lifted_system::release: " +
@@ -275,10 +268,6 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
     using ad_type = active_scalar<double>;
     using tape_type = adjoint_tape<double>;
 
-    tape_type* active = tape_type::getActive();
-    if (active != nullptr && active != &tape) {
-        util::stop("vector_jacobian_product: a tape is already active");
-    }
     if (x.empty()) {
         util::stop("vector_jacobian_product: 'x' must have at least one entry");
     }
@@ -290,8 +279,7 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
         util::stop("vector_jacobian_product: a seed must have at least one entry");
     }
 
-    tape.activate();
-    tape_guard<tape_type> guard{&tape};
+    tape_scope<tape_type> running{tape};
     tape.clearAll();
 
     std::vector<ad_type> x_active(x.begin(), x.end());
@@ -356,11 +344,11 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // neighbours, so there is nothing to test per row.
 template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
-    adjoint_tape<double>& tape, lifted_system<System>& active,
-    const std::vector<double>& state,
+    lifted_system<System>& active, const std::vector<double>& state,
     const row_batch& output_adjoints, Evaluate&& evaluate,
     row_batch& state_adjoint, row_batch& parameter_adjoint) {
     using scalar = active_scalar<double>;
+    adjoint_tape<double>& tape = active.tape();
     const std::vector<scalar*>& parameters = active.parameters;
     const std::size_t n_state = state.size();
     const std::size_t n_parameter = parameters.size();
@@ -383,19 +371,11 @@ std::size_t state_and_parameter_adjoints(
         in.push_back(util::to_passive(*p));
     }
 
-    // Released in a scope of its own, so the tape is deactivated again before the
-    // product below activates it -- activating a tape that is already active
-    // raises, and the release has to happen first.
-    //
-    // Active while it happens, because a slot is handed back by the destructor of
-    // the temporary that takes it, and that destructor does nothing with no tape
-    // active. Without it the count the release checks would stand and the check
-    // would refuse a System that is in fact complete.
-    {
-        tape.activate();
-        tape_guard<adjoint_tape<double>> guard{&tape};
-        active.release(tape);
-    }
+    // Held for the release and the product both, and the release comes first: a
+    // slot is handed back by the destructor of the temporary that takes it, and
+    // that destructor does nothing with no tape active.
+    tape_scope<adjoint_tape<double>> running{tape};
+    active.release();
 
     auto record = [&](const std::vector<scalar>& x,
                       std::vector<scalar>& y) -> void {
@@ -438,7 +418,7 @@ std::size_t state_and_parameter_adjoints(
 // copy cannot have.
 template <class System>
 std::size_t rates_adjoint(
-    adjoint_tape<double>& tape, lifted_system<System>& active,
+    lifted_system<System>& active,
     const std::vector<double>& state, double time,
     const row_batch& rate_adjoints, row_batch& state_adjoint,
     row_batch& parameter_adjoint) {
@@ -452,7 +432,7 @@ std::size_t rates_adjoint(
         std::vector<scalar> y(x, x + static_cast<std::ptrdiff_t>(n_state));
         ode::derivs(active_system, y, dydt, time);
     };
-    return state_and_parameter_adjoints(tape, active, state, rate_adjoints, rates,
+    return state_and_parameter_adjoints(active, state, rate_adjoints, rates,
                                         state_adjoint, parameter_adjoint);
 }
 

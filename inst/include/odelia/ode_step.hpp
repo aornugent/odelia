@@ -47,10 +47,6 @@ public:
   // a sweep apply the same multiplier.
   std::size_t recorded_rates = 0;
 
-  // The tape a sweep's recordings are taken on, so the walk above can lift its
-  // System against the same one it will be released from.
-  scratch_tape::tape_type& recording_tape() { return adjoint_tape.get(); }
-
   static const bool can_use_dydt_in = true;
   static const bool first_same_as_last = true;
 
@@ -77,9 +73,6 @@ private:
   size_t size;
   std::vector<state_type> k{6};
   state_type ytmp;
-
-  // The tape a step is recorded on, reused by every step a sweep walks.
-  scratch_tape adjoint_tape;
 
   // Cash carp constants, from GSL.
   static const double ah[];
@@ -258,8 +251,8 @@ void Step<System>::step_adjoint(lifted_system<System>& active, std::size_t step,
     step_end(y0, rate, h, y_end);
   };
 
-  ode::state_and_parameter_adjoints(adjoint_tape.get(), active, y, lambda_out,
-                                    whole_step, lambda_in, parameter_adjoint);
+  ode::state_and_parameter_adjoints(active, y, lambda_out, whole_step, lambda_in,
+                                    parameter_adjoint);
 }
 
 // RKCK coefficients, from GSL
