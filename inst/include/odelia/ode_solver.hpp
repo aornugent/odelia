@@ -72,6 +72,9 @@ public:
     solver.set_state_from_system(system);
   }
 
+  // Record the wider state an insertion just reached, on the row it followed.
+  void push_inserted() { solver.push_inserted(system); }
+
   void set_state(std::vector<double> y, double time)
   {
     util::check_length(y.size(), system.ode_size());
@@ -239,11 +242,11 @@ public:
   // time and the size that reached it cannot be paired across two runs.
   std::vector<ode::recorded_step> schedule() const { return solver.schedule(); }
 
-  // Carry lambda back over recorded steps k_last down to k_first + 1, so on return
-  // lambda is the adjoint of states[k_first]. states[k] is the state the run held
-  // at times()[k], so step k ran from states[k - 1] with step_sizes()[k]. Only
-  // accepted steps are recorded, and a rejected step never enters the solution, so
-  // the recorded list is the whole of what a sweep visits.
+  // Carry lambda back over recorded rows k_last down to k_first + 1, so on return
+  // lambda is the adjoint of the state row k_first ran on. Step k ran from row
+  // k - 1's ran_from() with its own recorded size. Only accepted steps are
+  // recorded, and a rejected step never enters the solution, so the recorded list
+  // is the whole of what a sweep visits.
   //
   // Every state visited has to be the width the System holds, so a caller whose
   // System changes width between steps sweeps one segment per width and changes the
@@ -280,10 +283,12 @@ public:
     }
     ode::row_batch lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
-      util::check_length(rec[k - 1].state.size(), system.ode_size());
-      solver.step_adjoint(system, k, rec[k - 1].time, rec[k].step_size,
-                          rec[k - 1].state, lambda, lambda_in,
-                          parameter_adjoint);
+      // What the run's step k ran from, which is the wider state where an
+      // insertion followed row k - 1 and that row's own where none did.
+      const state_type<System>& from = rec[k - 1].ran_from();
+      util::check_length(from.size(), system.ode_size());
+      solver.step_adjoint(system, k, rec[k - 1].time, rec[k].step_size, from,
+                          lambda, lambda_in, parameter_adjoint);
       lambda = std::move(lambda_in);
     }
   }

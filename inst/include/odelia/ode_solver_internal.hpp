@@ -107,6 +107,11 @@ public:
   // One accepted step, into the record: the time it reached, the size that
   // reached it, and the state there where the run was asked to keep states.
   void push_step(System& system, double time_, double step_size);
+  // The wider state an insertion just reached, onto the row it followed. It
+  // shares that row's time, so it is recorded beside that row's own state rather
+  // than as a row of its own -- a second row at one time would move the schedule
+  // a replay reads and the step index a recorded stage is addressed by.
+  void push_inserted(System& system);
   void step_to(System& system, double time_max_);
   // `reached` is the time a recording says this step ended at; NaN accumulates.
   void step_by(System& system, double step_size, double reached);
@@ -246,6 +251,21 @@ void SolverInternal<System>::push_step(System& system, double time_,
     system.ode_state(record.state.begin());
   }
   prev_steps.push_back(std::move(record));
+}
+
+// Kept only where the states are: nothing but a sweep reads it, and a sweep
+// cannot run on a record that has no states either.
+template <class System>
+void SolverInternal<System>::push_inserted(System& system) {
+  if (prev_steps.empty()) {
+    util::stop("push_inserted: no recorded step for an insertion to follow");
+  }
+  if (!keep_states_) {
+    return;
+  }
+  state_type& into = prev_steps.back().inserted;
+  into.resize(system.ode_size());
+  system.ode_state(into.begin());
 }
 
 template <class System>

@@ -164,14 +164,31 @@ struct recorded_step {
   double step_size;
 };
 
-// One row of a recording: the schedule row a replay would take, and the state the
-// run held there. A recording row IS a schedule row plus its state, so it derives
-// rather than repeating the two fields -- written out separately, they were two
-// structs differing by one member, and pairing a time from one container with a
-// state from another was a thing that compiled.
+// One row of a recording: the schedule row a replay would take, the state the run
+// held there, and the wider state an insertion made of it where one followed. A
+// recording row IS a schedule row plus its state, so it derives rather than
+// repeating the two fields -- written out separately, they were two structs
+// differing by one member, and pairing a time from one container with a state
+// from another was a thing that compiled.
+//
+// `inserted` is what the run reached between this row and the step above it, and
+// it is empty at every row no insertion followed. Recorded rather than inferred:
+// the forward pass knew it made an insertion here, and a walk that recovers that
+// from a width which grew has to refuse a width which shrinks, where a recorded
+// fact cannot be wrong. It is a field rather than a row of its own because an
+// insertion shares its time with the step below it -- two rows at one time would
+// move the schedule a replay reads and the step index a recorded stage is
+// addressed by.
 template <typename System>
 struct step_record : recorded_step {
   state_type<System> state;
+  state_type<System> inserted;
+
+  // What the step above this row ran from: the wider state where an insertion
+  // followed, and this row's own where none did.
+  const state_type<System>& ran_from() const {
+    return inserted.empty() ? state : inserted;
+  }
 };
 
 // A System whose state vector gains entries during a run does not declare a
