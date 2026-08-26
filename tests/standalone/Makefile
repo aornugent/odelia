@@ -67,5 +67,12 @@ probe_implicit_tangent: probe_implicit_tangent.cpp ../../src/Tape.cpp $(HEADERS)
 	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
 	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $< ../../src/Tape.cpp
 
+# Links the shipped tape runtime, as probe_implicit_tangent does. A measurement
+# and a demonstration rather than a check, so it is not in `all`.
+probe_tape_reset: probe_tape_reset.cpp ../../src/Tape.cpp $(HEADERS)
+	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
+	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $< ../../src/Tape.cpp
+
 clean:
-	rm -f r_free r_free.o Tape.o probe_width probe_implicit_tangent
+	rm -f r_free r_free.o Tape.o probe_width probe_implicit_tangent \
+	  probe_tape_reset
