@@ -89,7 +89,6 @@ public:
     return out;
   }
 
-  // ---- ODE interface -------------------------------------------------------
   size_t ode_size() const { return 1; }
   double ode_time() const { return time; }
   double ode_t0() const { return t0; }
@@ -153,7 +152,6 @@ public:
   std::vector<T*> ad_parameters()    { return {&gain}; }
   std::vector<T*> ad_initial_state() { return {}; }
 
-  // ---- The record, System to System --------------------------------------
   // The double Solver's adaptive pass fills it; the driver hands it to the active
   // System, which then loads it rather than refining again.
   void start_recording() {

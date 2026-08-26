@@ -35,13 +35,6 @@ compile_implicit_value_interface <- function() {
       using value_type = T;
       T a, b;
 
-      // The parameters at another scalar, with the derivative taken off. This is
-      // what implicit_value asks for to take dF/dy with them held still.
-      template <class U>
-      CubicBalance<U> rebind_from() const {
-        return {U(odelia::util::to_passive(a)), U(odelia::util::to_passive(b))};
-      }
-
       // Declared -> T: a deduced return type here is an XAD expression template
       // holding references to the temporaries of this return statement.
       T residual(T y) const { return a * y * y * y + y - b; }
@@ -78,11 +71,10 @@ compile_implicit_value_interface <- function() {
       tape.newRecording();
 
       const double y_star = sys.solve();
+      // d/dy (a y^3 + y - b) = 3 a y^2 + 1, at the point the theorem divides at.
       adouble y = odelia::implicit_value<adouble>(
-          y_star, sys,
-          []<class T>(const T& yy, const CubicBalance<T>& at) -> T {
-            return at.residual(yy);
-          });
+          y_star, 3.0 * a * y_star * y_star + 1.0,
+          [&](const adouble& yy) -> adouble { return sys.residual(yy); });
 
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
@@ -158,17 +150,6 @@ compile_implicit_value_interface <- function() {
           Rcpp::_["y_why"] = on_y.why);
     }
 
-    // The one input a fold residual reads.
-    template <typename T>
-    struct FoldInput {
-      using value_type = T;
-      T a;
-      template <class U>
-      FoldInput<U> rebind_from() const {
-        return {U(odelia::util::to_passive(a))};
-      }
-    };
-
     // A residual that touches zero rather than crossing it, so dF/dy is zero at
     // the operating point and the quotient the theorem asks for does not exist.
     // [[Rcpp::export]]
@@ -177,11 +158,10 @@ compile_implicit_value_interface <- function() {
       adouble aa(a);
       tape.registerInput(aa);
       tape.newRecording();
+      // d/dy (y - a)^2 = 2(y - a), which is exactly zero at y = a: the fold.
       adouble y = odelia::implicit_value<adouble>(
-          a, FoldInput<adouble>{aa},
-          []<class T>(const T& yy, const FoldInput<T>& at) -> T {
-            return (yy - at.a) * (yy - at.a);
-          });
+          a, 0.0,
+          [&](const adouble& yy) -> adouble { return (yy - aa) * (yy - aa); });
       return xad::value(y);
     }', verbose = FALSE)
 }

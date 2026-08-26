@@ -157,7 +157,6 @@ inline ode::least_squares least_squares_from_r(Rcpp::NumericMatrix observations,
   return f;
 }
 
-// ---- Gradients on the double handle ----------------------------------------
 // R holds only the double Solver; these helpers differentiate on the active solver
 // (the double System lifted via rebind_from) and return doubles.
 template <class SystemType, class ActiveSystemType>

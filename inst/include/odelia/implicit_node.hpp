@@ -16,9 +16,14 @@ namespace odelia {
 
 // One input a value responds to, and how. Kept as a pair so the two cannot be
 // assembled from separate lists and paired by position.
+//
+// THE INPUT IS BORROWED, and must outlive the record it is handed to. Held by
+// reference because copying an active scalar is not free: the copy registers a
+// tape slot and records a statement, for a value that is only ever read. A row
+// over n inputs cost n of those before this was a reference.
 template <class S>
 struct input_and_derivative {
-  S input;
+  const S& input;
   double derivative;
 };
 
@@ -122,78 +127,52 @@ template <class S>
   return record_with_derivatives<S>(p, against, into);
 }
 
-// A scalar whose derivative is itself active, which is the only reason to build
-// one: a second derivative. It is what decides how many corrections an implicit
-// node has to record -- see there.
-template <class S>
-concept SecondOrder = !std::is_same_v<typename S::derivative_type, double>;
-
-// The value y* defined implicitly by a scalar equation F(y; p) = 0, made
+// The value y* defined implicitly by a scalar equation F(y) = 0, made
 // differentiable. y* is solved in double, off the tape, by whatever root-find the
 // caller already has; this returns it on the tape carrying the derivative the
 // implicit function theorem gives:
 //     dy*/dp = -(dF/dp) / (dF/dy).
 //
-// F is a template on its scalar, evaluated twice: at a tangent with the
-// parameters rebound -- which drops their derivatives, so this is dF/dy exactly --
-// and at S with them active, which is dF/dp. `p` holds the residual's ACTIVE
-// inputs and nothing else; anything already double is the residual's own to
-// capture, and a struct rather than a list because the residual reads them by
-// name. The returned value is exactly y* bit for bit, so a quantity no active
-// parameter reaches introduces no shift, and a plain-double S returns y* with
-// nothing recorded. Reverse, forward and nested forward-over-reverse scalars all
-// thread dy*/dp through the record below.
-//
-// ⚠️ THE DENOMINATOR IS TAKEN ON A SCALAR THAT CANNOT RECORD, and that is why the
-// parameters are passed rather than captured. Taken at S and stripped it would put
-// every step of the probe on the active tape, and the only defence is a
-// deactivate/reactivate bracket that is silent when it is forgotten. Taken as a
-// difference it costs two evaluations and 1e-6 of accuracy. A tangent carries
-// dF/dy exactly and holds no tape -- and XAD offers no lift from an active scalar
-// into a tangent above it, so one evaluation cannot serve both.
+// dF/dp is taped: F is evaluated once, at S, and its derivative in every active
+// input the residual reads IS dF/dp. dF/dy is the caller's, for the same reason
+// implicit_root's is -- the two differ only in whether the row is supplied or
+// taped, and both take the slope. A residual mostly knows its own slope: it is
+// one term of the expression the caller just wrote. One that does not can take a
+// tangent through its own body and hand the answer here, which is a local three
+// lines rather than a rebindable parameter object every caller must carry.
 //
 // dF/dy is read at the point, so its own dependence on p belongs to the second
-// derivative rather than to this one.
-//
-// dF/dy is what the theorem divides by, so a non-invertible operating point stops
-// here: at a fold it approaches zero and the quotient is garbage rather than large.
-template <class S, class Params, class Residual>
-  requires ode::Rebindable<Params, ode::tangent_scalar<double>>
-S implicit_value(double y_star, const Params& p, Residual&& F) {
+// derivative rather than to this one. It is what the theorem divides by, so a
+// non-invertible operating point stops here: at a fold it approaches zero and the
+// quotient is garbage rather than large.
+template <class S, class Residual>
+S implicit_value(double y_star, double dFdy, Residual&& F) {
   if constexpr (std::is_same_v<S, double>) {
     return y_star;
   } else {
-    using D = ode::tangent_scalar<double>;
-    // A residual written `[](auto y, auto p) { return ...; }` deduces an XAD
-    // expression-template return type holding references to the temporaries of its
-    // return statement; those die when it returns, so evaluating it here would read
-    // a destroyed tape slot -- a segfault on the reverse sweep, not a wrong number.
-    // Requiring the scalar back exactly makes that a compile error.
+    // A residual written `[](auto y) { return ...; }` deduces an XAD
+    // expression-template return type holding references to the temporaries of
+    // its return statement; those die when it returns, so evaluating it here
+    // would read a destroyed tape slot -- a segfault on the reverse sweep, not a
+    // wrong number. Requiring the scalar back exactly makes that a compile error.
     static_assert(
-        std::is_same_v<std::invoke_result_t<Residual&, const D&,
-                                            decltype(p.template rebind_from<D>())>,
-                       D> &&
-            std::is_same_v<std::invoke_result_t<Residual&, const S&, const Params&>,
-                           S>,
-        "implicit_value: the residual must return its own scalar exactly at both "
-        "evaluations -- declare the return type "
-        "([]<class T>(const T& y, const inputs<T>& p) -> T { ... }). A deduced "
-        "return type is an expression template referencing temporaries that are "
-        "dead by the time this evaluates it.");
-    D probe = y_star;
-    ode::seed_direction(probe, 1.0);
-    const double dFdy = ode::derivative_along(F(probe, p.template rebind_from<D>()));
-    // Zero is the only threshold available here: how small a nonzero slope is too
-    // small depends on F's units, which the caller has and this does not.
+        std::is_same_v<std::invoke_result_t<Residual&, const S&>, S>,
+        "implicit_value: the residual must return its own scalar exactly "
+        "([](const S& y) -> S { ... }). A deduced return type is an expression "
+        "template referencing temporaries that are dead by the time this "
+        "evaluates it.");
     if (!util::is_finite(dFdy) || dFdy == 0.0) {
       util::stop("implicit_value: dF/dy is zero at the operating point, so the "
                  "implicit function theorem does not apply there (a fold?)");
     }
     // corr's value is ~0, since y* is the root; its derivative is (dF/dp)/(dF/dy),
     // so y* against it with a coefficient of -1 is the theorem's own quotient.
-    // to_passive strips every layer, so this composes at a nested scalar too.
     std::vector<input_and_derivative<S>> corrections;
-    const S corr = F(S(y_star), p) / dFdy;
+    const S corr = F(S(y_star)) / dFdy;
+    // Declared beside `corr` rather than inside the branch that fills it: the
+    // terms are borrowed, so a correction scoped to the branch would be read
+    // by the record below after its referent had gone.
+    S again{};
     corrections.push_back({corr, -1.0});
     // ⚠️ ONE CORRECTION IS RIGHT TO FIRST ORDER AND WRONG TO SECOND, because the
     // denominator is a constant: what it records is the theorem linearised, whose
@@ -205,20 +184,20 @@ S implicit_value(double y_star, const Params& p, Residual&& F) {
     // Recorded only where the scalar can hold a second derivative: on a plain
     // adjoint it would double the residual's tape to carry something nothing can
     // read.
-    if constexpr (SecondOrder<S>) {
+    if constexpr (ode::SecondOrder<S>) {
       S once;
       const record_report first =
           record_with_derivatives<S>(y_star, corrections, once);
       if (!first.whole) {
         util::stop("implicit_value: " + first.why);
       }
-      corrections.push_back({F(once, p) / dFdy, -1.0});
+      again = F(once) / dFdy;
+      corrections.push_back({again, -1.0});
     }
     S out;
-    // Stopped rather than reported, and the asymmetry with the two above is the
+    // Stopped rather than reported, and the asymmetry with implicit_root is the
     // point: this IS the value the equation defines, so a caller handed y* with
-    // no derivative has a structural zero and no way to know it. The two above
-    // return a value a consumer already has another use for.
+    // no derivative has a structural zero and no way to know it.
     const record_report report =
         record_with_derivatives<S>(y_star, corrections, out);
     if (!report.whole) {
