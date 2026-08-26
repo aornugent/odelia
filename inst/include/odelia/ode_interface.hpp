@@ -35,6 +35,37 @@ using active_scalar = typename xad::adj<T>::active_type;
 template <typename T = double>
 using adjoint_tape = typename active_scalar<T>::tape_type;
 
+// Every active value among the members handed in, whatever shape they arrive in:
+// a scalar, a container of them, a pair, a pointer to one, or an object that
+// answers for_each_active. A member the visitor cannot be called with is skipped,
+// so a class lists what it holds rather than deciding which of them carry a
+// derivative -- which is the judgment that makes forgetting one likely.
+//
+// ⚠️ A MEMBER IN A SHAPE NOT LISTED HERE IS SKIPPED, NOT REFUSED. An active scalar
+// inside something this does not open is passed over in silence, and the count a
+// caller checks afterwards is the only thing that says so.
+template <class F, class T>
+void visit_active(F& f, T& x) {
+  if constexpr (requires { x.for_each_active(f); }) {
+    x.for_each_active(f);
+  } else if constexpr (requires { x.first; x.second; }) {
+    visit_active(f, x.first);
+    visit_active(f, x.second);
+  } else if constexpr (requires { x.begin(); x.end(); }) {
+    for (auto& element : x) { visit_active(f, element); }
+  } else if constexpr (requires { *x; x == nullptr; }) {
+    if (x != nullptr) { visit_active(f, *x); }
+  } else if constexpr (std::invocable<F&, T&>) {
+    f(x);
+  }
+}
+
+template <class F, class A, class B, class... Rest>
+void visit_active(F& f, A& a, B& b, Rest&... rest) {
+  visit_active(f, a);
+  visit_active(f, b, rest...);
+}
+
 // A direction carried INSIDE an adjoint: one recording of a reverse pass,
 // differentiated along one direction. A mixed second derivative in every input
 // and one direction costs a single recording this way, where a tangent above a
