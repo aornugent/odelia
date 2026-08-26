@@ -73,6 +73,13 @@ probe_tape_reset: probe_tape_reset.cpp ../../src/Tape.cpp $(HEADERS)
 	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
 	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $< ../../src/Tape.cpp
 
+# The mark-rewind, measured: whether a recording nested inside a checkpoint
+# callback protects the slots a carried holder registered before it, and what the
+# alternatives cost. A measurement, so it is not in `all`.
+probe_nested_recording: probe_nested_recording.cpp ../../src/Tape.cpp $(HEADERS)
+	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
+	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $< ../../src/Tape.cpp
+
 clean:
 	rm -f r_free r_free.o Tape.o probe_width probe_implicit_tangent \
-	  probe_tape_reset
+	  probe_tape_reset probe_nested_recording
