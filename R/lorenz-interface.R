@@ -1,8 +1,6 @@
 #' Lorenz Solver R6 Class
 #'
-#' @description R6 wrapper for the Lorenz ODE solver. Gradients are computed on
-#'   this ordinary (double) solver via `value_and_gradient()`; the AD replay is
-#'   built internally, so there is no separate active solver to manage.
+#' @description R6 wrapper for the Lorenz ODE solver.
 #' @field ptr External pointer to the underlying C++ solver object.
 #' @param System_xp External pointer to the Lorenz system object.
 #' @param control_xp External pointer to the ODE control object.
@@ -11,10 +9,6 @@
 #' @param times Numeric vector of requested output times.
 #' @param value Logical flag for collect-history behavior.
 #' @param i Integer index into solver history.
-#' @param observations Numeric matrix of measured observations to fit against.
-#' @param obs_indices Integer vector of observed-state indices.
-#' @param ic Optional initial condition value(s) to differentiate w.r.t.
-#' @param params Optional parameter vector to differentiate w.r.t.
 #' @param method Integration method: `"rkck"` (default, explicit Cash-Karp
 #'   RK 4(5)) or `"rodas"` (implicit RODAS4(3) Rosenbrock, for stiff systems).
 #' @export
@@ -104,34 +98,7 @@ Lorenz_Solver <- R6::R6Class(
         dplyr::bind_rows() |>
         dplyr::as_tibble() |>
         tibble::remove_rownames()
-    },
-
-    #' @description Set the calibration observations to fit against. These are
-    #'   held by the R wrapper and passed to each `value_and_gradient()` call;
-    #'   the C++ solver stores no calibration state.
-    set_observations = function(times, observations, obs_indices) {
-      private$obs_times <- times
-      private$obs_data <- observations
-      private$obs_indices <- obs_indices
-      invisible(self)
-    },
-
-    #' @description Value and least-squares gradient w.r.t. initial conditions
-    #'   and/or parameters, from one AD recording. Requires `set_observations()`.
-    value_and_gradient = function(ic = NULL, params = NULL) {
-      if (is.null(private$obs_times)) {
-        stop("Call set_observations() before value_and_gradient()")
-      }
-      Solver_value_and_gradient(
-        self$ptr, private$obs_times, private$obs_data, private$obs_indices,
-        ic, params
-      )
     }
-  ),
-  private = list(
-    obs_times = NULL,
-    obs_data = NULL,
-    obs_indices = NULL
   )
 )
 

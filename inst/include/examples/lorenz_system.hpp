@@ -93,11 +93,8 @@ public:
     return it;
   }
 
-  // The differentiable inputs, in the order DifferentiationTargets indexes them:
-  // parameters (sigma, R, b) then initial state (y0, y1, y2). The driver seeds a
-  // chosen subset active before each solve.
-  std::vector<T*> ad_parameters()    { return {&sigma, &R, &b}; }
-  std::vector<T*> ad_initial_state() { return {&y0_init, &y1_init, &y2_init}; }
+  // The parameters a pass can seed active, in the order it indexes them.
+  std::vector<T*> ad_parameters() { return {&sigma, &R, &b}; }
 
   template <typename Iterator>
   Iterator ode_state(Iterator it) const {

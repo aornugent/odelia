@@ -40,13 +40,6 @@ compile_step_record_interface <- function() {
       return solver;
     }
 
-    // A solver that never took an adaptive pass has no schedule to replay.
-    // [[Rcpp::export]]
-    void unrecorded_run(Rcpp::NumericVector y0, double t0) {
-      ode::Solver<LorenzD> solver = make_solver(y0, t0);
-      solver.run();
-    }
-
     // Adaptive run over [t0, t1], then the same trajectory replayed twice: once
     // over the recorded step sizes, once over the recorded times.
     // [[Rcpp::export]]
@@ -116,7 +109,3 @@ test_that("a replay over the recorded step sizes reproduces the adaptive run bit
   expect_gt(differing, 0)
 })
 
-test_that("the replay guard fires when nothing was recorded", {
-  compile_step_record_interface()
-  expect_error(unrecorded_run(c(1, 1, 1), 100), "no recorded schedule")
-})

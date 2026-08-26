@@ -1,5 +1,16 @@
 # Automatic differentiation in odelia: exact gradients of an ODE run
 
+> **Out of date in one direction.** The calibration driver this document is
+> largely organised around -- `DifferentiationTargets`, `compute_jacobian`,
+> `compute_gradient`, the least-squares functional, the `Solver`-cached active
+> solver and tape, and `ad_initial_state()` -- has been removed. What remains is
+> the recording, its transpose, and the implicit-node primitives. The sections on
+> ownership, control flow, differentiation targets, functionals and the R
+> boundary describe machinery that is gone; the sections on the System contract,
+> `rebind_from`, what a recording holds, and injecting a known derivative still
+> hold. It is left rather than half-rewritten because the surface changes shape
+> again when the sweep is rewritten around a complete recording.
+
 **Scope:** `traitecoevo/odelia` — the reverse-mode automatic-differentiation API. A
 new developer with only this code should come away understanding what a gradient is made
 of, who owns what, the two axes every workflow is a point on, the contract a System

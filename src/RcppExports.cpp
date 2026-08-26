@@ -10,81 +10,6 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
-// Canopy_new
-SEXP Canopy_new(double gain, double y0);
-RcppExport SEXP _odelia_Canopy_new(SEXP gainSEXP, SEXP y0SEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type gain(gainSEXP);
-    Rcpp::traits::input_parameter< double >::type y0(y0SEXP);
-    rcpp_result_gen = Rcpp::wrap(Canopy_new(gain, y0));
-    return rcpp_result_gen;
-END_RCPP
-}
-// Canopy_adaptive_final
-double Canopy_adaptive_final(SEXP system_xp, SEXP control_xp, double Tmax);
-RcppExport SEXP _odelia_Canopy_adaptive_final(SEXP system_xpSEXP, SEXP control_xpSEXP, SEXP TmaxSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
-    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
-    rcpp_result_gen = Rcpp::wrap(Canopy_adaptive_final(system_xp, control_xp, Tmax));
-    return rcpp_result_gen;
-END_RCPP
-}
-// Canopy_record_replay_gradient
-Rcpp::List Canopy_record_replay_gradient(SEXP system_xp, SEXP control_xp, double Tmax, bool reuse_light);
-RcppExport SEXP _odelia_Canopy_record_replay_gradient(SEXP system_xpSEXP, SEXP control_xpSEXP, SEXP TmaxSEXP, SEXP reuse_lightSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
-    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
-    Rcpp::traits::input_parameter< bool >::type reuse_light(reuse_lightSEXP);
-    rcpp_result_gen = Rcpp::wrap(Canopy_record_replay_gradient(system_xp, control_xp, Tmax, reuse_light));
-    return rcpp_result_gen;
-END_RCPP
-}
-// Canopy_Solver_new
-SEXP Canopy_Solver_new(SEXP system_xp, SEXP control_xp);
-RcppExport SEXP _odelia_Canopy_Solver_new(SEXP system_xpSEXP, SEXP control_xpSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type system_xp(system_xpSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type control_xp(control_xpSEXP);
-    rcpp_result_gen = Rcpp::wrap(Canopy_Solver_new(system_xp, control_xp));
-    return rcpp_result_gen;
-END_RCPP
-}
-// Canopy_record
-int Canopy_record(SEXP solver_xp, double Tmax);
-RcppExport SEXP _odelia_Canopy_record(SEXP solver_xpSEXP, SEXP TmaxSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
-    Rcpp::traits::input_parameter< double >::type Tmax(TmaxSEXP);
-    rcpp_result_gen = Rcpp::wrap(Canopy_record(solver_xp, Tmax));
-    return rcpp_result_gen;
-END_RCPP
-}
-// Canopy_replay_gradient
-Rcpp::List Canopy_replay_gradient(SEXP solver_xp, bool reuse_light);
-RcppExport SEXP _odelia_Canopy_replay_gradient(SEXP solver_xpSEXP, SEXP reuse_lightSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
-    Rcpp::traits::input_parameter< bool >::type reuse_light(reuse_lightSEXP);
-    rcpp_result_gen = Rcpp::wrap(Canopy_replay_gradient(solver_xp, reuse_light));
-    return rcpp_result_gen;
-END_RCPP
-}
 // System_new
 SEXP System_new(double sigma, double R, double b);
 RcppExport SEXP _odelia_System_new(SEXP sigmaSEXP, SEXP RSEXP, SEXP bSEXP) {
@@ -343,48 +268,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// Solver_value_and_gradient
-Rcpp::List Solver_value_and_gradient(SEXP solver_xp, Rcpp::NumericVector times, Rcpp::NumericMatrix observations, Rcpp::IntegerVector obs_indices, Rcpp::Nullable<Rcpp::NumericVector> ic, Rcpp::Nullable<Rcpp::NumericVector> params);
-RcppExport SEXP _odelia_Solver_value_and_gradient(SEXP solver_xpSEXP, SEXP timesSEXP, SEXP observationsSEXP, SEXP obs_indicesSEXP, SEXP icSEXP, SEXP paramsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type times(timesSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type observations(observationsSEXP);
-    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type obs_indices(obs_indicesSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type ic(icSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type params(paramsSEXP);
-    rcpp_result_gen = Rcpp::wrap(Solver_value_and_gradient(solver_xp, times, observations, obs_indices, ic, params));
-    return rcpp_result_gen;
-END_RCPP
-}
-// Solver_gradient_final_state
-Rcpp::List Solver_gradient_final_state(SEXP solver_xp, Rcpp::NumericVector times, Rcpp::NumericVector params);
-RcppExport SEXP _odelia_Solver_gradient_final_state(SEXP solver_xpSEXP, SEXP timesSEXP, SEXP paramsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type times(timesSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type params(paramsSEXP);
-    rcpp_result_gen = Rcpp::wrap(Solver_gradient_final_state(solver_xp, times, params));
-    return rcpp_result_gen;
-END_RCPP
-}
-// Solver_jacobian_final_state
-Rcpp::List Solver_jacobian_final_state(SEXP solver_xp, Rcpp::NumericVector times, Rcpp::NumericVector params);
-RcppExport SEXP _odelia_Solver_jacobian_final_state(SEXP solver_xpSEXP, SEXP timesSEXP, SEXP paramsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type solver_xp(solver_xpSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type times(timesSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type params(paramsSEXP);
-    rcpp_result_gen = Rcpp::wrap(Solver_jacobian_final_state(solver_xp, times, params));
-    return rcpp_result_gen;
-END_RCPP
-}
 // lorenz_rhs
 List lorenz_rhs(double t, NumericVector state, NumericVector pars);
 RcppExport SEXP _odelia_lorenz_rhs(SEXP tSEXP, SEXP stateSEXP, SEXP parsSEXP) {
@@ -620,12 +503,6 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_odelia_Canopy_new", (DL_FUNC) &_odelia_Canopy_new, 2},
-    {"_odelia_Canopy_adaptive_final", (DL_FUNC) &_odelia_Canopy_adaptive_final, 3},
-    {"_odelia_Canopy_record_replay_gradient", (DL_FUNC) &_odelia_Canopy_record_replay_gradient, 4},
-    {"_odelia_Canopy_Solver_new", (DL_FUNC) &_odelia_Canopy_Solver_new, 2},
-    {"_odelia_Canopy_record", (DL_FUNC) &_odelia_Canopy_record, 2},
-    {"_odelia_Canopy_replay_gradient", (DL_FUNC) &_odelia_Canopy_replay_gradient, 2},
     {"_odelia_System_new", (DL_FUNC) &_odelia_System_new, 3},
     {"_odelia_System_pars", (DL_FUNC) &_odelia_System_pars, 1},
     {"_odelia_System_set_params", (DL_FUNC) &_odelia_System_set_params, 2},
@@ -649,9 +526,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_odelia_Solver_get_history_size", (DL_FUNC) &_odelia_Solver_get_history_size, 1},
     {"_odelia_Solver_get_history_step", (DL_FUNC) &_odelia_Solver_get_history_step, 2},
     {"_odelia_Solver_get_history", (DL_FUNC) &_odelia_Solver_get_history, 1},
-    {"_odelia_Solver_value_and_gradient", (DL_FUNC) &_odelia_Solver_value_and_gradient, 6},
-    {"_odelia_Solver_gradient_final_state", (DL_FUNC) &_odelia_Solver_gradient_final_state, 3},
-    {"_odelia_Solver_jacobian_final_state", (DL_FUNC) &_odelia_Solver_jacobian_final_state, 3},
     {"_odelia_lorenz_rhs", (DL_FUNC) &_odelia_lorenz_rhs, 3},
     {"_odelia_test_param_types", (DL_FUNC) &_odelia_test_param_types, 1},
     {"_odelia_OdeControl_new", (DL_FUNC) &_odelia_OdeControl_new, 0},

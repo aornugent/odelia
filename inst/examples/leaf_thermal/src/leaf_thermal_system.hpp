@@ -93,10 +93,8 @@ public:
     return it;
   }
 
-  // Differentiable inputs, in the order DifferentiationTargets indexes them:
-  // parameters (k_H, g_tr_max, m_tr, T_tr_mid) then initial state (T_LC).
-  std::vector<T*> ad_parameters()    { return {&k_H, &g_tr_max, &m_tr, &T_tr_mid}; }
-  std::vector<T*> ad_initial_state() { return {&T_LC_init}; }
+  // The parameters a pass can seed active, in the order it indexes them.
+  std::vector<T*> ad_parameters() { return {&k_H, &g_tr_max, &m_tr, &T_tr_mid}; }
 
 void set_drivers() {
     T_air = temperature_fn->evaluate(time);

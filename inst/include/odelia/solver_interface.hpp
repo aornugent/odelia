@@ -13,7 +13,6 @@
 #include <Rcpp.h>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_solver.hpp>
-#include <odelia/calibration.hpp>
 #include <odelia/rcpp_interface_helpers.hpp>
 
 namespace odelia {
@@ -26,8 +25,7 @@ inline Rcpp::XPtr<ode::Solver<T>> get_solver(SEXP xp) {
 }
 
 // The step-wise Solver operations. R holds only the double Solver, so these
-// forward straight to it; the AD replay is built internally by the gradient
-// drivers at the bottom of this file.
+// forward straight to it.
 
 template<typename SystemType>
 inline void Solver_reset_impl(SEXP solver_xp) {
@@ -132,100 +130,6 @@ inline Rcpp::List Solver_get_history_impl(SEXP solver_xp) {
   }
   out.attr("names") = names;
   return Rcpp::DataFrame(out);
-}
-
-// Marshal an R (observation matrix, 1-based obs_indices) pair into a least_squares
-// functional. The functional owns the fit data; the sampling grid is the
-// recording's, so no schedule is passed here.
-inline ode::least_squares least_squares_from_r(Rcpp::NumericMatrix observations,
-                                               Rcpp::IntegerVector obs_indices) {
-  ode::least_squares f;
-
-  int nrows = observations.nrow(), ncols = observations.ncol();
-  f.observations.resize(nrows);
-  for (int i = 0; i < nrows; ++i) {
-    f.observations[i].resize(ncols);
-    for (int j = 0; j < ncols; ++j) {
-      f.observations[i][j] = observations(i, j);
-    }
-  }
-
-  f.obs_indices.resize(obs_indices.size());
-  for (size_t i = 0; i < static_cast<size_t>(obs_indices.size()); ++i) {
-    f.obs_indices[i] = obs_indices[i] - 1;  // R 1-based -> C++ 0-based
-  }
-  return f;
-}
-
-// R holds only the double Solver; these helpers differentiate on the active solver
-// (the double System lifted via rebind_from) and return doubles.
-template <class SystemType, class ActiveSystemType>
-ode::Solver<ActiveSystemType>& active_solver(ode::Solver<SystemType>& d) {
-  if (!d.active_solver) {
-    d.active_solver = std::make_shared<ode::Solver<ActiveSystemType>>(
-        d.get_system_ref().template rebind_from<typename ActiveSystemType::value_type>(),
-        d.get_control());
-  }
-  return *d.active_solver;
-}
-
-template <class SystemType, class ActiveSystemType, class Functional>
-std::pair<double, std::vector<double>>
-gradient_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
-                   const std::vector<double>& schedule, Functional&& functional) {
-  auto d = get_solver<SystemType>(solver_xp);
-  auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  active.set_schedule(schedule);  // hand the recorded L1 schedule to the active active_system
-  return ode::compute_gradient(active, ind, std::forward<Functional>(functional));
-}
-
-template <class SystemType, class ActiveSystemType, class Functional>
-std::pair<std::vector<double>, std::vector<std::vector<double>>>
-jacobian_on_double(SEXP solver_xp, const ode::DifferentiationTargets& ind,
-                   const std::vector<double>& schedule, Functional&& functional) {
-  auto d = get_solver<SystemType>(solver_xp);
-  auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  active.set_schedule(schedule);  // hand the recorded L1 schedule to the active active_system
-  return ode::compute_jacobian(active, ind, std::forward<Functional>(functional));
-}
-
-// Value + least-squares gradient from one recording, so an optimiser's fn/gr share
-// the tape. This is the calibration entry; an arbitrary functional is differentiated
-// through gradient_on_double / jacobian_on_double instead (see Solver_gradient_final_state).
-template <class SystemType, class ActiveSystemType>
-Rcpp::List Solver_value_and_gradient_impl(SEXP solver_xp,
-                                          Rcpp::Nullable<Rcpp::NumericVector> ic,
-                                          Rcpp::Nullable<Rcpp::NumericVector> params,
-                                          Rcpp::NumericVector times,
-                                          Rcpp::NumericMatrix observations,
-                                          Rcpp::IntegerVector obs_indices) {
-  // Seed every param then every IC; `values` follows the same params-then-ics order.
-  auto d = get_solver<SystemType>(solver_xp);
-  ode::DifferentiationTargets ind;
-  if (!params.isNull()) {
-    Rcpp::NumericVector v(params);
-    for (int i = 0; i < v.size(); ++i) {
-      ind.params.push_back(i);
-      ind.values.push_back(v[i]);
-    }
-  }
-  if (!ic.isNull()) {
-    Rcpp::NumericVector v(ic);
-    for (int j = 0; j < v.size(); ++j) {
-      ind.ics.push_back(j);
-      ind.values.push_back(v[j]);
-    }
-  }
-  // The fit observations are handed in per call and owned by the functional; the
-  // solver holds no fit state.
-  auto& active = active_solver<SystemType, ActiveSystemType>(*d);
-  auto functional = least_squares_from_r(observations, obs_indices);
-  // `times` from R is the recorded schedule the active active_system replays; least_squares
-  // samples the collected trajectory at obs_indices.
-  active.set_schedule(std::vector<double>(times.begin(), times.end()));
-  auto [value, gradient] = ode::compute_gradient(active, ind, functional);
-  return Rcpp::List::create(Rcpp::Named("value") = value,
-                            Rcpp::Named("gradient") = Rcpp::wrap(gradient));
 }
 
 } // namespace solver

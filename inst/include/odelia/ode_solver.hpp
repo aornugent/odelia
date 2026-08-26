@@ -3,11 +3,9 @@
 
 #include <odelia/ode_solver_internal.hpp>
 #include <XAD/XAD.hpp>
-#include <XAD/Tape.hpp>
 #include <cmath>
-#include <memory>
 #include <span>
-#include <type_traits>
+#include <vector>
 
 namespace odelia {
 namespace ode {
@@ -34,25 +32,6 @@ public:
   {
     collect = true;
   }
-
-  // Copyable: the tape and the cached active solver are rebuildable scratch, not
-  // part of the Solver's value, so a copy starts with them empty and rebuilds them
-  // on its first gradient. plant copies Solvers on the non-AD path, where that
-  // scratch is irrelevant; the implicit copy constructor is unavailable only
-  // because of the unique_ptr<Tape> member.
-  Solver(const Solver& o)
-    : collect(o.collect), system(o.system), control_(o.control_),
-      solver(o.solver), replay_schedule_(o.replay_schedule_) {
-    history = o.history;
-  }
-  Solver& operator=(const Solver& o) {
-    collect = o.collect; system = o.system; control_ = o.control_;
-    solver = o.solver; replay_schedule_ = o.replay_schedule_; history = o.history;
-    tape.reset(); active_solver.reset();
-    return *this;
-  }
-  Solver(Solver&&) = default;
-  Solver& operator=(Solver&&) = default;
 
   // TODO: solver.reset() will set time within the solver to zero.
   // However, there is no other current way of setting the time within
@@ -316,35 +295,6 @@ public:
   std::size_t recorded_rates() const { return solver.recorded_rates(); }
   void clear_recorded_rates() { solver.clear_recorded_rates(); }
 
-  // Hand the recorded replay schedule (L1) to this solver. The active System holds no
-  // recording of its own (rebind copies values, not the schedule), so the schedule is
-  // handed over per gradient call -- the L1 analogue of the System's set_recording for
-  // L2/L3, and the reason L1 is Solver-owned state rather than a gradient-driver
-  // argument.
-  void set_schedule(std::vector<double> steps) { replay_schedule_ = std::move(steps); }
-
-  // Replay the recorded schedule with the currently-seeded system: the forward pass
-  // the gradient driver differentiates, called once per Jacobian row.
-  void run() {
-    if (replay_schedule_.empty()) {
-      util::stop("no recorded schedule to replay; run the adaptive pass first");
-    }
-    advance_fixed(replay_schedule_);
-  }
-
-  // The active (AD) version of this System, lifted via rebind. Built on the first
-  // gradient and reused, so an optimiser loop amortizes it (its own `tape` included).
-  // Cached on the object rather than an R handle, so a C++ caller that holds the
-  // solver as a plain member shares the reuse. mutable: scratch, reusable through a
-  // const solver.
-  using active_scalar      = ode::active_scalar<double>;
-  using active_system_type = typename rebound_system<System, active_scalar>::type;
-  mutable std::shared_ptr<Solver<active_system_type>> active_solver;
-
-  // Reverse-mode tape, created on the first gradient and reused (only ever exercised
-  // on the active solver).
-  std::unique_ptr<ode::adjoint_tape<double>> tape;
-
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?
 std::vector<System> history;
@@ -354,8 +304,6 @@ private:
   System system;
   OdeControl control_;
   SolverInternal<System> solver;
-  std::vector<double> replay_schedule_;  // L1 recording handed over per gradient call
-
 };
 }
 }

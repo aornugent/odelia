@@ -8,13 +8,9 @@
 #include <utility>
 #include <vector>
 
-// Carrying an adjoint back over a recording whose state width changed. The tape
-// discipline here is adjoint.hpp's: the System is lifted per recording, so the
-// tape is cleared between them.
-//
-// Apart from calibration.hpp, which records on a System it keeps and therefore
-// cannot clear. Holding the two in one header meant a reader had to track which
-// regime a function belonged to.
+// Carrying an adjoint back over a recording whose state width changed. The
+// System is lifted per recording and the tape cleared between them, which is the
+// one tape discipline in this library.
 
 namespace odelia {
 namespace ode {

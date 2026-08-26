@@ -11,16 +11,13 @@
 #include <Rcpp.h>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_solver.hpp>
-#include <odelia/calibration.hpp>
 #include <odelia/solver_interface.hpp>
 #include <examples/lorenz_system.hpp>
 
 using namespace Rcpp;
 using namespace odelia;
 
-// Define types for Lorenz system
 typedef LorenzSystem<double> SystemType;
-typedef LorenzSystem<xad::adj<double>::active_type> ActiveSystemType;
 
 // Helper to get system pointer
 inline Rcpp::XPtr<SystemType> get_system(SEXP xp) {
@@ -189,97 +186,6 @@ Rcpp::List Solver_get_history(SEXP solver_xp) {
   return odelia::solver::Solver_get_history_impl<SystemType>(
     solver_xp
   );
-}
-
-// value + least-squares gradient on the double handle: the active replay is built,
-// used, and destroyed inside the call. Observations are passed per call and owned
-// by the functional -- the solver holds no calibration state.
-// [[Rcpp::export]]
-Rcpp::List Solver_value_and_gradient(SEXP solver_xp,
-                                     Rcpp::NumericVector times,
-                                     Rcpp::NumericMatrix observations,
-                                     Rcpp::IntegerVector obs_indices,
-                                     Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
-                                     Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
-  return odelia::solver::Solver_value_and_gradient_impl<SystemType, ActiveSystemType>(
-    solver_xp, ic, params, times, observations, obs_indices
-  );
-}
-
-//-------------------------------------------------------------------------
-// An emergent-metric stand-in: the summed final state (one scalar). A pure
-// reduction -- the driver replays, this reads solver.state() -- exercising the
-// functional seam with something other than a loss.
-struct sum_final_state {
-  std::size_t codomain() const { return 1; }
-  template<typename Solver>
-  typename Solver::value_type operator()(Solver& solver) const {
-    typename Solver::value_type total(0.0);
-    for (auto const& s : solver.state()) {
-      total += s;
-    }
-    return total;
-  }
-};
-
-// DOUBLE solver handle; the active replay is built internally.
-// [[Rcpp::export]]
-Rcpp::List Solver_gradient_final_state(SEXP solver_xp,
-                                       Rcpp::NumericVector times,
-                                       Rcpp::NumericVector params) {
-  std::vector<double> t(times.begin(), times.end());
-  // Seed the parameters.
-  ode::DifferentiationTargets targets;
-  for (int i = 0; i < params.size(); ++i) {
-    targets.params.push_back(i);
-    targets.values.push_back(params[i]);
-  }
-  // `times` is the replay schedule the driver advances through.
-  auto [value, gradient] = odelia::solver::gradient_on_double<SystemType, ActiveSystemType>(
-    solver_xp, targets, t, sum_final_state{});
-  return Rcpp::List::create(Rcpp::Named("value") = value,
-                            Rcpp::Named("gradient") = Rcpp::wrap(gradient));
-}
-
-// A multi-output functional: the whole final state. Its codomain is the ODE size,
-// carried so the driver reads one consistent output count.
-struct final_state {
-  std::size_t m;
-  std::size_t codomain() const { return m; }
-  template<typename Solver>
-  std::vector<typename Solver::value_type> operator()(Solver& solver) const {
-    return solver.state();
-  }
-};
-
-// DOUBLE solver handle; the active replay is built internally.
-// [[Rcpp::export]]
-Rcpp::List Solver_jacobian_final_state(SEXP solver_xp,
-                                       Rcpp::NumericVector times,
-                                       Rcpp::NumericVector params) {
-  std::vector<double> t(times.begin(), times.end());
-  // Seed the parameters.
-  ode::DifferentiationTargets targets;
-  for (int i = 0; i < params.size(); ++i) {
-    targets.params.push_back(i);
-    targets.values.push_back(params[i]);
-  }
-  // final_state returns the whole ODE state, so its codomain is the ODE size.
-  const std::size_t m =
-    odelia::solver::get_solver<SystemType>(solver_xp)->get_system_ref().ode_size();
-  // `times` is the replay schedule the driver advances through.
-  auto [values, jacobian] = odelia::solver::jacobian_on_double<SystemType, ActiveSystemType>(
-    solver_xp, targets, t, final_state{m});
-
-  const size_t nrow = jacobian.size(), ncol = nrow ? jacobian[0].size() : 0;
-  Rcpp::NumericMatrix J(nrow, ncol);
-  for (size_t i = 0; i < nrow; ++i) {
-    for (size_t j = 0; j < ncol; ++j) {
-      J(i, j) = jacobian[i][j];
-    }
-  }
-  return Rcpp::List::create(Rcpp::Named("values") = Rcpp::wrap(values),
-                            Rcpp::Named("jacobian") = J);
 }
 
 //-------------------------------------------------------------------------

@@ -29,7 +29,6 @@ using namespace odelia;
 
 // Define types for Leaf Thermal system
 typedef LeafThermalSystem<double> SystemType;
-typedef LeafThermalSystem<xad::adj<double>::active_type> ActiveSystemType;
 
 // Helper to get system pointer
 inline Rcpp::XPtr<SystemType> get_LeafThermalSystem(SEXP xp) {
@@ -226,18 +225,4 @@ Rcpp::DataFrame LeafSolver_get_history_step(SEXP solver_xp, std::size_t i) {
 // [[Rcpp::export]]
 Rcpp::List LeafSolver_get_history(SEXP solver_xp) {
   return odelia::solver::Solver_get_history_impl<SystemType>(solver_xp);
-}
-
-// Value + least-squares gradient on the double handle. Observations are passed per
-// call and owned by the functional; the solver holds no calibration state.
-// [[Rcpp::export]]
-Rcpp::List LeafSolver_value_and_gradient(SEXP solver_xp,
-                         Rcpp::NumericVector times,
-                         Rcpp::NumericMatrix observations,
-                         Rcpp::IntegerVector obs_indices,
-                         Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
-                         Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
-  return odelia::solver::Solver_value_and_gradient_impl<SystemType, ActiveSystemType>(
-    solver_xp, ic, params, times, observations, obs_indices
-  );
 }

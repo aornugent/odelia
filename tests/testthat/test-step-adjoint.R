@@ -207,23 +207,6 @@ testthat::test_that("the adjoint scalar is named at namespace scope", {
     bool active_scalar_named_without_solver() { return true; }
   ')
   expect_true(active_scalar_named_without_solver())
-
-  # The Solver member alias and the namespace-scope one are the same type.
-  Rcpp::sourceCpp(code = '
-    // [[Rcpp::plugins(cpp20)]]
-    #include <Rcpp.h>
-    #include <type_traits>
-    #include <odelia/ode_solver.hpp>
-    #include <examples/lorenz_system.hpp>
-
-    static_assert(std::is_same_v<
-                  odelia::ode::Solver<LorenzSystem<double>>::active_scalar,
-                  odelia::ode::active_scalar<>>);
-
-    // [[Rcpp::export]]
-    bool active_scalar_matches_solver() { return true; }
-  ')
-  expect_true(active_scalar_matches_solver())
 })
 
 # Compile step_adjoint on a minimal System, with `rebind_body` as its rebind_from()

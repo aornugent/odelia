@@ -4,9 +4,7 @@
 \alias{Lorenz_Solver}
 \title{Lorenz Solver R6 Class}
 \description{
-R6 wrapper for the Lorenz ODE solver. Gradients are computed on
-  this ordinary (double) solver via `value_and_gradient()`; the AD replay is
-  built internally, so there is no separate active solver to manage.
+R6 wrapper for the Lorenz ODE solver.
 }
 \section{Public fields}{
   \if{html}{\out{<div class="r6-fields">}}
@@ -32,8 +30,6 @@ R6 wrapper for the Lorenz ODE solver. Gradients are computed on
     \item \href{#method-Lorenz_Solver-history_size}{\code{Lorenz_Solver$history_size()}}
     \item \href{#method-Lorenz_Solver-history_step}{\code{Lorenz_Solver$history_step()}}
     \item \href{#method-Lorenz_Solver-history}{\code{Lorenz_Solver$history()}}
-    \item \href{#method-Lorenz_Solver-set_observations}{\code{Lorenz_Solver$set_observations()}}
-    \item \href{#method-Lorenz_Solver-value_and_gradient}{\code{Lorenz_Solver$value_and_gradient()}}
     \item \href{#method-Lorenz_Solver-clone}{\code{Lorenz_Solver$clone()}}
   }
 }
@@ -52,8 +48,8 @@ R6 wrapper for the Lorenz ODE solver. Gradients are computed on
     \describe{
       \item{\code{System_xp}}{External pointer to the Lorenz system object.}
       \item{\code{control_xp}}{External pointer to the ODE control object.}
-      \item{\code{method}}{Integration method: \code{"rkck"} (default, explicit Cash-Karp
-        RK 4(5)) or \code{"rodas"} (implicit RODAS4(3) Rosenbrock, for stiff systems).}
+      \item{\code{method}}{Integration method: `"rkck"` (default, explicit Cash-Karp
+RK 4(5)) or `"rodas"` (implicit RODAS4(3) Rosenbrock, for stiff systems).}
     }
     \if{html}{\out{</div>}}
   }
@@ -254,50 +250,6 @@ R6 wrapper for the Lorenz ODE solver. Gradients are computed on
   \subsection{Usage}{
     \if{html}{\out{<div class="r">}}
     \preformatted{Lorenz_Solver$history()}
-    \if{html}{\out{</div>}}
-  }
-}
-
-\if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-Lorenz_Solver-set_observations"></a>}}
-\if{latex}{\out{\hypertarget{method-Lorenz_Solver-set_observations}{}}}
-\subsection{\code{Lorenz_Solver$set_observations()}}{
-  Set the calibration observations to fit against. These are
-  held by the R wrapper and passed to each `value_and_gradient()` call;
-  the C++ solver stores no calibration state.
-  \subsection{Usage}{
-    \if{html}{\out{<div class="r">}}
-    \preformatted{Lorenz_Solver$set_observations(times, observations, obs_indices)}
-    \if{html}{\out{</div>}}
-  }
-  \subsection{Arguments}{
-    \if{html}{\out{<div class="arguments">}}
-    \describe{
-      \item{\code{times}}{Numeric vector of requested output times.}
-      \item{\code{observations}}{Numeric matrix of measured observations to fit against.}
-      \item{\code{obs_indices}}{Integer vector of observed-state indices.}
-    }
-    \if{html}{\out{</div>}}
-  }
-}
-
-\if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-Lorenz_Solver-value_and_gradient"></a>}}
-\if{latex}{\out{\hypertarget{method-Lorenz_Solver-value_and_gradient}{}}}
-\subsection{\code{Lorenz_Solver$value_and_gradient()}}{
-  Value and least-squares gradient w.r.t. initial conditions
-  and/or parameters, from one AD recording. Requires `set_observations()`.
-  \subsection{Usage}{
-    \if{html}{\out{<div class="r">}}
-    \preformatted{Lorenz_Solver$value_and_gradient(ic = NULL, params = NULL)}
-    \if{html}{\out{</div>}}
-  }
-  \subsection{Arguments}{
-    \if{html}{\out{<div class="arguments">}}
-    \describe{
-      \item{\code{ic}}{Optional initial condition value(s) to differentiate w.r.t.}
-      \item{\code{params}}{Optional parameter vector to differentiate w.r.t.}
-    }
     \if{html}{\out{</div>}}
   }
 }

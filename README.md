@@ -8,8 +8,7 @@
 Runge-Kutta 4-5 method, with an interface to R via Rcpp. The solver runs entirely
 in compiled code, so it is fast, and ODE systems can be templated on their scalar
 type to support **automatic differentiation (AD)** — letting you compute exact
-gradients of a solution with respect to its parameters for use in optimisation and
-calibration.
+gradients of a solution with respect to its parameters.
 
 The core solver was first developed by Rich FitzJohn as part of the
 [plant package](https://github.com/traitecoevo/plant/). This package spins that
@@ -21,7 +20,7 @@ code out so it can be used more widely.
   the equivalent solved via `deSolve`; see the Lorenz example).
 - **Automatic differentiation** of ODE solutions w.r.t. parameters and initial
   conditions, via the vendored [XAD](https://github.com/auto-differentiation/xad)
-  library — enabling gradient-based parameter fitting.
+  library.
 - **External drivers**: time-varying forcing variables, smoothly interpolated with
   cubic splines and queried by the system at each step.
 - Header-only C++ core that other Rcpp packages can link against.
@@ -73,8 +72,6 @@ For more, see the vignettes (also rendered on the
 
 - `vignette("odelia")` — getting started with the core abstractions
   ([source](vignettes/odelia.Rmd)).
-- `vignette("parameter-fitting")` — recovering parameters with automatic
-  differentiation ([source](vignettes/parameter-fitting.Rmd)).
 
 And the worked examples:
 
@@ -101,9 +98,6 @@ res <- ad_runner$fit(params = c(sigma = 12, R = 30, b = 3))
 res$loss      # scalar mismatch with the target trajectory
 res$gradient  # exact gradient w.r.t. each parameter
 ```
-
-A complete optimisation workflow (recovering known Lorenz parameters) is walked
-through in `vignette("parameter-fitting")`.
 
 ## Vocabulary
 
