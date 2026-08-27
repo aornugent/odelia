@@ -10,9 +10,9 @@
 #include <utility>
 #include <vector>
 
-// Carrying an adjoint back over a recording whose state width changed. The
-// System is lifted per recording and the tape cleared between them, which is the
-// one tape discipline in this library.
+// Carrying an adjoint back over a recording whose state width changed. One tape,
+// held active for the whole descent; one System lifted per width, releasing its
+// slots before each recording clears the tape.
 
 namespace odelia {
 namespace ode {
