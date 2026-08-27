@@ -19,9 +19,11 @@ public:
   
   void resize(size_t size_);
   size_t order() const;
-  // `step` is which accepted step this is, which is half of the address a System
-  // recording its choices loads them by. The walk owns it; nothing asks the System.
-  void step(System& system, std::size_t step,
+  // `step` is which accepted step this is, and `on` says whether this pass is the
+  // one filling the record -- together, the address a System recording its choices
+  // keeps or places them by. The walk owns both; nothing asks the System, and
+  // nothing stores either.
+  void step(System& system, pass on, std::size_t step,
             double time, double step_size,
 	    state_type &y,
 	    state_type &yerr,
@@ -107,7 +109,7 @@ size_t Step<System>::order() const {
 }
 
 template <class System>
-void Step<System>::step(System& system, std::size_t step,
+void Step<System>::step(System& system, pass on, std::size_t step,
                         double time, double step_size,
                         state_type &y,
                         state_type &yerr,
@@ -122,11 +124,11 @@ void Step<System>::step(System& system, std::size_t step,
   for (int i = 1; i < 6; ++i) {
     stage_state(i, y, k, h, ytmp);
     ode::derivs(system, ytmp, k[i], stage_time(i, time, h),
-                recorded_stage{step, i});
+                recorded_stage{step, i, on});
   }
 
   step_end(y, k, h, y);
-  ode::derivs(system, y, dydt_out, time + h, recorded_stage{step + 1, 0});
+  ode::derivs(system, y, dydt_out, time + h, recorded_stage{step + 1, 0, on});
 
   // Difference between 4th and 5th order, for error calculations
   for (size_t q = 0; q < size; ++q) {
@@ -243,7 +245,7 @@ void Step<System>::step_adjoint(active_system<System>& active, std::size_t step,
     for (int i = 1; i < 6; ++i) {
       stage_state(i, y0, rate, h, stage);
       ode::derivs(sys, stage, rate[i], stage_time(i, time, h),
-                  recorded_stage{step, i});
+                  recorded_stage{step, i, pass::replaying});
       ++recorded_rates;
     }
     step_end(y0, rate, h, y_end);

@@ -150,7 +150,12 @@ private:
                    "use method='rkck'.");
       }
     } else {
-      stepper.step(system, prev_steps.size(), time_, step_size, y_, yerr_,
+      // Whether this pass fills the record is this object's own answer: the states
+      // and the choices are one recording, so the flag that keeps the states is
+      // what says the choices are kept too. Nothing else is asked and nothing
+      // stores it.
+      stepper.step(system, keep_states_ ? pass::recording : pass::replaying,
+                   prev_steps.size(), time_, step_size, y_, yerr_,
                    dydt_in_, dydt_out_);
     }
   }

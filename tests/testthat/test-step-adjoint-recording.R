@@ -139,7 +139,8 @@ compile_recording_interface <- function() {
       std::vector<double> dydt_in(y.size()), dydt_out(y.size()), yerr(y.size());
       std::vector<double> y_end(y);
       odelia::ode::derivs(system, y, dydt_in, time);
-      stepper.step(system, 1, time, step_size, y_end, yerr, dydt_in, dydt_out);
+      stepper.step(system, odelia::ode::pass::recording, 1, time, step_size,
+                   y_end, yerr, dydt_in, dydt_out);
 
       LotkaVolterra<double> adj(pars[0], pars[1], pars[2], pars[3]);
       adj.rate_calls = 0;
@@ -282,7 +283,8 @@ compile_recording_interface <- function() {
       std::vector<double> dydt_in(y.size()), dydt_out(y.size()), yerr(y.size());
       std::vector<double> y_end(y);
       odelia::ode::derivs(system, y, dydt_in, time);
-      stepper.step(system, 1, time, step_size, y_end, yerr, dydt_in, dydt_out);
+      stepper.step(system, odelia::ode::pass::recording, 1, time, step_size,
+                   y_end, yerr, dydt_in, dydt_out);
       return y_end;
     }
   '), verbose = FALSE)

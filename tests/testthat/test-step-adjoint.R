@@ -76,7 +76,8 @@ compile_step_adjoint_interface <- function() {
       // y, then the five later stage states, then y_end.
       stage_log.clear();
       odelia::ode::derivs(system, y, dydt_in, time);
-      stepper.step(system, 1, time, step_size, y_end, yerr, dydt_in, dydt_out);
+      stepper.step(system, odelia::ode::pass::recording, 1, time, step_size,
+                   y_end, yerr, dydt_in, dydt_out);
       Rcpp::List forward(6);
       for (int j = 0; j < 6; ++j) forward[j] = stage_log[j];
 
@@ -114,7 +115,8 @@ compile_step_adjoint_interface <- function() {
       std::vector<double> dydt_in(y.size()), dydt_out(y.size()), yerr(y.size());
       std::vector<double> y_end(y);
       odelia::ode::derivs(system, y, dydt_in, time);
-      stepper.step(system, 1, time, step_size, y_end, yerr, dydt_in, dydt_out);
+      stepper.step(system, odelia::ode::pass::recording, 1, time, step_size,
+                   y_end, yerr, dydt_in, dydt_out);
 
       const odelia::ode::adjoint_rows seeds =
         odelia::ode::adjoint_rows::one_row(lambda_out);

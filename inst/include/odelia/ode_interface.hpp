@@ -153,9 +153,18 @@ struct rebound_system<S, U, false> {
 // asks for nothing there. Between two steps the run can widen its state, and it then
 // takes its first rates at a state no record holds -- so stage 0 is the one address a
 // walk that jumps into the middle of a recording cannot trust.
+// Which pass is running: the one that fills a record, or one that reads it back.
+// It is not a property of the System -- the same System is run both ways -- and it
+// is not stored anywhere, so nothing can hold a stale answer to it. The walk that
+// steps is what knows, and it says so here.
+enum class pass { recording, replaying };
+
 struct recorded_stage {
   std::size_t step;
   int stage;
+  // Replaying unless a walk says otherwise, because a pass that has not claimed to
+  // be filling a record must not be able to overwrite one.
+  pass on = pass::replaying;
 };
 
 // And a System whose state does not determine it. Between one rate evaluation and
@@ -173,7 +182,7 @@ struct recorded_stage {
 // A walk that is not stepping opens no stage, so a reload out of band cannot read a
 // record and a record cannot complete a state it was not taken at.
 template <typename System>
-concept AddressesChoices =
+concept RecordsChoices =
   requires(System s, recorded_stage at) {
     s.begin_stage(at);
     s.end_stage();
@@ -418,7 +427,7 @@ private:
 template <typename T, typename StateType>
 void derivs(T& obj, const StateType& y, StateType& dydt, const double time,
             recorded_stage at) {
-  if constexpr (AddressesChoices<T>) {
+  if constexpr (RecordsChoices<T>) {
     const stage_scope<T> stage{obj, at};
     internal::set_ode_state(obj, y, time);
     obj.ode_rates(dydt.begin());
