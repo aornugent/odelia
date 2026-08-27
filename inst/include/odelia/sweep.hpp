@@ -42,7 +42,7 @@ double state_at_segment(System& system,
     // width is checked against what the record holds.
     start = rows[segment - 1];
     be_at_step(system, rec, start);
-    system.inserted_state(rec[start].time, rec[start].state.begin(), base);
+    apply_insertion(system, rec[start].time, rec[start].state.begin(), base);
     util::check_length(base.size(), rec[start].inserted.size());
     return rec[start].time;
 }
@@ -64,6 +64,12 @@ void advance_over_insertions(
     if (from_segment > rows.size()) {
         util::stop("advance_over_insertions: the recording has no such segment");
     }
+    // Held across the walk: the state below each insertion, and the wider one the
+    // map reports and this does not read -- the System is left holding it, which
+    // is what this wants.
+    using value_type = typename Solver::value_type;
+    std::vector<value_type> before;
+    std::vector<value_type> widened;
     for (std::size_t j = from_segment; j <= rows.size(); ++j) {
         const std::size_t last = j < rows.size() ? rows[j] : rec.size() - 1;
         // The first entry is the start no step reached, which is how a recorded
@@ -81,15 +87,11 @@ void advance_over_insertions(
             break;
         }
         // The same map the sweep transposes, so a tangent traverses exactly the
-        // function under test rather than a second spelling of it. It leaves the
-        // System holding what it added, which is what this wants; the wider state
-        // it also reports is read from the System below.
+        // function under test rather than a second spelling of it.
         auto& sys = forward.get_system_ref();
-        using value_type = typename Solver::value_type;
-        std::vector<value_type> before(sys.ode_size());
+        before.assign(sys.ode_size(), value_type(0.0));
         sys.ode_state(before.begin());
-        std::vector<value_type> widened;
-        sys.inserted_state(rec[last].time, before.begin(), widened);
+        apply_insertion(sys, rec[last].time, before.begin(), widened);
         forward.set_state_from_system();
         first = last;
     }

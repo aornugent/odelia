@@ -234,14 +234,15 @@ struct step_record : recorded_step {
 //                                   it already built; a replay does not know it,
 //                                   and derives it from the schedule the run was
 //                                   driven by.
-//   inserted_state(time, x, y)   -- the insertion as a map, the state below it in
+//   apply_insertion(time, x, y)  -- the insertion as a map, the state below it in
 //                                   and the whole wider state out, so it runs at
-//                                   any scalar and the sweep can transpose it.
+//                                   any scalar and the sweep can transpose it. It
+//                                   leaves the System holding that wider state.
 //
 // The first is as mandatory as ode_size(): a System replayed from a recording has
 // to be loadable from a recorded state, and for a width that never moves that is
 // its ordinary load. The second is asked for only where the width changed, so a
-// System that never widens is never asked for it -- ode::inserted_state above is
+// System that never widens is never asked for it -- ode::apply_insertion above is
 // what a walk calls, and passing the state through is what an insertion is for
 // such a System.
 //
@@ -508,8 +509,14 @@ void be_at_step(System& system, std::span<const step_record<System>> rec,
     }
 }
 
-// The state an insertion produced, from the state below it: the insertion as a
-// map, so it runs at any scalar and a sweep can transpose it.
+// Apply the insertion the run took at `time`, from the state below it, and read
+// back the state it produced: the insertion as a map, so it runs at any scalar
+// and a sweep can transpose it.
+//
+// ⚠️ THE SYSTEM IS LEFT HOLDING THAT WIDER STATE, and no version of this leaves a
+// widening System where it was: pushing the nodes is how the state is computed. So
+// a walk lifts again below this rather than sweeping the width below on what this
+// ran on.
 //
 // A System whose width never changes inserts nothing, so the state passes
 // through. That is not a fallback for a System that forgot to declare one -- it
@@ -517,10 +524,10 @@ void be_at_step(System& system, std::span<const step_record<System>> rec,
 // recording of such a System be walked without it implementing a map it is never
 // asked for.
 template <class System, class It>
-void inserted_state(System& system, double time, It x,
-                    state_type<System>& out) {
-  if constexpr (requires { system.inserted_state(time, x, out); }) {
-    system.inserted_state(time, x, out);
+void apply_insertion(System& system, double time, It x,
+                     state_type<System>& out) {
+  if constexpr (requires { system.apply_insertion(time, x, out); }) {
+    system.apply_insertion(time, x, out);
   } else {
     for (std::size_t i = 0; i < out.size(); ++i) {
       out[i] = *x++;
