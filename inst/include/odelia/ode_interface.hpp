@@ -166,18 +166,17 @@ struct recorded_stage {
 // taped is a function the run never computed, with every number finite.
 //
 // So the run records them against the evaluation that made them, and every pass
-// re-running the model loads them with the state. That is the same requirement
-// set_recorded_state exists for one level up, and it is spelled as a loader for the
-// same reason: what completes a state belongs with the state.
+// re-running the model makes the run's rather than its own.
 //
-// The address reaches a System only from a walk that is stepping, so a reload out
-// of band cannot read a record, and a record cannot complete a state it was not
-// taken at.
+// The address is the EXTENT of one rate evaluation, which is what `derivs` is, so
+// the System is told where it is rather than handed the address as part of a load.
+// A walk that is not stepping opens no stage, so a reload out of band cannot read a
+// record and a record cannot complete a state it was not taken at.
 template <typename System>
-concept RecordsChoices =
-  requires(System s, double time, recorded_stage at,
-           typename std::vector<typename System::value_type>::const_iterator in) {
-    s.set_ode_state(in, time, at);
+concept AddressesChoices =
+  requires(System s, recorded_stage at) {
+    s.begin_stage(at);
+    s.end_stage();
   };
 
 // One step of a schedule: a time to stop at, and the size that reached it where
@@ -382,16 +381,6 @@ void set_ode_state(T& obj, const StateType& y, double time) {
   }
 }
 
-// The same load, with the address of the choices the run made at this evaluation.
-// A System that records none loads without it.
-template <typename T, typename StateType>
-void set_ode_state(T& obj, const StateType& y, double time, recorded_stage at) {
-  if constexpr (RecordsChoices<T>) {
-    obj.set_ode_state(y.begin(), time, at);
-  } else {
-    set_ode_state(obj, y, time);
-  }
-}
 }
 
 // primarily for Ode_R - maybe remove
@@ -403,14 +392,39 @@ void derivs(T& obj, const StateType& y, StateType& dydt,
   obj.ode_rates(dydt.begin());
 }
 
+// One rate evaluation of a step, addressed. Opened before the state is loaded,
+// because a System's own inner solves can happen inside the load, and closed on
+// every exit -- which is the whole reason it is a scope and not a pair of calls in
+// two places.
+//
+// `end_stage()` runs from a destructor, so it must not raise: it closes an extent
+// and has nothing to fail at.
+template <class System>
+struct stage_scope {
+  explicit stage_scope(System& system, recorded_stage at) : system_(system) {
+    system_.begin_stage(at);
+  }
+  ~stage_scope() { system_.end_stage(); }
+  stage_scope(const stage_scope&) = delete;
+  stage_scope& operator=(const stage_scope&) = delete;
+
+private:
+  System& system_;
+};
+
 // One rate evaluation of a step, at the address the run recorded its choices
 // against. A System that records none takes the call above and the address costs
 // it nothing.
 template <typename T, typename StateType>
 void derivs(T& obj, const StateType& y, StateType& dydt, const double time,
             recorded_stage at) {
-  internal::set_ode_state(obj, y, time, at);
-  obj.ode_rates(dydt.begin());
+  if constexpr (AddressesChoices<T>) {
+    const stage_scope<T> stage{obj, at};
+    internal::set_ode_state(obj, y, time);
+    obj.ode_rates(dydt.begin());
+  } else {
+    derivs(obj, y, dydt, time);
+  }
 }
 
 // R interface functions - always use std::vector<double>
