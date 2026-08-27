@@ -21,6 +21,5 @@ Meta
 # standalone C++ core check (tests/standalone)
 tests/standalone/*.o
 tests/standalone/r_free
-tests/standalone/probe_width
-tests/standalone/probe_implicit_tangent
-tests/standalone/probe_tape_reset
+tests/standalone/probe_*
+!tests/standalone/probe_*.cpp
