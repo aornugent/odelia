@@ -2,6 +2,7 @@
 #ifndef ODELIA_ODE_STEP_HPP_
 #define ODELIA_ODE_STEP_HPP_
 
+#include <array>
 #include <vector>
 #include <cstddef>
 #include <XAD/XAD.hpp>
@@ -17,13 +18,15 @@ public:
   using value_type = typename System::value_type;
   using state_type = std::vector<value_type>;
   
+  // What one step's five stages solve for. One name, because the forward walk, the
+  // sweep and the record all have to agree on the shape.
+  using solved_row = std::array<solved_values_t<System>, 5>;
+
   void resize(size_t size_);
   size_t order() const;
-  // `step` is which accepted step this is, and `on` says whether this pass is the
-  // one filling the record -- together, the address a System recording its choices
-  // keeps or places them by. The walk owns both; nothing asks the System, and
-  // nothing stores either.
-  void step(System& system, pass on, std::size_t step,
+  // `solved` is the row this step is about to create: what its five stages solve
+  // for goes in, and nothing is asked of the System about where it is.
+  void step(System& system, solved_row& solved,
             double time, double step_size,
 	    state_type &y,
 	    state_type &yerr,
@@ -36,7 +39,8 @@ public:
   // one; there is no separate entry point for that, because a second signature
   // over the same recording is a second place for the seam between the state and
   // the parameter halves to be got wrong.
-  void step_adjoint(active_system<System>& active, std::size_t step,
+  void step_adjoint(active_system<System>& active,
+                    const solved_row& solved,
                     double time, double step_size,
                     const state_type &y, const adjoint_rows& lambda_out,
                     adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint);
@@ -109,7 +113,8 @@ size_t Step<System>::order() const {
 }
 
 template <class System>
-void Step<System>::step(System& system, pass on, std::size_t step,
+void Step<System>::step(System& system,
+                        solved_row& solved,
                         double time, double step_size,
                         state_type &y,
                         state_type &yerr,
@@ -120,15 +125,27 @@ void Step<System>::step(System& system, pass on, std::size_t step,
   // First-same-as-last: k1 is the previous step's dydt_out, so the step costs five
   // rate evaluations and one more to hand the next step its own k1 -- which is why
   // that last one is addressed as the next step's stage 0.
+  // A stage's rates, handed the slot it stores what it solves for into. A System
+  // that solves for nothing is handed nothing and the branch compiles away.
+  auto rates_at = [&](int i, const state_type& at, state_type& into) -> void {
+    if constexpr (SolvesForValues<System>) {
+      ode::derivs(system, at, into, stage_time(i, time, h), solved[i - 1]);
+    } else {
+      ode::derivs(system, at, into, stage_time(i, time, h));
+    }
+  };
+
   std::copy(dydt_in.begin(), dydt_in.end(), k[0].begin());
   for (int i = 1; i < 6; ++i) {
     stage_state(i, y, k, h, ytmp);
-    ode::derivs(system, ytmp, k[i], stage_time(i, time, h),
-                recorded_stage{step, i, on});
+    rates_at(i, ytmp, k[i]);
   }
 
   step_end(y, k, h, y);
-  ode::derivs(system, y, dydt_out, time + h, recorded_stage{step + 1, 0, on});
+  // The sixth evaluation, at the state the step ends at, which first-same-as-last
+  // hands the next step as its own first rates. No slot: a sweep re-derives it at
+  // the state it was handed rather than reading it.
+  ode::derivs(system, y, dydt_out, time + h);
 
   // Difference between 4th and 5th order, for error calculations
   for (size_t q = 0; q < size; ++q) {
@@ -215,7 +232,8 @@ void Step<System>::step_end(const std::vector<S>& y,
 // writes a transpose of its own; and the parameters ride in the same recording,
 // so a stage the parameters reach carries their rows too.
 template <class System>
-void Step<System>::step_adjoint(active_system<System>& active, std::size_t step,
+void Step<System>::step_adjoint(active_system<System>& active,
+                                const solved_row& solved,
                                 double time, double step_size,
                                 const state_type &y, const adjoint_rows& lambda_out,
                                 adjoint_rows& lambda_in,
@@ -244,8 +262,12 @@ void Step<System>::step_adjoint(active_system<System>& active, std::size_t step,
     ++recorded_rates;
     for (int i = 1; i < 6; ++i) {
       stage_state(i, y0, rate, h, stage);
-      ode::derivs(sys, stage, rate[i], stage_time(i, time, h),
-                  recorded_stage{step, i, pass::replaying});
+      if constexpr (SolvesForValues<System>) {
+        ode::derivs(sys, stage, rate[i], stage_time(i, time, h),
+                    std::as_const(solved[i - 1]));
+      } else {
+        ode::derivs(sys, stage, rate[i], stage_time(i, time, h));
+      }
       ++recorded_rates;
     }
     step_end(y0, rate, h, y_end);

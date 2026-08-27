@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <span>
+#include <array>
 #include <vector>
 #include <odelia/ode_util.hpp>
 #include <odelia/tangent.hpp>
@@ -13,6 +14,7 @@
 #include <iterator>
 #include <type_traits>
 #include <utility>
+#include <array>
 #include <vector>
 #include <XAD/XAD.hpp>
 
@@ -139,53 +141,50 @@ struct rebound_system<S, U, false> {
   using type = S;
 };
 
-// Where in a run one rate evaluation sits: the accepted step it belongs to, and
-// which of that step's stages it is. One value rather than two arguments, because
-// the two halves are one address -- and because a type of its own is what stops it
-// being taken for the time, which one bare number beside another does not.
+// What one rate evaluation solved for that its state does not determine: the
+// results of the inner solves it ran, in the order it ran them. A System that
+// solves for nothing declares nothing and this is empty.
 //
-// A step makes six rate evaluations: its stages 1 to 5, and one at the state it ends
-// at, which first-same-as-last hands the NEXT step as that step's first rates. So the
-// sixth is addressed as the next step's stage 0, and a pass re-running the schedule
-// forward reads it back where the run wrote it.
-//
-// A reverse recording does not: it re-derives stage 0 at the state it was handed and
-// asks for nothing there. Between two steps the run can widen its state, and it then
-// takes its first rates at a state no record holds -- so stage 0 is the one address a
-// walk that jumps into the middle of a recording cannot trust.
-// Which pass is running: the one that fills a record, or one that reads it back.
-// It is not a property of the System -- the same System is run both ways -- and it
-// is not stored anywhere, so nothing can hold a stale answer to it. The walk that
-// steps is what knows, and it says so here.
-enum class pass { recording, replaying };
+// Only values of that kind belong here. Anything a rate evaluation can recompute
+// from the state it was handed MUST be recomputed, because the transpose runs
+// through it -- loading such a value as a recorded double severs the tape there
+// and the sweep comes back wrong with every number finite.
+struct no_solved_values {};
 
-struct recorded_stage {
-  std::size_t step;
-  int stage;
-  // Replaying unless a walk says otherwise, because a pass that has not claimed to
-  // be filling a record must not be able to overwrite one.
-  pass on = pass::replaying;
+template <class System>
+struct solved_values {
+  using type = no_solved_values;
 };
+template <class System>
+  requires requires { typename System::solved_values; }
+struct solved_values<System> {
+  using type = typename System::solved_values;
+};
+template <class System>
+using solved_values_t = typename solved_values<System>::type;
 
-// And a System whose state does not determine it. Between one rate evaluation and
-// the next this System makes choices the state leaves open -- the nodes a
-// refinement placed, the branch an inner solve took, an early exit -- and a pass
-// that re-runs the model in order to tape it has to make the RUN'S choices rather
-// than its own. Re-deriving them risks a different discretisation, and what is then
-// taped is a function the run never computed, with every number finite.
+// A System whose rate evaluation solves for something its state does not
+// determine: the branch of an inner root-find, an early exit, the point an
+// optimisation landed on. A pass re-running the model in order to tape it has to
+// take the RUN'S result rather than solve again -- re-solving risks landing the
+// other side of a branch, and what is then taped is a function the run never
+// computed, with every number finite.
 //
-// So the run records them against the evaluation that made them, and every pass
-// re-running the model makes the run's rather than its own.
+// So the run STORES what it solved for and a later pass LOADS it. Which of the two
+// is happening is not a flag anyone keeps: a walk hands over the values, and
+// whether it hands them over to be written or to be read is the constness of what
+// it hands over.
 //
-// The address is the EXTENT of one rate evaluation, which is what `derivs` is, so
-// the System is told where it is rather than handed the address as part of a load.
-// A walk that is not stepping opens no stage, so a reload out of band cannot read a
-// record and a record cannot complete a state it was not taken at.
+// The extent is one rate evaluation, which is what `derivs` is. A walk that hands
+// over nothing opens no extent, so a reload out of band cannot read a record and a
+// record cannot complete a state it was not taken at.
 template <typename System>
-concept RecordsChoices =
-  requires(System s, recorded_stage at) {
-    s.begin_stage(at);
-    s.end_stage();
+concept SolvesForValues =
+  requires(System s, solved_values_t<System>& into,
+           const solved_values_t<System>& from) {
+    s.store_solved(into);
+    s.load_solved(from);
+    s.end_solved();
   };
 
 // One step of a schedule: a time to stop at, and the size that reached it where
@@ -224,6 +223,14 @@ template <typename System>
 struct step_record : recorded_step {
   state_type<System> state;
   state_type<System> inserted;
+
+  // What this step's five stages solved for, in order. FIVE and not six: the sixth
+  // rate evaluation a step makes is the one at the state it ends at, which
+  // first-same-as-last hands the next step as its own first rates -- and a sweep
+  // re-derives that one at the state it was handed rather than reading it. So there
+  // is no slot for it, which is what makes "a walk cannot trust the first stage of a
+  // recording it jumped into" structural instead of a warning.
+  std::array<solved_values_t<System>, 5> solved;
 
   // What the step above this row ran from: the wider state where an insertion
   // followed, and this row's own where none did.
@@ -401,39 +408,44 @@ void derivs(T& obj, const StateType& y, StateType& dydt,
   obj.ode_rates(dydt.begin());
 }
 
-// One rate evaluation of a step, addressed. Opened before the state is loaded,
-// because a System's own inner solves can happen inside the load, and closed on
-// every exit -- which is the whole reason it is a scope and not a pair of calls in
-// two places.
+// One rate evaluation's use of what it solves for. Opened before the state is
+// loaded, because a System's own inner solves can happen inside the load, and
+// closed however the evaluation leaves -- which is the whole reason it is a scope
+// and not a pair of calls in two places.
 //
-// `end_stage()` runs from a destructor, so it must not raise: it closes an extent
+// Store or load is decided by the CONSTNESS of what it was handed, so there is no
+// mode to keep and nothing to hold a stale answer.
+//
+// `end_solved()` runs from a destructor, so it must not raise: it closes an extent
 // and has nothing to fail at.
-template <class System>
-struct stage_scope {
-  explicit stage_scope(System& system, recorded_stage at) : system_(system) {
-    system_.begin_stage(at);
+template <class System, class Values>
+struct solved_scope {
+  solved_scope(System& system, Values& values) : system_(system) {
+    if constexpr (std::is_const_v<Values>) {
+      system_.load_solved(values);
+    } else {
+      system_.store_solved(values);
+    }
   }
-  ~stage_scope() { system_.end_stage(); }
-  stage_scope(const stage_scope&) = delete;
-  stage_scope& operator=(const stage_scope&) = delete;
+  ~solved_scope() { system_.end_solved(); }
+  solved_scope(const solved_scope&) = delete;
+  solved_scope& operator=(const solved_scope&) = delete;
 
 private:
   System& system_;
 };
 
-// One rate evaluation of a step, at the address the run recorded its choices
-// against. A System that records none takes the call above and the address costs
-// it nothing.
-template <typename T, typename StateType>
+// One rate evaluation, handed what its inner solves are to write into, or what an
+// earlier pass wrote for it. The two differ only in constness; a System that
+// solves for nothing is never handed either.
+template <typename T, typename StateType, typename Values>
+  requires SolvesForValues<T> &&
+           std::same_as<std::remove_const_t<Values>, solved_values_t<T>>
 void derivs(T& obj, const StateType& y, StateType& dydt, const double time,
-            recorded_stage at) {
-  if constexpr (RecordsChoices<T>) {
-    const stage_scope<T> stage{obj, at};
-    internal::set_ode_state(obj, y, time);
-    obj.ode_rates(dydt.begin());
-  } else {
-    derivs(obj, y, dydt, time);
-  }
+            Values& solved) {
+  const solved_scope<T, Values> extent{obj, solved};
+  internal::set_ode_state(obj, y, time);
+  obj.ode_rates(dydt.begin());
 }
 
 // R interface functions - always use std::vector<double>

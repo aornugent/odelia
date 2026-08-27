@@ -2,6 +2,7 @@
 #ifndef ODELIA_ODE_SOLVER_INTERNAL_HPP_
 #define ODELIA_ODE_SOLVER_INTERNAL_HPP_
 
+#include <array>
 #include <odelia/ode_interface.hpp>
 #include <odelia/ode_control.hpp>
 #include <odelia/ode_step.hpp>
@@ -65,8 +66,10 @@ public:
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
     resize(lambda_out.width());
-    stepper.step_adjoint(active, step, time, step_size, y, lambda_out,
-                         lambda_in, parameter_adjoint);
+    // What this step's stages solved for is on this step's own row, which is the
+    // row the forward pass created when it took the step.
+    stepper.step_adjoint(active, prev_steps.at(step).solved, time, step_size, y,
+                         lambda_out, lambda_in, parameter_adjoint);
   }
 
   // The tape a sweep's recordings are taken on.
@@ -150,12 +153,12 @@ private:
                    "use method='rkck'.");
       }
     } else {
-      // Whether this pass fills the record is this object's own answer: the states
-      // and the choices are one recording, so the flag that keeps the states is
-      // what says the choices are kept too. Nothing else is asked and nothing
-      // stores it.
-      stepper.step(system, keep_states_ ? pass::recording : pass::replaying,
-                   prev_steps.size(), time_, step_size, y_, yerr_,
+      // Into scratch, because a step that is rejected and retried writes here twice
+      // and only the one that is accepted is committed -- which is what makes
+      // "a rejected attempt writes the same slot as its retry" nothing anyone has
+      // to arrange.
+      for (solved_values_t<System>& row : solved_scratch_) { row = {}; }
+      stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
                    dydt_in_, dydt_out_);
     }
   }
@@ -195,8 +198,13 @@ private:
   // the whole run to refill it.
   std::vector<step_record<System>> prev_steps;
   // Whether to keep the states. The caller's: a run whose gradient will be taken
-  // needs them and a run that is only integrating does not.
+  // needs them and a run that is only integrating does not. The same flag decides
+  // whether what a step solves for is kept, because those are one recording.
   bool keep_states_ = false;
+
+  // The step being attempted writes what it solves for here, and an accepted step
+  // moves it onto its row.
+  typename Step<System>::solved_row solved_scratch_;
 
   state_type y;        // Vector of current system state
   state_type yerr;     // Vector of error estimates
@@ -256,6 +264,7 @@ void SolverInternal<System>::push_step(System& system, double time_,
   if (keep_states_) {
     record.state.resize(system.ode_size());
     system.ode_state(record.state.begin());
+    record.solved = std::move(solved_scratch_);
   }
   prev_steps.push_back(std::move(record));
 }
