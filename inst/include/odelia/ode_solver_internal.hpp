@@ -55,8 +55,8 @@ public:
   // counterpart.
   void step_adjoint(lifted_system<System>& active, std::size_t step, double time,
                     double step_size, const state_type& y,
-                    const row_batch& lambda_out, row_batch& lambda_in,
-                    row_batch& parameter_adjoint) {
+                    const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
+                    adjoint_rows& parameter_adjoint) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
@@ -580,8 +580,18 @@ void SolverInternal<System>::resize(size_t size_) {
   yerr.resize(size_);
   dydt_in.resize(size_);
   dydt_out.resize(size_);
-  stepper.resize(size_);
-  rodas_stepper.resize(size_);
+  // Only the stepper that will run. `method` is fixed at construction and there
+  // is no setter, so the other one's scratch is never read.
+  //
+  // ⚠️ THE ROSENBROCK SCRATCH IS TWO size x size MATRICES. At a stand's width
+  // that is tens of megabytes zeroed per call, and a sweep calls this once per
+  // recorded step -- so sizing a stepper no explicit run reaches was the largest
+  // single fill in the gradient's profile.
+  if (method == Method::rodas) {
+    rodas_stepper.resize(size_);
+  } else {
+    stepper.resize(size_);
+  }
 }
 
 template <class System>
