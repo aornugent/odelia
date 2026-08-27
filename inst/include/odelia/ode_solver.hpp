@@ -251,7 +251,7 @@ public:
   // Wherever the state changed width inside that range the descent stops, narrows
   // the System across it and transposes the map that widened it, so the rows it
   // carries arrive by the same route a step's do. Where nothing widened this is one
-  // lift and one descent -- which is what a System of fixed width gets, and what
+  // rebind and one descent -- which is what a System of fixed width gets, and what
   // every range this splits into gets.
   //
   // `extra_splits` names further rows to stop at. The adjoint carried across such a
@@ -323,7 +323,7 @@ public:
     ode::tape_scope<ode::adjoint_tape<double>> running{tape};
 
     // One range per width, highest first: the System is put at the range's top, so
-    // whoever narrows it is whoever lifts on it and no descent inherits a width
+    // whoever narrows it is whoever rebinds on it and no descent inherits a width
     // another call left behind.
     size_t swept = 0;
     for (size_t j = stops.size() + 1; j-- > 0;) {
@@ -335,17 +335,17 @@ public:
       // is the width the range below runs at. The topmost range ends at k_last,
       // which no insertion inside this range widened.
       //
-      // Its lift is its own and dies with it, because applying the insertion is
-      // what widens the System: what this records on cannot be swept at the width
-      // it started from.
+      // Its active System is its own and dies with it, because applying the
+      // insertion is what widens the System: what this records on cannot be swept
+      // at the width it started from.
       if (j < stops.size() && !rec[hi].inserted.empty()) {
         const double when = rec[hi].time;
-        auto insert = [&](auto& active_system,
+        auto insert = [&](auto& sys,
                           typename std::vector<scalar>::const_iterator x,
                           std::vector<scalar>& y) -> void {
-          ode::apply_insertion(active_system, when, x, y);
+          ode::apply_insertion(sys, when, x, y);
         };
-        ode::lifted_system<System> widened{system, tape};
+        ode::active_system<System> widened{system, tape};
         ode::adjoint_rows narrowed;
         ode::state_and_parameter_adjoints(widened, rec[hi].state, lambda, insert,
                                          narrowed, parameter_adjoint);
@@ -383,9 +383,10 @@ public:
 std::vector<System> history;
 
 private:
-  // One range, at the width the caller left the System on: it is lifted here, so
+  // One range, at the width the caller left the System on: it is rebound here, so
   // one copy serves every step in this range, each recording releases its slots
-  // before taking the next, and no lift arrives from a call that widened it.
+  // before taking the next, and no active System arrives from a call that widened
+  // it.
   //
   // Every state visited has to be that width, so a range a widening crossed is
   // refused by the length check inside the loop rather than swept at one width.
@@ -397,7 +398,7 @@ private:
     if (lambda.empty()) {
       util::stop("solve_adjoint: needs at least one seed");
     }
-    ode::lifted_system<System> active{system, tape};
+    ode::active_system<System> active{system, tape};
     // Asked of the System the recordings are taken on, which is the width every
     // state below has to be loaded at. Named, because a bare length mismatch here
     // is read as the caller's and says nothing about the seam it is really about:

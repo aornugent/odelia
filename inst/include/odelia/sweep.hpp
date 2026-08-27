@@ -11,7 +11,7 @@
 #include <vector>
 
 // Carrying an adjoint back over a recording whose state width changed. One tape,
-// held active for the whole descent; one System lifted per width, releasing its
+// held active for the whole descent; one System rebound per width, releasing its
 // slots before each recording clears the tape.
 
 namespace odelia {

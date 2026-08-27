@@ -24,7 +24,7 @@ template<typename System>
 using state_type = std::vector<typename System::value_type>;
 
 // The scalar a reverse-mode (adjoint) pass runs on: one adjoint layer above T. This is
-// what a System is lifted to for a gradient, and the type its seeds and recorded values
+// what a System is rebound to for a gradient, and the type its seeds and recorded values
 // have. T is a parameter so the layer can sit on another active scalar; at the default
 // it sits on double, which is the scalar an ordinary solve is differentiated from.
 template <typename T = double>
@@ -72,8 +72,8 @@ void visit_active(F& f, A& a, B& b, Rest&... rest) {
 // differentiated along one direction. A mixed second derivative in every input
 // and one direction costs a single recording this way, where a tangent above a
 // tangent costs one pass per input. The other nesting is not available -- an
-// adjoint scalar cannot be lifted into a tangent above it -- so the direction is
-// always the inner layer.
+// no tangent scalar wraps an adjoint one -- so the direction is always the inner
+// layer.
 template <typename T = double>
 using directional_adjoint_scalar = typename xad::fwd_adj<T>::active_type;
 
@@ -515,7 +515,7 @@ void be_at_step(System& system, std::span<const step_record<System>> rec,
 //
 // ⚠️ THE SYSTEM IS LEFT HOLDING THAT WIDER STATE, and no version of this leaves a
 // widening System where it was: pushing the nodes is how the state is computed. So
-// a walk lifts again below this rather than sweeping the width below on what this
+// a walk rebinds again below this rather than sweeping the width below on what this
 // ran on.
 //
 // A System whose width never changes inserts nothing, so the state passes

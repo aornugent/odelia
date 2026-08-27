@@ -151,7 +151,7 @@ void release_slot(S& x) {
   x = S(util::to_passive(x));
 }
 
-// A System lifted to the adjoint scalar, with the addresses of the parameters a
+// A System rebound to the adjoint scalar, with the addresses of the parameters a
 // recording writes through. Both come off one object, so a caller cannot pair a
 // System with another System's parameter addresses.
 //
@@ -167,7 +167,7 @@ void release_slot(S& x) {
 // that narrows. So every active value the System holds is released before the
 // clear, and the tape is asked whether any was missed.
 template <class System>
-struct lifted_system {
+struct active_system {
   using scalar = active_scalar<double>;
   using system_type = typename rebound_system<System, scalar>::type;
 
@@ -177,7 +177,7 @@ struct lifted_system {
   adjoint_tape<double>* tape_;
   adjoint_tape<double>& tape() const { return *tape_; }
 
-  lifted_system(const System& passive, adjoint_tape<double>& tape)
+  active_system(const System& passive, adjoint_tape<double>& tape)
       : tape_(&tape), system(passive.template rebind_from<scalar>()),
         parameters(system.ad_parameters()) {
     static_assert(Rebindable<System, scalar>,
@@ -192,7 +192,7 @@ struct lifted_system {
   //
   // Refused where another tape is active: these slots are not on it, and
   // handing them back would decrement its count instead.
-  ~lifted_system() {
+  ~active_system() {
     adjoint_tape<double>* const running = adjoint_tape<double>::getActive();
     if (running != nullptr && running != tape_) {
       return;
@@ -205,8 +205,8 @@ struct lifted_system {
   // parameters to the object it was copied from. Declaring the destructor above
   // suppresses the move operations, which would leave those addresses pointing
   // into the object moved from.
-  lifted_system(const lifted_system&) = delete;
-  lifted_system& operator=(const lifted_system&) = delete;
+  active_system(const active_system&) = delete;
+  active_system& operator=(const active_system&) = delete;
 
   // Every active value back to unregistered, so the clear below it is safe and
   // the next recording registers them fresh.
@@ -225,7 +225,7 @@ struct lifted_system {
     const std::size_t still = tape_->getNumVariables();
     if (still != 0) {
       util::stop(
-          "lifted_system::release: " +
+          "active_system::release: " +
           util::to_string(static_cast<int>(still)) +
           " active values of this System are still registered after releasing "
           "every one for_each_active reaches, so it holds some the walk does "
@@ -344,7 +344,7 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // A transpose taken with respect to a System's state AND the parameters its
 // active-scalar lists: one recording over both, swept once per seed.
 //
-// The lifted System is the caller's, held across the recordings a walk takes on
+// The active System is the caller's, held across the recordings a walk takes on
 // it. It is released here rather than there, because the release has to sit
 // immediately before the clear and the clear is inside the product below.
 //
@@ -370,7 +370,7 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // neighbours, so there is nothing to test per row.
 template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
-    lifted_system<System>& active, const std::vector<double>& state,
+    active_system<System>& active, const std::vector<double>& state,
     const adjoint_rows& output_adjoints, Evaluate&& evaluate,
     adjoint_rows& state_adjoint, adjoint_rows& parameter_adjoint) {
     using scalar = active_scalar<double>;
@@ -446,9 +446,10 @@ std::size_t state_and_parameter_adjoints(
     return tape.getMemory();
 }
 
-// The same transpose where the caller holds a System rather than a lifted one and
-// is taking a single recording: the tape and the lift are made here. A walk taking
-// many hands in the one it holds for its descent, and lifts once per width.
+// The same transpose where the caller holds a double System rather than an active
+// one and is taking a single recording: the tape and the rebind are made here. A
+// walk taking many hands in the one it holds for its descent, and rebinds once per
+// width.
 template <class System, class Evaluate>
     requires Rebindable<System, active_scalar<double>>
 std::size_t state_and_parameter_adjoints(
@@ -456,7 +457,7 @@ std::size_t state_and_parameter_adjoints(
     const adjoint_rows& output_adjoints, Evaluate&& evaluate,
     adjoint_rows& state_adjoint, adjoint_rows& parameter_adjoint) {
     adjoint_tape<double> tape(false);
-    lifted_system<System> active{passive, tape};
+    active_system<System> active{passive, tape};
     return state_and_parameter_adjoints(active, state, output_adjoints,
                                         std::forward<Evaluate>(evaluate),
                                         state_adjoint, parameter_adjoint);
@@ -473,24 +474,24 @@ std::size_t state_and_parameter_adjoints(
 // between them needs a transpose written for it.
 //
 // The rate is taken at the time, not at a recorded stage. The System recorded on
-// is lifted for this recording and holds no recorded field, so there is no stage
-// for it to read back -- a stage argument here would name a capability the lifted
+// is rebound for this recording and holds no recorded field, so there is no stage
+// for it to read back -- a stage argument here would name a capability the active
 // copy cannot have.
 template <class System>
 std::size_t rates_adjoint(
-    lifted_system<System>& active,
+    active_system<System>& active,
     const std::vector<double>& state, double time,
     const adjoint_rows& rate_adjoints, adjoint_rows& state_adjoint,
     adjoint_rows& parameter_adjoint) {
     using scalar = active_scalar<double>;
     const std::size_t n_state = state.size();
-    auto rates = [&](auto& active_system,
+    auto rates = [&](auto& sys,
                      typename std::vector<scalar>::const_iterator x,
                      std::vector<scalar>& dydt) -> void {
         // The recorded state inputs. The parameters are registered where they
         // sit on the System, so they are not in this buffer.
         std::vector<scalar> y(x, x + static_cast<std::ptrdiff_t>(n_state));
-        ode::derivs(active_system, y, dydt, time);
+        ode::derivs(sys, y, dydt, time);
     };
     return state_and_parameter_adjoints(active, state, rate_adjoints, rates,
                                         state_adjoint, parameter_adjoint);

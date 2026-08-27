@@ -80,7 +80,7 @@ compile_sap_interface <- function() {
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
       tiny_rebinds = 0;
-      odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
+      odelia::ode::active_system<TinySystem<double>> active{system, tape};
       for (int k = 0; k < n_calls; ++k) {
         auto evaluate = [&](TinySystem<adouble>& sys,
                             std::vector<adouble>::const_iterator x,
@@ -112,7 +112,7 @@ compile_sap_interface <- function() {
       odelia::ode::adjoint_rows parameter_adjoint(2, 2);
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
-      odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
+      odelia::ode::active_system<TinySystem<double>> active{system, tape};
 
       for (int k = 0; k < 2; ++k) {
         const int width = (k == 0) ? first_width : 1;
@@ -164,7 +164,7 @@ compile_sap_interface <- function() {
       };
 
       xad::adj<double>::tape_type tape(false);
-      odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
+      odelia::ode::active_system<TinySystem<double>> active{system, tape};
       odelia::ode::adjoint_rows& out =
           (which == 2) ? parameter_adjoint : state_adjoint;
       odelia::ode::state_and_parameter_adjoints(active, state, seeds,
@@ -216,18 +216,18 @@ testthat::test_that("the parameter half accumulates and the state half does not"
                            matrix(c(10, 10, 20, 20), nrow = 2))
 })
 
-testthat::test_that("one lift serves a whole walk, and no recording inherits another's slots", {
+testthat::test_that("one active System serves a whole walk, and no recording inherits another's slots", {
   compile_sap_interface()
 
   rows <- function(x) do.call(rbind, x)
 
-  # One lift however many recordings the walk takes. The lift is the caller's
+  # One active System however many recordings the walk takes. It is the caller's
   # because its lifetime is: a walk that narrows rebuilds it where it narrows,
   # and nothing inside one recording knows that.
   testthat::expect_identical(sap_products(c(5, 7), c(0, 0), 1L, 1L)$rebinds, 1L)
   testthat::expect_identical(sap_products(c(5, 7), c(0, 0), 3L, 1L)$rebinds, 1L)
 
-  # A recording that follows a WIDER one, on the same lifted System, has to give
+  # A recording that follows a WIDER one, on the same active System, has to give
   # the same rows as one that follows nothing. That is what carrying a System
   # asks, and what the release before each clear is for: `square` is written only
   # from an expression, so writing it leaves the slot it already held, and a

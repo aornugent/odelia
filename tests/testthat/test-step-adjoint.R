@@ -88,7 +88,7 @@ compile_step_adjoint_interface <- function() {
       odelia::ode::adjoint_rows swept;
       odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
       stepper.step_adjoint(active, 1, time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
@@ -121,7 +121,7 @@ compile_step_adjoint_interface <- function() {
       odelia::ode::adjoint_rows swept;
       odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
       stepper.step_adjoint(active, 1, time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
@@ -249,7 +249,7 @@ compile_step_adjoint_on <- function(rebind_body) {
       odelia::ode::adjoint_rows swept;
       odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
       stepper.step_adjoint(active, 1, 0.0, 0.1, y, seeds, swept, rows);
       return swept.to_rows()[0];

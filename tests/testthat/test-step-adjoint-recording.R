@@ -1,5 +1,5 @@
 # Tests for the recording one step is transposed by -- all six Runge-Kutta stages
-# and the combination closing them, taken on a System lifted to the adjoint
+# and the combination closing them, taken on a System rebound to the adjoint
 # scalar for that recording -- and for Solver::solve_adjoint over the recorded
 # steps. The adjoint records a tape, so the snippet must link against the odelia
 # shared library for the XAD Tape symbols.
@@ -116,8 +116,8 @@ compile_recording_interface <- function() {
     #include <examples/lorenz_system.hpp>
     ', lv_system, '
 
-    // Both systems in this file are lifted to the adjoint scalar by the
-    // recording, so both have to declare the hook it lifts them with.
+    // Both systems in this file are rebound to the adjoint scalar by the
+    // recording, so both have to declare the hook it rebinds them with.
     static_assert(odelia::ode::Rebindable<LotkaVolterra<double>,
                                           odelia::ode::active_scalar<double> >);
     static_assert(odelia::ode::Rebindable<LorenzSystem<double>,
@@ -149,8 +149,8 @@ compile_recording_interface <- function() {
       odelia::ode::adjoint_rows swept;
       odelia::ode::adjoint_rows rows(1, adj.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::lifted_system<LotkaVolterra<double>> lifted{adj, step_tape};
-      stepper.step_adjoint(lifted, 1, time, step_size, y, seeds, swept, rows);
+      odelia::ode::active_system<LotkaVolterra<double>> active{adj, step_tape};
+      stepper.step_adjoint(active, 1, time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
@@ -291,7 +291,7 @@ compile_recording_interface <- function() {
 lv_pars <- c(1.1, 0.06, 0.4, 0.9)
 lv_y <- c(11.0, 4.0)
 
-testthat::test_that("both systems declare the hook the recording lifts them with", {
+testthat::test_that("both systems declare the hook the recording rebinds them with", {
   compile_recording_interface()
   expect_true(both_systems_rebind())
 })
@@ -366,14 +366,14 @@ testthat::test_that("a step is one recording of six rates, on one copy of the Sy
   compile_recording_interface()
 
   r <- lv_step_and_adjoint(lv_pars, 0.0, 0.05, lv_y, c(0.7, -1.9))
-  # One recording spans the step, so the System is lifted once for it. Every
+  # One recording spans the step, so the System is rebound once for it. Every
   # scalar a recording writes has to arrive holding no tape slot, and a copy
   # taken for the recording is what gives it that.
   expect_identical(r$assigns, 1L)
   # One rate evaluation per stage of the tableau, and the stage states between
   # them are the recording's own intermediates.
   expect_identical(r$recorded_rates, 6L)
-  # The double System is not walked. The stages run on the lifted copy, and a
+  # The double System is not walked. The stages run on the active copy, and a
   # sweep is handed each step's state, so this System is read for its width alone.
   expect_identical(r$rate_calls, 0L)
 })

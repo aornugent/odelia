@@ -18,7 +18,7 @@ using namespace odelia;
 //   y0' = y1
 //   y1' = ((1 - y0^2) * y1 - y0) / eps
 // small eps => stiff. Single parameter eps, templated scalar type with a
-// rebind_from() lift so the implicit stepper can differentiate the RHS.
+// rebind_from() so the implicit stepper can differentiate the RHS.
 template <typename T = double>
 class VdpSystem {
 public:

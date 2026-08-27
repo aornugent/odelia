@@ -53,7 +53,7 @@ public:
   // The adjoint of one step, from the state that step started at, for several
   // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
   // counterpart.
-  void step_adjoint(lifted_system<System>& active, std::size_t step, double time,
+  void step_adjoint(active_system<System>& active, std::size_t step, double time,
                     double step_size, const state_type& y,
                     const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
                     adjoint_rows& parameter_adjoint) {

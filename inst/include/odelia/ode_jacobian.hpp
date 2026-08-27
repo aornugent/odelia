@@ -16,7 +16,7 @@
 // Rebinding requires the System to expose
 //     template <class U> Self<U> rebind_from() const;
 // which returns a copy of itself with the scalar type swapped to U (parameters
-// carried over via xad::value + U(...)). This is the same double->AD lift the
+// carried over via xad::value + U(...)). This is the same double->AD rebind the
 // gradient driver uses; a clear error fires below if it is missing.
 
 #include <vector>

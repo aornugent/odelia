@@ -29,12 +29,12 @@ public:
 	    state_type &dydt_out);
 
   // The step transposed, for as many seeds as are handed in: one recording of the
-  // whole step, swept once per seed. The lifted System is the walk's, held across
+  // whole step, swept once per seed. The active System is the walk's, held across
   // every step of one width. A caller wanting one row passes a batch of
   // one; there is no separate entry point for that, because a second signature
   // over the same recording is a second place for the seam between the state and
   // the parameter halves to be got wrong.
-  void step_adjoint(lifted_system<System>& active, std::size_t step,
+  void step_adjoint(active_system<System>& active, std::size_t step,
                     double time, double step_size,
                     const state_type &y, const adjoint_rows& lambda_out,
                     adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint);
@@ -213,7 +213,7 @@ void Step<System>::step_end(const std::vector<S>& y,
 // writes a transpose of its own; and the parameters ride in the same recording,
 // so a stage the parameters reach carries their rows too.
 template <class System>
-void Step<System>::step_adjoint(lifted_system<System>& active, std::size_t step,
+void Step<System>::step_adjoint(active_system<System>& active, std::size_t step,
                                 double time, double step_size,
                                 const state_type &y, const adjoint_rows& lambda_out,
                                 adjoint_rows& lambda_in,
@@ -228,7 +228,7 @@ void Step<System>::step_adjoint(lifted_system<System>& active, std::size_t step,
   // in the two callers above that happen to check it.
   util::check_length(y.size(), size);
 
-  auto whole_step = [&](auto& active_system,
+  auto whole_step = [&](auto& sys,
                         typename std::vector<scalar>::const_iterator x,
                         std::vector<scalar>& y_end) -> void {
     const std::vector<scalar> y0(x, x + static_cast<std::ptrdiff_t>(size));
@@ -238,11 +238,11 @@ void Step<System>::step_adjoint(lifted_system<System>& active, std::size_t step,
     // the run took its first rates either at the end of the step before this one or,
     // where it widened in between, at a state no record holds. A descent that starts
     // at an arbitrary step cannot tell those apart, so it asks for neither.
-    ode::derivs(active_system, y0, rate[0], time);
+    ode::derivs(sys, y0, rate[0], time);
     ++recorded_rates;
     for (int i = 1; i < 6; ++i) {
       stage_state(i, y0, rate, h, stage);
-      ode::derivs(active_system, stage, rate[i], stage_time(i, time, h),
+      ode::derivs(sys, stage, rate[i], stage_time(i, time, h),
                   recorded_stage{step, i});
       ++recorded_rates;
     }
