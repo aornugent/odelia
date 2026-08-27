@@ -4,6 +4,7 @@
 #include <odelia/ode_solver_internal.hpp>
 #include <odelia/adjoint.hpp>
 #include <algorithm>
+#include <utility>
 #include <XAD/XAD.hpp>
 #include <cmath>
 #include <span>
@@ -244,24 +245,28 @@ public:
   // time and the size that reached it cannot be paired across two runs.
   std::vector<ode::recorded_step> schedule() const { return solver.schedule(); }
 
-  // Carry lambda back over the whole recording, highest row first, and add each
-  // row's parameter contribution into `parameter_adjoint`.
+  // Carry lambda back over recorded rows k_last down to k_first + 1, highest
+  // first, adding each row's parameter contribution into `parameter_adjoint`.
   //
-  // Where an insertion widened a row the descent stops there, narrows the System
-  // across it and transposes the map that widened it, so the rows it carries
-  // arrive by the same route a step's do. Where nothing widened it is one lift and
-  // one descent -- which is what a System of fixed width gets, and what every
-  // range this splits into gets.
+  // Wherever the state changed width inside that range the descent stops, narrows
+  // the System across it and transposes the map that widened it, so the rows it
+  // carries arrive by the same route a step's do. Where nothing widened this is one
+  // lift and one descent -- which is what a System of fixed width gets, and what
+  // every range this splits into gets.
   //
-  // `extra_splits` names rows at which the descent stops and resumes. The adjoint
-  // carried across such a stop is the same one either way, so a caller can ask for
-  // a split and compare: a check, not a choice.
+  // `extra_splits` names further rows to stop at. The adjoint carried across such a
+  // stop is the same one either way, so a caller can ask for a split and compare: a
+  // check, not a choice.
   //
-  // Returns how many ranges were swept, which is one per stretch between stops
-  // less any stretch with no step in it.
-  std::size_t solve_adjoint(ode::row_batch& lambda,
-                            ode::row_batch& parameter_adjoint,
-                            const std::vector<std::size_t>& extra_splits = {})
+  // The System is put where each range needs it and left where the run left it,
+  // so a sub-range can be swept without the caller positioning anything and the
+  // whole can be swept again afterwards.
+  //
+  // Returns how many ranges carried a step.
+  std::size_t solve_adjoint(ode::adjoint_rows& lambda,
+                            ode::adjoint_rows& parameter_adjoint,
+                            size_t k_first, size_t k_last,
+                            const std::vector<size_t>& extra_splits = {})
   {
     using scalar = ode::active_scalar<double>;
     const std::span<const ode::step_record<System>> rec = recording();
@@ -269,23 +274,34 @@ public:
       util::stop("solve_adjoint: no recorded steps to sweep; run the adaptive "
                  "pass first");
     }
-    // Where the descent stops: every row an insertion widened, and every row the
-    // caller asked to stop at. One sorted list, so a split landing on a widening
-    // is that widening rather than a second stop at the same row.
-    std::vector<size_t> stops = ode::insertion_rows(rec);
-    for (const size_t at : extra_splits) {
-      if (at > 0 && at + 1 < rec.size()) {
+    if (k_first >= k_last || k_last >= rec.size()) {
+      util::stop("the adjoint segment is not a range of recorded steps");
+    }
+
+    // Where the descent stops. An insertion AT k_first is a stop: it carries the
+    // state the run began from into the first width, and nothing below it is swept.
+    // A split there would cut nothing, so it is not.
+    std::vector<size_t> stops;
+    for (const size_t at : ode::insertion_rows(rec)) {
+      if (at >= k_first && at < k_last) {
         stops.push_back(at);
       }
     }
+    for (const size_t at : extra_splits) {
+      if (at > k_first && at < k_last) {
+        stops.push_back(at);
+      }
+    }
+    // Sorted and deduplicated, so a split landing on a widening is that widening
+    // rather than a second stop at the same row.
     std::sort(stops.begin(), stops.end());
     stops.erase(std::unique(stops.begin(), stops.end()), stops.end());
 
-    // ⚠️ THE WIDTH ON EXIT IS A PROMISE, AND A THROW IS AN EXIT. The descent
-    // starts at the run's own width and narrows as it goes, so a sweep abandoned
-    // high up leaves the System at its widest -- where every caller's tail widens
-    // back from the lowest and reads the mismatch as a length error one call
-    // later, naming neither this walk nor what refused.
+    // ⚠️ THE WIDTH ON EXIT IS A PROMISE, AND A THROW IS AN EXIT. The descent starts
+    // at the run's own width and narrows as it goes, so a sweep abandoned high up
+    // leaves the System at its widest -- where every caller's tail widens back from
+    // the lowest and reads the mismatch as a length error one call later, naming
+    // neither this walk nor what refused.
     struct restore_on_exit {
       System& sys;
       std::span<const ode::step_record<System>> rec;
@@ -300,62 +316,64 @@ public:
       }
     } restore{system, rec};
 
-    // One tape for the whole walk, held active across every recording it takes.
+    // One tape for the whole descent, held active across every recording it takes.
     // Clearing between recordings keeps the capacity the largest of them grew,
     // where one tape per recording regrows it every time.
     ode::adjoint_tape<double> tape(false);
     ode::tape_scope<ode::adjoint_tape<double>> running{tape};
 
+    // One range per width, highest first: the System is put at the range's top, so
+    // whoever narrows it is whoever lifts on it and no descent inherits a width
+    // another call left behind.
     size_t swept = 0;
-    size_t upper = rec.size() - 1;
-    for (size_t j = stops.size(); j-- > 0;) {
-      const size_t at = stops[j];
-      // A stop with no step above it cuts nothing, which is what an insertion at
-      // the last recorded row gives.
-      if (at < upper) {
-        sweep_range(tape, rec, lambda, parameter_adjoint, at, upper);
+    for (size_t j = stops.size() + 1; j-- > 0;) {
+      const size_t hi = (j == stops.size()) ? k_last : stops[j];
+      const size_t lo = (j == 0) ? k_first : stops[j - 1];
+      ode::be_at_step(system, rec, hi);
+
+      // The insertion that widened `hi`, transposed at the width below it -- which
+      // is the width the range below runs at. The topmost range ends at k_last,
+      // which no insertion inside this range widened.
+      //
+      // ⚠️ IT LIFTS ITS OWN, AND THAT IS NOT A SHARING SOMEONE MISSED. The map is
+      // `inserted_state`, which sets the narrow state, pushes the nodes and reports
+      // the wider state -- so transposing it leaves the System it ran on WIDER than
+      // the range below is about to be swept at. One lift handed to both reads past
+      // the end of every state the descent then loads: unmapped memory where the
+      // widths differ most, and finite nonsense where they do not. Sharing it needs
+      // `inserted_state` to stop mutating what it reports.
+      if (j < stops.size() && !rec[hi].inserted.empty()) {
+        const double when = rec[hi].time;
+        auto insert = [&](auto& active_system,
+                          typename std::vector<scalar>::const_iterator x,
+                          std::vector<scalar>& y) -> void {
+          ode::inserted_state(active_system, when, x, y);
+        };
+        ode::lifted_system<System> widened{system, tape};
+        ode::adjoint_rows narrowed;
+        ode::state_and_parameter_adjoints(widened, rec[hi].state, lambda, insert,
+                                         narrowed, parameter_adjoint);
+        lambda = std::move(narrowed);
+      }
+
+      // A range with no step in it cuts nothing, which is what an insertion at the
+      // range's first row gives.
+      if (lo < hi) {
+        ode::lifted_system<System> active{system, tape};
+        sweep_range(active, rec, lambda, parameter_adjoint, lo, hi);
         ++swept;
       }
-      upper = at;
-      if (rec[at].inserted.empty()) {
-        continue;  // the caller's own split; the width does not change here
-      }
-      ode::be_at_step(system, rec, at);
-      const double when = rec[at].time;
-      auto insert = [&](auto& active_system,
-                        typename std::vector<scalar>::const_iterator x,
-                        std::vector<scalar>& y) -> void {
-        ode::inserted_state(active_system, when, x, y);
-      };
-      // Lifted at the width below the widening, which is where be_at_step has
-      // just put the System, and used for this one recording.
-      ode::lifted_system<System> active{system, tape};
-      ode::row_batch narrowed;
-      ode::state_and_parameter_adjoints(active, rec[at].state, lambda, insert,
-                                        narrowed, parameter_adjoint);
-      lambda = std::move(narrowed);
-    }
-    // An insertion at the first recorded row leaves nothing below it, which is
-    // what a run from an empty state gives.
-    if (upper > 0) {
-      sweep_range(tape, rec, lambda, parameter_adjoint, 0, upper);
-      ++swept;
     }
     return swept;
   }
 
-  // One range of it, which the caller has already put the System at the width of.
-  // A range an insertion widened inside is refused by the width check below rather
-  // than swept at one width, so a caller composing two sub-ranges and comparing
-  // them against the whole needs nothing this does not already offer.
-  std::size_t solve_adjoint(ode::row_batch& lambda,
-                            ode::row_batch& parameter_adjoint,
-                            size_t k_first, size_t k_last)
+  // The whole recording.
+  std::size_t solve_adjoint(ode::adjoint_rows& lambda,
+                            ode::adjoint_rows& parameter_adjoint,
+                            const std::vector<size_t>& extra_splits = {})
   {
-    ode::adjoint_tape<double> tape(false);
-    ode::tape_scope<ode::adjoint_tape<double>> running{tape};
-    sweep_range(tape, recording(), lambda, parameter_adjoint, k_first, k_last);
-    return 1;
+    return solve_adjoint(lambda, parameter_adjoint, 0, recording().size() - 1,
+                         extra_splits);
   }
 
   // Rate evaluations the sweeps since the last clear have recorded: six a step,
@@ -370,15 +388,15 @@ public:
 std::vector<System> history;
 
 private:
-  // One constant-width range: lifted once for it rather than once per step, so one
-  // copy serves every step in it and each recording releases its slots before
-  // taking the next.
+  // One range, at the width the lift handed in was taken at: the caller narrowed
+  // the System and lifted it there, so one copy serves every step in this range and
+  // each recording releases its slots before taking the next.
   //
-  // Every state visited has to be the width the System holds, so a range an
-  // insertion widened inside is refused here rather than swept at one width.
-  void sweep_range(ode::adjoint_tape<double>& tape,
+  // Every state visited has to be that width, so a range a widening crossed is
+  // refused by the length check inside the loop rather than swept at one width.
+  void sweep_range(ode::lifted_system<System>& active,
                    std::span<const ode::step_record<System>> rec,
-                   ode::row_batch& lambda, ode::row_batch& parameter_adjoint,
+                   ode::adjoint_rows& lambda, ode::adjoint_rows& parameter_adjoint,
                    size_t k_first, size_t k_last)
   {
     if (lambda.empty()) {
@@ -395,11 +413,7 @@ private:
                  util::to_string(static_cast<int>(system.ode_size())) +
                  ", so the two are not at the same widening");
     }
-    if (k_first >= k_last || k_last >= rec.size()) {
-      util::stop("the adjoint segment is not a range of recorded steps");
-    }
-    ode::lifted_system<System> active{system, tape};
-    ode::row_batch lambda_in;
+    ode::adjoint_rows lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       // What the run's step k ran from, which is the wider state where an
       // insertion followed row k - 1 and that row's own where none did.
@@ -407,7 +421,10 @@ private:
       util::check_length(from.size(), system.ode_size());
       solver.step_adjoint(active, k, rec[k - 1].time, rec[k].step_size, from,
                           lambda, lambda_in, parameter_adjoint);
-      lambda = std::move(lambda_in);
+      // Swapped rather than moved from: a move leaves the buffer this step wrote
+      // into empty, so the next step allocates one the same size again. Swapping
+      // hands it the row above's, which the sweep refills rather than regrows.
+      std::swap(lambda, lambda_in);
     }
   }
 
