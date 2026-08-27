@@ -3,6 +3,8 @@
 #define ODELIA_ODE_INTERFACE_HPP_
 
 #include <cstddef>
+#include <algorithm>
+#include <span>
 #include <vector>
 #include <odelia/ode_util.hpp>
 #include <odelia/tangent.hpp>
@@ -236,6 +238,13 @@ struct step_record : recorded_step {
 //                                   and the whole wider state out, so it runs at
 //                                   any scalar and the sweep can transpose it.
 //
+// The first is as mandatory as ode_size(): a System replayed from a recording has
+// to be loadable from a recorded state, and for a width that never moves that is
+// its ordinary load. The second is asked for only where the width changed, so a
+// System that never widens is never asked for it -- ode::inserted_state above is
+// what a walk calls, and passing the state through is what an insertion is for
+// such a System.
+//
 // An insertion whose TIME depends on the parameters is a different map: its
 // adjoint carries a term through that time which nothing here computes. A System
 // walked by the sweep asserts its insertions are scheduled, not triggered.
@@ -446,6 +455,77 @@ std::vector<double> r_ode_rates(T& obj) {
   std::vector<double> dydt(obj.ode_size());
   obj.ode_rates(dydt.begin());
   return dydt;
+}
+
+// The rows an insertion followed: the rows carrying the wider state the run
+// reached before the step above them. Read off the record, because the forward
+// pass knew it was inserting and wrote it there.
+//
+// A walk that recovered these by scanning for a width which grew had to refuse a
+// width which shrinks, because an inference can be wrong where a recorded fact
+// cannot.
+template <class Record>
+std::vector<std::size_t> insertion_rows(std::span<const Record> rec) {
+    if (rec.size() < 2) {
+        util::stop("insertion_rows: no recorded steps to sweep");
+    }
+    std::vector<std::size_t> ret;
+    for (std::size_t k = 0; k + 1 < rec.size(); ++k) {
+        if (!rec[k].inserted.empty()) {
+            ret.push_back(k);
+        }
+    }
+    return ret;
+}
+
+// Put the System on the state the run recorded at `step`. The System reconciles
+// itself to that time -- which insertions had happened by then is derived from the
+// schedule it was driven by, not handed to it -- and the width it arrives at is
+// checked against the width recorded there.
+//
+// Idempotent, and that is the whole reason it is a load: the System reconciles to
+// the step rather than stepping toward it, so arriving twice is arriving once and
+// a walk can be run again over the recording it has already walked.
+template <class System>
+void be_at_step(System& system, std::span<const step_record<System>> rec,
+                std::size_t step) {
+    if (step >= rec.size()) {
+        util::stop("be_at_step: step " +
+                   util::to_string(static_cast<int>(step)) +
+                   " is outside a recording of " +
+                   util::to_string(static_cast<int>(rec.size())) + " steps");
+    }
+    system.set_recorded_state(rec[step].state, rec[step].time);
+    // Named, because a bare length mismatch reads as a caller's error one call
+    // away and says nothing about which walk or which step refused.
+    if (system.ode_size() != rec[step].state.size()) {
+        util::stop("be_at_step: reconciled to " +
+                   util::to_string(static_cast<int>(system.ode_size())) +
+                   " wide at step " +
+                   util::to_string(static_cast<int>(step)) + " against " +
+                   util::to_string(static_cast<int>(rec[step].state.size())) +
+                   " recorded there");
+    }
+}
+
+// The state an insertion produced, from the state below it: the insertion as a
+// map, so it runs at any scalar and a sweep can transpose it.
+//
+// A System whose width never changes inserts nothing, so the state passes
+// through. That is not a fallback for a System that forgot to declare one -- it
+// is what an insertion is for a width that does not move, and it is what lets a
+// recording of such a System be walked without it implementing a map it is never
+// asked for.
+template <class System, class It>
+void inserted_state(System& system, double time, It x,
+                    state_type<System>& out) {
+  if constexpr (requires { system.inserted_state(time, x, out); }) {
+    system.inserted_state(time, x, out);
+  } else {
+    for (std::size_t i = 0; i < out.size(); ++i) {
+      out[i] = *x++;
+    }
+  }
 }
 
 template <typename T>

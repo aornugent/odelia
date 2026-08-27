@@ -63,6 +63,11 @@ lv_system <- '
       compute_rates();
       return it;
     }
+    // This width never moves, so being the shape a recorded time implies is
+    // nothing, and the load is the ordinary one.
+    void set_recorded_state(const std::vector<T>& y, double time_) {
+      set_ode_state(y.begin(), time_);
+    }
     void compute_rates() {
       ++rate_calls;
       const T flux = b * n * p;
@@ -182,8 +187,7 @@ compile_recording_interface <- function() {
       odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
       replay.clear_recorded_rates();
-      odelia::ode::adjoint_tape<double> tape(false);
-      replay.solve_adjoint(tape, rec, lambda, rows, 0, rec.size() - 1);
+      replay.solve_adjoint(lambda, rows);
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 
       return Rcpp::List::create(Rcpp::_["n_steps"] = (int) recording.size(),
@@ -218,10 +222,8 @@ compile_recording_interface <- function() {
 
       odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
       odelia::ode::row_batch rows(1, system.ad_parameters().size());
-      odelia::ode::adjoint_tape<double> tape(false);
-      replay.solve_adjoint(tape, rec, lambda, rows, (size_t) split,
-                           rec.size() - 1);
-      replay.solve_adjoint(tape, rec, lambda, rows, 0, (size_t) split);
+      replay.solve_adjoint(lambda, rows, (size_t) split, rec.size() - 1);
+      replay.solve_adjoint(lambda, rows, 0, (size_t) split);
       return lambda.to_rows()[0];
     }
 
