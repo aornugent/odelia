@@ -69,9 +69,9 @@ compile_sap_interface <- function() {
     // [[Rcpp::export]]
     Rcpp::List sap_products(std::vector<double> state,
                             std::vector<double> prior, int n_calls, int width) {
-      const odelia::ode::row_batch seeds = odelia::ode::row_batch::all_rows(2);
-      odelia::ode::row_batch state_adjoint;
-      odelia::ode::row_batch parameter_adjoint(2, prior.size());
+      const odelia::ode::adjoint_rows seeds = odelia::ode::adjoint_rows::all_rows(2);
+      odelia::ode::adjoint_rows state_adjoint;
+      odelia::ode::adjoint_rows parameter_adjoint(2, prior.size());
       for (std::size_t m = 0; m < 2; ++m) {
         std::copy(prior.begin(), prior.end(), parameter_adjoint[m].begin());
       }
@@ -107,9 +107,9 @@ compile_sap_interface <- function() {
     // fresh, and rows that are wrong but finite if it is not.
     // [[Rcpp::export]]
     Rcpp::List sap_after_wider(std::vector<double> state, int first_width) {
-      const odelia::ode::row_batch seeds = odelia::ode::row_batch::all_rows(2);
-      odelia::ode::row_batch state_adjoint;
-      odelia::ode::row_batch parameter_adjoint(2, 2);
+      const odelia::ode::adjoint_rows seeds = odelia::ode::adjoint_rows::all_rows(2);
+      odelia::ode::adjoint_rows state_adjoint;
+      odelia::ode::adjoint_rows parameter_adjoint(2, 2);
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
       odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
@@ -145,9 +145,9 @@ compile_sap_interface <- function() {
     void sap_refused(int which) {
       TinySystem<double> system;
       std::vector<double> state{5.0, 7.0};
-      const odelia::ode::row_batch seeds = odelia::ode::row_batch::all_rows(2);
-      odelia::ode::row_batch state_adjoint;
-      odelia::ode::row_batch parameter_adjoint;
+      const odelia::ode::adjoint_rows seeds = odelia::ode::adjoint_rows::all_rows(2);
+      odelia::ode::adjoint_rows state_adjoint;
+      odelia::ode::adjoint_rows parameter_adjoint;
       if (which == 0) {
         parameter_adjoint.assign(1, 2);
       } else if (which == 1) {
@@ -165,7 +165,7 @@ compile_sap_interface <- function() {
 
       xad::adj<double>::tape_type tape(false);
       odelia::ode::lifted_system<TinySystem<double>> active{system, tape};
-      odelia::ode::row_batch& out =
+      odelia::ode::adjoint_rows& out =
           (which == 2) ? parameter_adjoint : state_adjoint;
       odelia::ode::state_and_parameter_adjoints(active, state, seeds,
                                                 evaluate, out,

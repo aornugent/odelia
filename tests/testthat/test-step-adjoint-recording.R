@@ -144,10 +144,10 @@ compile_recording_interface <- function() {
       LotkaVolterra<double> adj(pars[0], pars[1], pars[2], pars[3]);
       adj.rate_calls = 0;
       lv_assigns = 0;
-      const odelia::ode::row_batch seeds =
-        odelia::ode::row_batch::one_row(lambda_out);
-      odelia::ode::row_batch swept;
-      odelia::ode::row_batch rows(1, adj.ad_parameters().size());
+      const odelia::ode::adjoint_rows seeds =
+        odelia::ode::adjoint_rows::one_row(lambda_out);
+      odelia::ode::adjoint_rows swept;
+      odelia::ode::adjoint_rows rows(1, adj.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::lifted_system<LotkaVolterra<double>> lifted{adj, step_tape};
       stepper.step_adjoint(lifted, 1, time, step_size, y, seeds, swept, rows);
@@ -184,8 +184,8 @@ compile_recording_interface <- function() {
       replay.advance_recorded(recording);
       const auto rec = replay.recording();
 
-      odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
-      odelia::ode::row_batch rows(1, system.ad_parameters().size());
+      odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row(lambda_end);
+      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       replay.clear_recorded_rates();
       replay.solve_adjoint(lambda, rows);
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
@@ -220,8 +220,8 @@ compile_recording_interface <- function() {
       replay.advance_recorded(recording);
       const auto rec = replay.recording();
 
-      odelia::ode::row_batch lambda = odelia::ode::row_batch::one_row(lambda_end);
-      odelia::ode::row_batch rows(1, system.ad_parameters().size());
+      odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row(lambda_end);
+      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       replay.solve_adjoint(lambda, rows, (size_t) split, rec.size() - 1);
       replay.solve_adjoint(lambda, rows, 0, (size_t) split);
       return lambda.to_rows()[0];

@@ -36,8 +36,8 @@ public:
   // the parameter halves to be got wrong.
   void step_adjoint(lifted_system<System>& active, std::size_t step,
                     double time, double step_size,
-                    const state_type &y, const row_batch& lambda_out,
-                    row_batch& lambda_in, row_batch& parameter_adjoint);
+                    const state_type &y, const adjoint_rows& lambda_out,
+                    adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint);
 
   // Rate evaluations the sweeps since the last clear have recorded, counted where
   // they are recorded rather than added up as a total the loop could disagree
@@ -215,9 +215,9 @@ void Step<System>::step_end(const std::vector<S>& y,
 template <class System>
 void Step<System>::step_adjoint(lifted_system<System>& active, std::size_t step,
                                 double time, double step_size,
-                                const state_type &y, const row_batch& lambda_out,
-                                row_batch& lambda_in,
-                                row_batch& parameter_adjoint) {
+                                const state_type &y, const adjoint_rows& lambda_out,
+                                adjoint_rows& lambda_in,
+                                adjoint_rows& parameter_adjoint) {
   using scalar = active_scalar<double>;
   const double h = step_size;
   if (lambda_out.empty()) {

@@ -15,17 +15,22 @@
 namespace odelia {
 namespace ode {
 
-// One row per seed, every row the same width: what a transpose is seeded with,
-// and what it hands back. The shape is the object's own, so a ragged batch and a
-// row of the wrong width cannot be built -- where a vector of vectors builds
-// both, and every function on the path then has to test for them.
+// One adjoint per seed, every row the same width: what a transpose is seeded with,
+// and what it hands back.
+//
+// Several exist together because they share ONE recording. The recording is a model
+// evaluation and a sweep is arithmetic, so a caller wanting several rows pays one
+// recording rather than one per row -- which is the whole reason this is a set and
+// not a vector. The shape is the object's own, so a ragged set and a row of the
+// wrong width are not things a caller can build, where a vector of vectors builds
+// both and every function on the path then has to test for them.
 //
 // The width is a run-time number on purpose. A sweep narrows as it descends, and
 // how many seeds a caller wants is the caller's; neither is a property of a type.
-class row_batch {
+class adjoint_rows {
 public:
-  row_batch() = default;
-  row_batch(std::size_t rows, std::size_t width) { assign(rows, width); }
+  adjoint_rows() = default;
+  adjoint_rows(std::size_t rows, std::size_t width) { assign(rows, width); }
 
   std::size_t rows() const { return rows_; }
   std::size_t width() const { return width_; }
@@ -50,11 +55,11 @@ public:
   // The rows `which` names, in the order it names them. Out of range is refused
   // rather than clamped: a caller indexing by position would otherwise be handed
   // a different row than the one it asked for.
-  row_batch select(const std::vector<std::size_t>& which) const {
-    row_batch ret(which.size(), width_);
+  adjoint_rows select(const std::vector<std::size_t>& which) const {
+    adjoint_rows ret(which.size(), width_);
     for (std::size_t m = 0; m < which.size(); ++m) {
       if (which[m] >= rows_) {
-        util::stop("row_batch::select: row " +
+        util::stop("adjoint_rows::select: row " +
                    util::to_string(static_cast<int>(which[m])) +
                    " is outside a batch of " +
                    util::to_string(static_cast<int>(rows_)));
@@ -67,16 +72,16 @@ public:
 
   // A batch of one, which is how a caller wanting a single transpose row asks for
   // it: there is no separate entry point for one seed.
-  static row_batch one_row(const std::vector<double>& values) {
-    row_batch ret(1, values.size());
+  static adjoint_rows one_row(const std::vector<double>& values) {
+    adjoint_rows ret(1, values.size());
     std::copy(values.begin(), values.end(), ret[0].begin());
     return ret;
   }
 
   // The seeds that ask for every row of a Jacobian: one per output, each picking
   // that output out.
-  static row_batch all_rows(std::size_t rows) {
-    row_batch ret(rows, rows);
+  static adjoint_rows all_rows(std::size_t rows) {
+    adjoint_rows ret(rows, rows);
     for (std::size_t m = 0; m < rows; ++m) {
       ret[m][m] = 1.0;
     }
@@ -246,7 +251,7 @@ namespace internal {
 template <class Read>
 void sweep_each_seed(adjoint_tape<double>& tape,
                      std::vector<active_scalar<double>>& outputs,
-                     const row_batch& output_adjoints, Read&& read) {
+                     const adjoint_rows& output_adjoints, Read&& read) {
     for (std::size_t m = 0; m < output_adjoints.rows(); ++m) {
         tape.clearDerivatives();
         // The adjoint slots, named directly rather than through an accessor of
@@ -293,9 +298,9 @@ void sweep_each_seed(adjoint_tape<double>& tape,
 template <class F>
 std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
                                      const std::vector<double>& x,
-                                     const row_batch& output_adjoints,
+                                     const adjoint_rows& output_adjoints,
                                      F&& f,
-                                     row_batch& input_adjoints) {
+                                     adjoint_rows& input_adjoints) {
     using ad_type = active_scalar<double>;
     using tape_type = adjoint_tape<double>;
 
@@ -366,8 +371,8 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
     lifted_system<System>& active, const std::vector<double>& state,
-    const row_batch& output_adjoints, Evaluate&& evaluate,
-    row_batch& state_adjoint, row_batch& parameter_adjoint) {
+    const adjoint_rows& output_adjoints, Evaluate&& evaluate,
+    adjoint_rows& state_adjoint, adjoint_rows& parameter_adjoint) {
     using scalar = active_scalar<double>;
     adjoint_tape<double>& tape = active.tape();
     const std::vector<scalar*>& parameters = active.parameters;
@@ -448,8 +453,8 @@ template <class System, class Evaluate>
     requires Rebindable<System, active_scalar<double>>
 std::size_t state_and_parameter_adjoints(
     const System& passive, const std::vector<double>& state,
-    const row_batch& output_adjoints, Evaluate&& evaluate,
-    row_batch& state_adjoint, row_batch& parameter_adjoint) {
+    const adjoint_rows& output_adjoints, Evaluate&& evaluate,
+    adjoint_rows& state_adjoint, adjoint_rows& parameter_adjoint) {
     adjoint_tape<double> tape(false);
     lifted_system<System> active{passive, tape};
     return state_and_parameter_adjoints(active, state, output_adjoints,
@@ -475,8 +480,8 @@ template <class System>
 std::size_t rates_adjoint(
     lifted_system<System>& active,
     const std::vector<double>& state, double time,
-    const row_batch& rate_adjoints, row_batch& state_adjoint,
-    row_batch& parameter_adjoint) {
+    const adjoint_rows& rate_adjoints, adjoint_rows& state_adjoint,
+    adjoint_rows& parameter_adjoint) {
     using scalar = active_scalar<double>;
     const std::size_t n_state = state.size();
     auto rates = [&](auto& active_system,

@@ -83,10 +83,10 @@ compile_step_adjoint_interface <- function() {
       // The six stage states of the recording, ascending, then the start state
       // the step puts the system back to.
       stage_log.clear();
-      const odelia::ode::row_batch seeds =
-        odelia::ode::row_batch::one_row(lambda_out);
-      odelia::ode::row_batch swept;
-      odelia::ode::row_batch rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_rows seeds =
+        odelia::ode::adjoint_rows::one_row(lambda_out);
+      odelia::ode::adjoint_rows swept;
+      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
@@ -116,10 +116,10 @@ compile_step_adjoint_interface <- function() {
       odelia::ode::derivs(system, y, dydt_in, time);
       stepper.step(system, 1, time, step_size, y_end, yerr, dydt_in, dydt_out);
 
-      const odelia::ode::row_batch seeds =
-        odelia::ode::row_batch::one_row(lambda_out);
-      odelia::ode::row_batch swept;
-      odelia::ode::row_batch rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_rows seeds =
+        odelia::ode::adjoint_rows::one_row(lambda_out);
+      odelia::ode::adjoint_rows swept;
+      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
@@ -244,10 +244,10 @@ compile_step_adjoint_on <- function(rebind_body) {
       odelia::ode::Step<Decay> stepper;
       stepper.resize(1);
       std::vector<double> y(1, 1.0), lambda_out(1, 1.0);
-      const odelia::ode::row_batch seeds =
-        odelia::ode::row_batch::one_row(lambda_out);
-      odelia::ode::row_batch swept;
-      odelia::ode::row_batch rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_rows seeds =
+        odelia::ode::adjoint_rows::one_row(lambda_out);
+      odelia::ode::adjoint_rows swept;
+      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::lifted_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
