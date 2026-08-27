@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <memory>
 #include <span>
+#include <utility>
 #include <vector>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_interface.hpp>
@@ -232,6 +233,36 @@ struct lifted_system {
   std::vector<scalar*> parameters;
 };
 
+namespace internal {
+
+// Seed the recorded outputs and sweep, once per seed row; `read(m)` runs with
+// seed m's adjoints standing on the tape.
+//
+// ⚠️ THE DERIVATIVES ARE CLEARED BETWEEN SWEEPS. Without it the previous seed's
+// adjoints are still on the slots and every row after the first is the running
+// sum of the ones before it. Clearing leaves the recorded operations alone, which
+// is what makes one recording substitutable for a fresh one per seed rather than
+// an approximation of one.
+template <class Read>
+void sweep_each_seed(adjoint_tape<double>& tape,
+                     std::vector<active_scalar<double>>& outputs,
+                     const row_batch& output_adjoints, Read&& read) {
+    for (std::size_t m = 0; m < output_adjoints.rows(); ++m) {
+        tape.clearDerivatives();
+        // The adjoint slots, named directly rather than through an accessor of
+        // their own: this is the only place in the family that touches one, and a
+        // name for two sites inside the function that owns the tape would say
+        // nothing the tape does not.
+        for (std::size_t i = 0; i < outputs.size(); ++i) {
+            xad::derivative(outputs[i]) = output_adjoints[m][i];
+        }
+        tape.computeAdjoints();
+        read(m);
+    }
+}
+
+}  // namespace internal
+
 // One block of `f`, recorded ONCE on the tape handed in and swept once per seed:
 // `input_adjoints[m]` receives transpose(jacobian) * output_adjoints[m], and the return
 // value is the recording's size. `f` is instantiated at the active scalar here, so only
@@ -295,22 +326,12 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
     tape.registerOutputs(y_active);
 
     input_adjoints.assign(output_adjoints.rows(), x.size());
-    for (std::size_t m = 0; m < output_adjoints.rows(); ++m) {
-        // Between sweeps, or the previous seed's adjoints are still on the slots and
-        // every row after the first is the running sum of the ones before it.
-        tape.clearDerivatives();
-        // The adjoint slots, named directly rather than through an accessor of
-        // their own: this is the only place in the family that touches one, the
-        // scalar is fixed two statements above, and a name for two sites inside
-        // the function that owns the tape would say nothing the tape does not.
-        for (std::size_t i = 0; i < y_active.size(); ++i) {
-            xad::derivative(y_active[i]) = output_adjoints[m][i];
-        }
-        tape.computeAdjoints();
+    internal::sweep_each_seed(tape, y_active, output_adjoints,
+                              [&](std::size_t m) -> void {
         for (std::size_t i = 0; i < x_active.size(); ++i) {
             input_adjoints[m][i] = xad::derivative(x_active[i]);
         }
-    }
+    });
 
     return tape.getMemory();
 }
@@ -364,42 +385,76 @@ std::size_t state_and_parameter_adjoints(
                    "per seed, to accumulate into");
     }
     util::check_length(parameter_adjoint.width(), n_parameter);
-
-    std::vector<double> in(state);
-    in.reserve(n_state + n_parameter);
-    for (const scalar* p : parameters) {
-        in.push_back(util::to_passive(*p));
+    if (state.empty()) {
+        util::stop("state_and_parameter_adjoints: 'state' must have at least one "
+                   "entry");
+    }
+    if (output_adjoints.empty()) {
+        util::stop("state_and_parameter_adjoints: needs at least one seed");
+    }
+    const std::size_t n_out = output_adjoints.width();
+    if (n_out == 0) {
+        util::stop("state_and_parameter_adjoints: a seed must have at least one "
+                   "entry");
     }
 
-    // Held for the release and the product both, and the release comes first: a
-    // slot is handed back by the destructor of the temporary that takes it, and
-    // that destructor does nothing with no tape active.
+    // Held for the release, the recording and the sweeps. The release comes
+    // first and the clear second: a slot is handed back by the destructor of the
+    // temporary that takes it, which does nothing with no tape active, and
+    // clearing returns the slot counter to zero, so one handed back after a clear
+    // takes it below zero.
     tape_scope<adjoint_tape<double>> running{tape};
     active.release();
+    tape.clearAll();
 
-    auto record = [&](const std::vector<scalar>& x,
-                      std::vector<scalar>& y) -> void {
-        std::size_t at = n_state;
-        for (scalar* p : parameters) {
-            *p = x[at++];
-        }
-        evaluate(active.system, x.begin(), y);
-    };
+    // The two kinds of input, each registered as what it is. The state is this
+    // recording's own and arrives as doubles; the parameters live on the System
+    // and are registered where they sit. So no value is copied in and no adjoint
+    // is split back out by position -- which is what a flat input vector cost,
+    // and what made slicing one past the state a hazard rather than a mistake.
+    std::vector<scalar> state_active(state.begin(), state.end());
+    tape.registerInputs(state_active);
+    for (scalar* p : parameters) {
+        tape.registerInput(*p);
+    }
+    tape.newRecording();
 
-    row_batch in_adjoint;
-    const std::size_t recording =
-        vector_jacobian_product(tape, in, output_adjoints, record, in_adjoint);
+    std::vector<scalar> outputs(n_out);
+    evaluate(active.system, state_active.begin(), outputs);
+    if (outputs.size() != n_out) {
+        util::stop("state_and_parameter_adjoints: the map resized the output "
+                   "buffer; it is handed one entry per output adjoint and must "
+                   "write in place");
+    }
+    tape.registerOutputs(outputs);
 
     state_adjoint.assign(n_seed, n_state);
-    for (std::size_t m = 0; m < n_seed; ++m) {
-        const std::span<const double> row = in_adjoint[m];
-        std::copy(row.begin(), row.begin() + static_cast<std::ptrdiff_t>(n_state),
-                  state_adjoint[m].begin());
-        for (std::size_t p = 0; p < n_parameter; ++p) {
-            parameter_adjoint[m][p] += row[n_state + p];
+    internal::sweep_each_seed(tape, outputs, output_adjoints,
+                              [&](std::size_t m) -> void {
+        for (std::size_t i = 0; i < n_state; ++i) {
+            state_adjoint[m][i] = xad::derivative(state_active[i]);
         }
-    }
-    return recording;
+        for (std::size_t p = 0; p < n_parameter; ++p) {
+            parameter_adjoint[m][p] += xad::derivative(*parameters[p]);
+        }
+    });
+    return tape.getMemory();
+}
+
+// The same transpose where the caller holds a System rather than a lifted one and
+// is taking a single recording: the tape and the lift are made here. A walk taking
+// many hands in the one it holds for its descent, and lifts once per width.
+template <class System, class Evaluate>
+    requires Rebindable<System, active_scalar<double>>
+std::size_t state_and_parameter_adjoints(
+    const System& passive, const std::vector<double>& state,
+    const row_batch& output_adjoints, Evaluate&& evaluate,
+    row_batch& state_adjoint, row_batch& parameter_adjoint) {
+    adjoint_tape<double> tape(false);
+    lifted_system<System> active{passive, tape};
+    return state_and_parameter_adjoints(active, state, output_adjoints,
+                                        std::forward<Evaluate>(evaluate),
+                                        state_adjoint, parameter_adjoint);
 }
 
 // The transpose of one rate evaluation: `state_adjoint[m]` receives
@@ -427,8 +482,8 @@ std::size_t rates_adjoint(
     auto rates = [&](auto& active_system,
                      typename std::vector<scalar>::const_iterator x,
                      std::vector<scalar>& dydt) -> void {
-        // The state half of the recorded inputs; the parameters are already
-        // written from the other half.
+        // The recorded state inputs. The parameters are registered where they
+        // sit on the System, so they are not in this buffer.
         std::vector<scalar> y(x, x + static_cast<std::ptrdiff_t>(n_state));
         ode::derivs(active_system, y, dydt, time);
     };

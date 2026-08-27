@@ -223,11 +223,9 @@ void Step<System>::step_adjoint(lifted_system<System>& active, std::size_t step,
   if (lambda_out.empty()) {
     util::stop("step_adjoint: needs at least one seed");
   }
-  // The recording slices its state half at `size`, which resize() set and this
-  // call is handed no chance to disagree with -- so it is checked here rather than
-  // in the two callers above that happen to check it. Slicing past the state reads
-  // parameter values as state, and the sweep then splits the adjoints at a
-  // different seam from the one the recording used.
+  // The recording hands the whole state buffer to the slice below, and `size` is
+  // what resize() set -- so a state of another width is checked here rather than
+  // in the two callers above that happen to check it.
   util::check_length(y.size(), size);
 
   auto whole_step = [&](auto& active_system,
