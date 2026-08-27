@@ -80,6 +80,14 @@ probe_nested_recording: probe_nested_recording.cpp ../../src/Tape.cpp $(HEADERS)
 	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
 	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $< ../../src/Tape.cpp
 
+# What a caller can do to slots directly: hand-written statements, a callback
+# writing adjoints mid-sweep, whether a recording carrying one survives being
+# swept twice, and what rewinding the slot counter costs without clearAll. A
+# measurement, so it is not in `all`.
+probe_slot_control: probe_slot_control.cpp ../../src/Tape.cpp $(HEADERS)
+	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
+	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $< ../../src/Tape.cpp
+
 clean:
 	rm -f r_free r_free.o Tape.o probe_width probe_implicit_tangent \
-	  probe_tape_reset probe_nested_recording
+	  probe_tape_reset probe_nested_recording probe_slot_control
