@@ -88,6 +88,13 @@ probe_slot_control: probe_slot_control.cpp ../../src/Tape.cpp $(HEADERS)
 	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
 	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $< ../../src/Tape.cpp
 
+# What a trapezium reduction costs on the tape when its widths are positions
+# rather than state. A measurement, so it is not in `all`.
+probe_trapezium: probe_trapezium.cpp ../../src/Tape.cpp $(HEADERS)
+	$(CXX) -std=c++20 -O2 -DNDEBUG -DXAD_NO_THREADLOCAL \
+	  -DXAD_USE_STRONG_INLINE -w $(INCLUDES) -o $@ $< ../../src/Tape.cpp
+
 clean:
 	rm -f r_free r_free.o Tape.o probe_width probe_implicit_tangent \
-	  probe_tape_reset probe_nested_recording probe_slot_control
+	  probe_tape_reset probe_nested_recording probe_slot_control \
+	  probe_trapezium
