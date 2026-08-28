@@ -501,9 +501,10 @@ std::vector<double> r_ode_rates(T& obj) {
 // reached before the step above them. Read off the record, because the forward
 // pass knew it was inserting and wrote it there.
 //
-// A walk that recovered these by scanning for a width which grew had to refuse a
-// width which shrinks, because an inference can be wrong where a recorded fact
-// cannot.
+// Read off the flag the run set where it widened. A walk that recovered these by
+// scanning for a width which grew had to refuse a width which shrinks, because an
+// inference can be wrong where a recorded fact cannot; reading the flag rather
+// than the state it made is the same fact on a run that kept no states.
 template <class Record>
 std::vector<std::size_t> insertion_rows(std::span<const Record> rec) {
     if (rec.size() < 2) {
@@ -511,7 +512,7 @@ std::vector<std::size_t> insertion_rows(std::span<const Record> rec) {
     }
     std::vector<std::size_t> ret;
     for (std::size_t k = 0; k + 1 < rec.size(); ++k) {
-        if (!rec[k].inserted.empty()) {
+        if (rec[k].junction) {
             ret.push_back(k);
         }
     }
