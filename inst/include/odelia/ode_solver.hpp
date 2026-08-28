@@ -362,7 +362,9 @@ public:
       // Its active System is its own and dies with it, because applying the
       // insertion is what widens the System: what this records on cannot be swept
       // at the width it started from.
-      if (j < stops.size() && !rec[hi].inserted.empty()) {
+      // A stop is either a junction the run recorded or a cut a caller asked for.
+      // Only the first has a map to transpose, which is what keeps a cut free.
+      if (j < stops.size() && rec[hi].junction) {
         const double when = rec[hi].time;
         auto insert = [&](auto& sys,
                           typename std::vector<scalar>::const_iterator x,
