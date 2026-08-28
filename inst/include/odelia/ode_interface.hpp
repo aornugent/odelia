@@ -202,6 +202,10 @@ concept SolvesForValues =
 struct recorded_step {
   double time;
   double step_size;
+  // Whether a junction -- a state map rather than a step -- runs after this row.
+  // Authored where the width changes rather than discovered from a state that
+  // grew, so a run keeping no states still knows where its junctions were.
+  bool junction = false;
 };
 
 // One row of a recording: the schedule row a replay would take, the state the run

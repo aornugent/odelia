@@ -54,7 +54,8 @@ public:
   // The adjoint of one step, from the state that step started at, for several
   // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
   // counterpart.
-  void step_adjoint(active_system<System>& active, std::size_t step, double time,
+  void step_adjoint(active_system<System>& active,
+                    const typename Step<System>::solved_row& solved, double time,
                     double step_size, const state_type& y,
                     const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
                     adjoint_rows& parameter_adjoint) {
@@ -66,9 +67,7 @@ public:
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
     resize(lambda_out.width());
-    // What this step's stages solved for is on this step's own row, which is the
-    // row the forward pass created when it took the step.
-    stepper.step_adjoint(active, prev_steps.at(step).solved, time, step_size, y,
+    stepper.step_adjoint(active, solved, time, step_size, y,
                          lambda_out, lambda_in, parameter_adjoint);
   }
 
@@ -112,10 +111,11 @@ public:
   // One accepted step, into the record: the time it reached, the size that
   // reached it, and the state there where the run was asked to keep states.
   void push_step(System& system, double time_, double step_size);
-  // The wider state an insertion just reached, onto the row it followed. It
-  // shares that row's time, so it is recorded beside that row's own state rather
-  // than as a row of its own -- a second row at one time would move the schedule
-  // a replay reads and the step index a recorded stage is addressed by.
+  // The wider state an insertion just reached, onto the row it followed, and the
+  // flag saying one did. It shares that row's time, so it cannot be a row of its
+  // own: NodeSchedule::distribute_ode_steps drops any step whose time matches an
+  // interval boundary, which is exactly where an insertion sits, so a second row
+  // at one time is deleted rather than refused.
   void push_inserted(System& system);
   void step_to(System& system, double time_max_);
   // `reached` is the time a recording says this step ended at; NaN accumulates.
@@ -269,13 +269,16 @@ void SolverInternal<System>::push_step(System& system, double time_,
   prev_steps.push_back(std::move(record));
 }
 
-// Kept only where the states are: nothing but a sweep reads it, and a sweep
-// cannot run on a record that has no states either.
+// The flag holds on every run; the state it made is kept only where the states
+// are, because nothing but a sweep reads that and a sweep needs states anyway.
 template <class System>
 void SolverInternal<System>::push_inserted(System& system) {
   if (prev_steps.empty()) {
     util::stop("push_inserted: no recorded step for an insertion to follow");
   }
+  // Before the states check, deliberately: where a junction was is the schedule's
+  // and holds on a run that keeps nothing, where the state it made is a recording.
+  prev_steps.back().junction = true;
   if (!keep_states_) {
     return;
   }

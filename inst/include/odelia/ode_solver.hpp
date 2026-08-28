@@ -417,7 +417,8 @@ private:
       // insertion followed row k - 1 and that row's own where none did.
       const state_type<System>& from = rec[k - 1].ran_from();
       util::check_length(from.size(), active.system.ode_size());
-      solver.step_adjoint(active, k, rec[k - 1].time, rec[k].step_size, from,
+      solver.step_adjoint(active, rec[k].solved, rec[k - 1].time,
+                          rec[k].step_size, from,
                           lambda, lambda_in, parameter_adjoint);
       // Swapped rather than moved from: a move leaves the buffer this step wrote
       // into empty, so the next step allocates one the same size again. Swapping
