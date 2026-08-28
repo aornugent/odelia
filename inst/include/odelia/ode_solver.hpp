@@ -147,6 +147,12 @@ public:
   // differencing the times, because a size differenced back out of two recorded
   // times is not the size that was taken; and not by adding sizes, which arrives
   // a rounding short of where the run landed.
+  //
+  // A row marked a junction is followed by the System's own state map, applied
+  // here. A schedule that says where its junctions are is one a walk can execute
+  // without a segment loop wrapped around it -- and it is the same map the sweep
+  // transposes, so a tangent replayed through here traverses exactly the function
+  // under test rather than a second spelling of it.
   void advance_recorded(const std::vector<recorded_step>& steps)
   {
     if (steps.empty())
@@ -159,10 +165,27 @@ public:
                  "that no step reached");
     }
 
+    // Held across the walk rather than made per junction. `widened` is written
+    // and not read: what the map leaves on the System is what this wants.
+    std::vector<value_type> before;
+    std::vector<value_type> widened;
+    const auto junction_after = [&](const recorded_step& row) -> void
+    {
+      if (!row.junction)
+      {
+        return;
+      }
+      before.assign(system.ode_size(), value_type(0.0));
+      system.ode_state(before.begin());
+      ode::apply_insertion(system, row.time, before.begin(), widened);
+      set_state_from_system();
+    };
+
     if (collect)
     {
       history.push_back(system);
     }
+    junction_after(steps.front());
 
     for (std::size_t k = 1; k < steps.size(); ++k)
     {
@@ -178,6 +201,7 @@ public:
       {
         history.push_back(system);
       }
+      junction_after(steps[k]);
     }
   }
 

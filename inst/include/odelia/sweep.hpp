@@ -56,6 +56,11 @@ double state_at_segment(System& system,
 // of two recorded times is not the size that was taken, since fl(fl(t + h) - t)
 // is not h, and a walk that chose its own would be differentiating a controller
 // the model does not contain.
+//
+// The head entry carries the solver's own time rather than the row's, which is
+// what lets a caller replay a perturbed state at that time. Everything else is
+// the recording, junctions included -- the solver executes those, so this builds
+// a program and makes one call.
 template <class Solver, class Record>
 void advance_over_insertions(
     Solver& forward, std::span<const Record> rec, std::size_t from_segment,
@@ -64,39 +69,22 @@ void advance_over_insertions(
     if (from_segment > rows.size()) {
         util::stop("advance_over_insertions: the recording has no such segment");
     }
-    // Held across the walk: the state below each insertion, and the wider one the
-    // map reports and this does not read -- the System is left holding it, which
-    // is what this wants.
-    using value_type = typename Solver::value_type;
-    std::vector<value_type> before;
-    std::vector<value_type> widened;
-    for (std::size_t j = from_segment; j <= rows.size(); ++j) {
-        const std::size_t last = j < rows.size() ? rows[j] : rec.size() - 1;
-        // The first entry is the start no step reached, which is how a recorded
-        // run reads back. A recording row is a schedule row plus its state, so
-        // the schedule is read off it rather than built beside it.
-        std::vector<recorded_step> segment_steps{
-            {forward.time(), std::numeric_limits<double>::quiet_NaN()}};
-        for (std::size_t k = first + 1; k <= last; ++k) {
-            segment_steps.push_back(rec[k]);
-        }
-        if (segment_steps.size() > 1) {
-            forward.advance_recorded(segment_steps);
-        }
-        if (j == rows.size()) {
-            break;
-        }
-        // The same map the sweep transposes, so a tangent traverses exactly the
-        // function under test rather than a second spelling of it.
-        auto& sys = forward.get_system_ref();
-        before.assign(sys.ode_size(), value_type(0.0));
-        sys.ode_state(before.begin());
-        apply_insertion(sys, rec[last].time, before.begin(), widened);
-        forward.set_state_from_system();
-        first = last;
+    // The junction at `first` is this walk's only where `first` is the segment it
+    // starts at; a caller resuming mid-recording has had it applied by whatever
+    // put the System there.
+    const bool pending =
+        from_segment < rows.size() && rows[from_segment] == first;
+    std::vector<recorded_step> program;
+    program.reserve(rec.size() - first);
+    program.push_back(
+        {forward.time(), std::numeric_limits<double>::quiet_NaN(), pending});
+    for (std::size_t k = first + 1; k < rec.size(); ++k) {
+        program.push_back(rec[k]);
     }
+    forward.advance_recorded(program);
 }
-}
-}
+
+}  // namespace ode
+}  // namespace odelia
 
 #endif
