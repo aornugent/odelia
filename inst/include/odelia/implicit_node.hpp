@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_interface.hpp>
@@ -145,10 +146,21 @@ template <class S>
 // derivative rather than to this one. It is what the theorem divides by, so a
 // non-invertible operating point stops here: at a fold it approaches zero and the
 // quotient is garbage rather than large.
+//
+// ⚠️ THE POLICY BELONGS TO THE CALLER, WHICH IS WHY THIS REPORTS AND THE FORM BELOW
+// STOPS. Both are the same theorem; what differs is what a degenerate slope means
+// where you are standing. For a BOUND the value IS what the equation defines, so a
+// caller handed y* with no derivative has a structural zero and no way to know it --
+// that one must stop. For an INTERIOR optimum the point is still the point, and an
+// output the envelope theorem spares does not read it at all -- that one can carry
+// on with the row missing and say so. Written once with the choice at the call site
+// rather than twice with the choice baked into which name you reach for.
 template <class S, class Residual>
-S implicit_value(double y_star, double dFdy, Residual&& F) {
+[[nodiscard]] record_report implicit_value_reported(double y_star, double dFdy,
+                                                    Residual&& F, S& into) {
   if constexpr (std::is_same_v<S, double>) {
-    return y_star;
+    into = y_star;
+    return {true, 0, ""};
   } else {
     // A residual written `[](auto y) { return ...; }` deduces an XAD
     // expression-template return type holding references to the temporaries of
@@ -162,8 +174,11 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
         "template referencing temporaries that are dead by the time this "
         "evaluates it.");
     if (!util::is_finite(dFdy) || dFdy == 0.0) {
-      util::stop("implicit_value: dF/dy is zero at the operating point, so the "
-                 "implicit function theorem does not apply there (a fold?)");
+      into = y_star;
+      return {false, 0,
+              "dF/dy is " + util::format_double(dFdy) +
+                  " at the operating point, so the implicit function theorem "
+                  "does not apply there (a fold?)"};
     }
     // corr's value is ~0, since y* is the root; its derivative is (dF/dp)/(dF/dy),
     // so y* against it with a coefficient of -1 is the theorem's own quotient.
@@ -189,22 +204,27 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
       const record_report first =
           record_with_derivatives<S>(y_star, corrections, once);
       if (!first.whole) {
-        util::stop("implicit_value: " + first.why);
+        into = y_star;
+        return first;
       }
       again = F(once) / dFdy;
       corrections.push_back({again, -1.0});
     }
-    S out;
-    // Stopped rather than reported, and the asymmetry with implicit_root is the
-    // point: this IS the value the equation defines, so a caller handed y* with
-    // no derivative has a structural zero and no way to know it.
-    const record_report report =
-        record_with_derivatives<S>(y_star, corrections, out);
-    if (!report.whole) {
-      util::stop("implicit_value: " + report.why);
-    }
-    return out;
+    return record_with_derivatives<S>(y_star, corrections, into);
   }
+}
+
+// The same, for a caller whose value IS what the equation defines: a missing row
+// there is a structural zero nothing downstream could detect, so it stops.
+template <class S, class Residual>
+S implicit_value(double y_star, double dFdy, Residual&& F) {
+  S out{};
+  const record_report report = implicit_value_reported<S>(
+      y_star, dFdy, std::forward<Residual>(F), out);
+  if (!report.whole) {
+    util::stop("implicit_value: " + report.why);
+  }
+  return out;
 }
 
 }
