@@ -52,36 +52,33 @@ double state_at_segment(System& system,
 // begins at, which the caller has already put the System on. The schedule is read
 // off the recording, because a recording row is a schedule row plus its state.
 //
+// The program a replay of `rec` from `first` takes: the recording's suffix behind
+// a head instruction the caller owns.
+//
+// The head's time is the solver's own rather than the row's, which is what lets a
+// caller replay a perturbed state at that time. Its junction flag is the one thing
+// the two callers disagree about and cannot be derived here: a walk resuming at a
+// segment has had that junction applied by whatever positioned the System, while a
+// walk starting at row 0 has not, because the adjoint at the first state is
+// dimensioned to row 0's own width and so is the base state beside it.
+//
 // The step sizes are replayed rather than the times: a size differenced back out
 // of two recorded times is not the size that was taken, since fl(fl(t + h) - t)
 // is not h, and a walk that chose its own would be differentiating a controller
 // the model does not contain.
-//
-// The head entry carries the solver's own time rather than the row's, which is
-// what lets a caller replay a perturbed state at that time. Everything else is
-// the recording, junctions included -- the solver executes those, so this builds
-// a program and makes one call.
-template <class Solver, class Record>
-void advance_over_insertions(
-    Solver& forward, std::span<const Record> rec, std::size_t from_segment,
-    std::size_t first) {
-    const std::vector<std::size_t> rows = insertion_rows(rec);
-    if (from_segment > rows.size()) {
-        util::stop("advance_over_insertions: the recording has no such segment");
+template <class Record>
+std::vector<recorded_step> program_from(std::span<const Record> rec,
+                                       std::size_t first, recorded_step head) {
+    if (first >= rec.size()) {
+        util::stop("program_from: the recording has no such row");
     }
-    // The junction at `first` is this walk's only where `first` is the segment it
-    // starts at; a caller resuming mid-recording has had it applied by whatever
-    // put the System there.
-    const bool pending =
-        from_segment < rows.size() && rows[from_segment] == first;
-    std::vector<recorded_step> program;
-    program.reserve(rec.size() - first);
-    program.push_back(
-        {forward.time(), std::numeric_limits<double>::quiet_NaN(), pending});
+    std::vector<recorded_step> ret;
+    ret.reserve(rec.size() - first);
+    ret.push_back(head);
     for (std::size_t k = first + 1; k < rec.size(); ++k) {
-        program.push_back(rec[k]);
+        ret.push_back(rec[k]);
     }
-    forward.advance_recorded(program);
+    return ret;
 }
 
 }  // namespace ode
