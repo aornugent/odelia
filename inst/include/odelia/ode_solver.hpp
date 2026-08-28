@@ -278,7 +278,7 @@ public:
   // rebind and one descent -- which is what a System of fixed width gets, and what
   // every range this splits into gets.
   //
-  // `extra_splits` names further rows to stop at. The adjoint carried across such a
+  // `extra_stops` names further rows to stop at. The adjoint carried across such a
   // stop is the same one either way, so a caller can ask for a split and compare: a
   // check, not a choice.
   //
@@ -290,7 +290,7 @@ public:
   std::size_t solve_adjoint(ode::adjoint_rows& lambda,
                             ode::adjoint_rows& parameter_adjoint,
                             size_t k_first, size_t k_last,
-                            const std::vector<size_t>& extra_splits = {})
+                            const std::vector<size_t>& extra_stops = {})
   {
     using scalar = ode::active_scalar<double>;
     const std::span<const ode::step_record<System>> rec = recording();
@@ -311,7 +311,7 @@ public:
         stops.push_back(at);
       }
     }
-    for (const size_t at : extra_splits) {
+    for (const size_t at : extra_stops) {
       if (at > k_first && at < k_last) {
         stops.push_back(at);
       }
@@ -391,10 +391,10 @@ public:
   // The whole recording.
   std::size_t solve_adjoint(ode::adjoint_rows& lambda,
                             ode::adjoint_rows& parameter_adjoint,
-                            const std::vector<size_t>& extra_splits = {})
+                            const std::vector<size_t>& extra_stops = {})
   {
     return solve_adjoint(lambda, parameter_adjoint, 0, recording().size() - 1,
-                         extra_splits);
+                         extra_stops);
   }
 
   // Rate evaluations the sweeps since the last clear have recorded: six a step,
