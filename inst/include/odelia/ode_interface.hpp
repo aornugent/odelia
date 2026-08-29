@@ -70,44 +70,6 @@ void visit_active(F& f, A& a, B& b, Rest&... rest) {
   visit_active(f, b, rest...);
 }
 
-// A direction carried INSIDE an adjoint: one recording of a reverse pass,
-// differentiated along one direction. A mixed second derivative in every input
-// and one direction costs a single recording this way, where a tangent above a
-// tangent costs one pass per input. The other nesting is not available -- an
-// no tangent scalar wraps an adjoint one -- so the direction is always the inner
-// layer.
-template <typename T = double>
-using directional_adjoint_scalar = typename xad::fwd_adj<T>::active_type;
-
-template <typename T = double>
-using directional_adjoint_tape = typename xad::fwd_adj<T>::tape_type;
-
-// Refused on any other scalar, for the reason seed_direction is: the accessors
-// below spell the inner direction AND the outer accumulator, so on the wrong
-// scalar the same statement seeds a slot nothing reads and nothing raises.
-template <typename S>
-concept CarriesDirectionUnderAdjoint =
-    !xad::ExprTraits<S>::isForward &&
-    xad::ExprTraits<typename S::derivative_type>::isForward;
-
-// The direction the inner tangent carries. Seeding the outer layer is what the
-// sweep does and is not this; the two differ by one accessor.
-template <typename S>
-  requires CarriesDirectionUnderAdjoint<S>
-void seed_inner_direction(S& x, double direction) {
-  xad::derivative(xad::value(x)) = direction;
-}
-
-// What an input's adjoint holds after the sweep: the pass's derivative in that
-// input, differentiated along the seeded direction.
-template <typename S>
-  requires CarriesDirectionUnderAdjoint<S>
-double directional_adjoint(const S& x) {
-  return xad::derivative(xad::derivative(x));
-}
-
-
-
 // A System that carries its own clock. One that does not is time homogeneous,
 // and the calls below hand it no time rather than refusing it.
 template <typename T>

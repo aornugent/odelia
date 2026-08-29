@@ -11,7 +11,6 @@
 #include <XAD/XAD.hpp>
 #include <odelia/ode_interface.hpp>
 #include <odelia/ode_util.hpp>
-#include <odelia/tangent.hpp>
 
 namespace odelia {
 
@@ -107,7 +106,7 @@ template <class S>
 // dF/dy is read at the point, so its own dependence on p belongs to the second
 // derivative rather than to this one. It is what the theorem divides by, so a fold
 // -- where it approaches zero and the quotient is garbage rather than large -- is
-// what the two forms below part company over.
+// the one thing this stops on.
 //
 // ⚠️ THIS ONCE HAD A REPORTING SIBLING, and the sibling went because the distinction
 // was one nothing acted on. The argument for it was that a BOUND must stop -- its
@@ -142,31 +141,7 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
     // so y* against it with a coefficient of -1 is the theorem's own quotient.
     std::vector<input_and_derivative<S>> corrections;
     const S corr = F(S(y_star)) / dFdy;
-    // Declared beside `corr` rather than inside the branch that fills it: the
-    // terms are borrowed, so a correction scoped to the branch would be read
-    // by the record below after its referent had gone.
-    S again{};
     corrections.push_back({corr, -1.0});
-    // ⚠️ ONE CORRECTION IS RIGHT TO FIRST ORDER AND WRONG TO SECOND, because the
-    // denominator is a constant: what it records is the theorem linearised, whose
-    // curvature is -F_pp/F_y where the true one carries F_yy and F_py too. A
-    // second correction taken at the first one's own value supplies exactly those,
-    // and its first derivative is zero -- so this changes no gradient, only the
-    // curvature of one.
-    //
-    // Recorded only where the scalar can hold a second derivative: on a plain
-    // adjoint it would double the residual's tape to carry something nothing can
-    // read.
-    if constexpr (ode::SecondOrder<S>) {
-      S once;
-      const record_report first =
-          record_with_derivatives<S>(y_star, corrections, once);
-      if (!first.whole) {
-        util::stop("implicit_value: " + first.why);
-      }
-      again = F(once) / dFdy;
-      corrections.push_back({again, -1.0});
-    }
     S out;
     const record_report report =
         record_with_derivatives<S>(y_star, corrections, out);

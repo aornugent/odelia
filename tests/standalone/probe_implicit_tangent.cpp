@@ -1,14 +1,6 @@
-// PROBE: implicit_value at the four scalars a caller can ask for, against an
+// PROBE: implicit_value at the three scalars a caller asks for, against an
 // answer that is known rather than differenced. F(y; p) = y^3 - p places
-// y* = p^(1/3), so dy*/dp = 1/(3 y*^2) and d2y*/dp2 = -(2/9) p^(-5/3), exactly.
-//
-// The FOURTH case is the one that matters and was missing: the nested
-// forward-over-reverse scalar, which is what a caller asking for a curvature uses
-// (plant's Leaf::collar_condition). implicit_value carries a second correction
-// specifically so that scalar gets the true curvature rather than the linearised
-// theorem's -- gated on `SecondOrder<S>` -- and that correction was asserted in a
-// comment and measured nowhere. A wrong curvature here is a wrong SIGN downstream:
-// TF24 refuses an operating point whose profit curvature is not negative.
+// y* = p^(1/3), so dy*/dp = 1/(3 y*^2), exactly.
 //
 //   make -C tests/standalone probe_implicit_tangent
 
@@ -24,10 +16,6 @@ using odelia::ode::adjoint_tape;
 using odelia::ode::tangent_scalar;
 using odelia::ode::seed_direction;
 using odelia::ode::derivative_along;
-using odelia::ode::directional_adjoint;
-using odelia::ode::directional_adjoint_scalar;
-using odelia::ode::directional_adjoint_tape;
-using odelia::ode::seed_inner_direction;
 
 namespace {
 
@@ -80,36 +68,6 @@ int main() {
     tape.computeAdjoints();
     check("reverse: value", odelia::util::to_passive(y), y0, 0.0);
     check("reverse: dy/dp", derivative(p), want, 1e-15);
-  }
-
-  // The curvature, on the scalar a curvature is actually asked for.
-  {
-    using S = directional_adjoint_scalar<double>;
-    std::printf("\n  SecondOrder<directional_adjoint_scalar<double>> = %s\n",
-                odelia::ode::SecondOrder<S> ? "true (correction applied)"
-                                            : "FALSE (correction SKIPPED)");
-    const double want2 = -(2.0 / 9.0) * std::pow(p0, -5.0 / 3.0);
-
-    directional_adjoint_tape<double> tape;
-    tape.clearAll();
-    S p = p0;
-    tape.registerInput(p);
-    tape.newRecording();
-    seed_inner_direction(p, 1.0);
-    S y = cube_root_at<S>(y0, p);
-    tape.registerOutput(y);
-    derivative(y) = 1.0;
-    tape.computeAdjoints();
-    check("nested: value", odelia::util::to_passive(y), y0, 0.0);
-    check("nested: d2y/dp2", directional_adjoint(p), want2, 1e-10);
-
-    // And what the LINEARISED theorem would have given, for contrast: with the
-    // denominator held constant the correction is -F_pp/F_y, and F_pp = 0 here,
-    // so a first-order-only record reports a curvature of exactly zero. That is
-    // the failure mode this case exists to catch -- not a wrong magnitude but a
-    // curvature that has lost its sign information entirely.
-    std::printf("  %-28s %.17g   (a linearised record reports 0)\n",
-                "for contrast, true d2y/dp2", want2);
   }
 
   std::printf("\n  %s\n", failures == 0 ? "all ok" : "FAILURES");
