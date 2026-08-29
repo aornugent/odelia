@@ -123,8 +123,8 @@ compile_implicit_value_interface <- function() {
     // This used to call `implicit_root`, which took those slopes as supplied rows.
     // That form had one consumer in the whole family -- an interior collar in
     // phylloptim -- and it now closes on its residual like every other kind, so the
-    // supplied-row form is gone and this exercises the same theorem through the
-    // reporting one that replaced it.
+    // supplied-row form is gone and this exercises the same theorem through
+    // implicit_value.
     // [[Rcpp::export]]
     Rcpp::List implicit_root_gradient(double p, double residual_slope,
                                       double dR_du, double dR_dv, double dy_dp) {
@@ -136,14 +136,20 @@ compile_implicit_value_interface <- function() {
 
       const double u0 = 1.5, v0 = -0.25;
       adouble root;
-      const odelia::record_report on_root =
-          odelia::implicit_value_reported<adouble>(
-              p, residual_slope,
-              [&](const adouble& y) -> adouble {
-                (void)y;
-                return adouble(dR_du * (u - u0) + dR_dv * (v - v0));
-              },
-              root);
+      odelia::record_report on_root{true, 0, ""};
+      try {
+        root = odelia::implicit_value<adouble>(
+            p, residual_slope, [&](const adouble& y) -> adouble {
+              (void)y;
+              return adouble(dR_du * (u - u0) + dR_dv * (v - v0));
+            });
+      } catch (const std::runtime_error& e) {
+        // A fold and a non-finite row both stop here now: the reporting sibling
+        // went because its one consumer turned the report into the same refusal
+        // this exception becomes. Caught so the checks below can read which.
+        root = adouble(p);
+        on_root = odelia::record_report{false, 0, e.what()};
+      }
       adouble y;
       const odelia::record_report on_y =
           odelia::record_with_derivatives<adouble>(7.5, {{root, dy_dp}}, y);

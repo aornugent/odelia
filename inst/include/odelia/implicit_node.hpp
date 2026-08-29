@@ -109,20 +109,18 @@ template <class S>
 // -- where it approaches zero and the quotient is garbage rather than large -- is
 // what the two forms below part company over.
 //
-// ⚠️ THE POLICY BELONGS TO THE CALLER, WHICH IS WHY THIS REPORTS AND THE FORM BELOW
-// STOPS. Both are the same theorem; what differs is what a degenerate slope means
-// where you are standing. For a BOUND the value IS what the equation defines, so a
-// caller handed y* with no derivative has a structural zero and no way to know it --
-// that one must stop. For an INTERIOR optimum the point is still the point, and an
-// output the envelope theorem spares does not read it at all -- that one can carry
-// on with the row missing and say so. Written once with the choice at the call site
-// rather than twice with the choice baked into which name you reach for.
+// ⚠️ THIS ONCE HAD A REPORTING SIBLING, and the sibling went because the distinction
+// was one nothing acted on. The argument for it was that a BOUND must stop -- its
+// value IS what the equation defines -- while an INTERIOR optimum could carry on with
+// the row missing, since the envelope theorem spares the objective. Both were true of
+// the theorem and neither was true of the consumer: the report's one reader turned it
+// straight into the same metric-level refusal the catch around this makes. Two
+// mechanisms, one outcome, and a record_report threaded through LeafOutputs and two
+// signatures to carry the difference.
 template <class S, class Residual>
-[[nodiscard]] record_report implicit_value_reported(double y_star, double dFdy,
-                                                    Residual&& F, S& into) {
+S implicit_value(double y_star, double dFdy, Residual&& F) {
   if constexpr (std::is_same_v<S, double>) {
-    into = y_star;
-    return {true, 0, ""};
+    return y_star;
   } else {
     // A residual written `[](auto y) { return ...; }` deduces an XAD
     // expression-template return type holding references to the temporaries of
@@ -136,11 +134,9 @@ template <class S, class Residual>
         "template referencing temporaries that are dead by the time this "
         "evaluates it.");
     if (!util::is_finite(dFdy) || dFdy == 0.0) {
-      into = y_star;
-      return {false, 0,
-              "dF/dy is " + util::format_double(dFdy) +
-                  " at the operating point, so the implicit function theorem "
-                  "does not apply there (a fold?)"};
+      util::stop("implicit_value: dF/dy is " + util::format_double(dFdy) +
+                 " at the operating point, so the implicit function theorem "
+                 "does not apply there (a fold?)");
     }
     // corr's value is ~0, since y* is the root; its derivative is (dF/dp)/(dF/dy),
     // so y* against it with a coefficient of -1 is the theorem's own quotient.
@@ -166,27 +162,19 @@ template <class S, class Residual>
       const record_report first =
           record_with_derivatives<S>(y_star, corrections, once);
       if (!first.whole) {
-        into = y_star;
-        return first;
+        util::stop("implicit_value: " + first.why);
       }
       again = F(once) / dFdy;
       corrections.push_back({again, -1.0});
     }
-    return record_with_derivatives<S>(y_star, corrections, into);
+    S out;
+    const record_report report =
+        record_with_derivatives<S>(y_star, corrections, out);
+    if (!report.whole) {
+      util::stop("implicit_value: " + report.why);
+    }
+    return out;
   }
-}
-
-// The same, for a caller whose value IS what the equation defines: a missing row
-// there is a structural zero nothing downstream could detect, so it stops.
-template <class S, class Residual>
-S implicit_value(double y_star, double dFdy, Residual&& F) {
-  S out{};
-  const record_report report = implicit_value_reported<S>(
-      y_star, dFdy, std::forward<Residual>(F), out);
-  if (!report.whole) {
-    util::stop("implicit_value: " + report.why);
-  }
-  return out;
 }
 
 }
