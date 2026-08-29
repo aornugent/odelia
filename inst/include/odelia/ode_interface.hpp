@@ -106,16 +106,6 @@ double directional_adjoint(const S& x) {
   return xad::derivative(xad::derivative(x));
 }
 
-// The same adjoint BEFORE the inner direction is read off it: the pass's plain
-// first derivative in that input. Named because it is otherwise one `value` away
-// from the line above and reads as a typo, and because it is free -- the same
-// sweep computes both, so a caller taking a second derivative can check the first
-// one it rests on without paying for anything.
-template <typename S>
-  requires CarriesDirectionUnderAdjoint<S>
-double plain_adjoint(const S& x) {
-  return xad::value(xad::derivative(x));
-}
 
 
 // A System that carries its own clock. One that does not is time homogeneous,

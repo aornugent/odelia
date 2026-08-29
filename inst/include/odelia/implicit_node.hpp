@@ -91,43 +91,6 @@ template <class S>
   into = out;
   return {};
 }
-
-// The quantity a solve left at a root of R(p; u) = 0, on the tape carrying the
-// derivative the implicit function theorem gives:
-//     dp/du = -(dR/du) / (dR/dp).
-// Both slopes are supplied, because the solve is the caller's and none of it was
-// recorded. What this owns is the quotient, its sign, and the refusal where
-// dR/dp is not invertible.
-//
-// Outputs that depend on p record against the value returned here, each carrying
-// only its own dy/dp, so the quotient is formed once however many outputs and
-// inputs there are. An output the root's own condition makes stationary -- an
-// objective at an interior optimum -- records against its inputs and not against
-// this, which is the envelope theorem written as an omission rather than as a
-// term that has to come out to zero.
-template <class S>
-[[nodiscard]] record_report implicit_root(
-    double p, double residual_slope,
-    std::vector<input_and_derivative<S>> against, S& into) {
-  // Zero is the only threshold available: how small a slope is too small depends
-  // on R's units, which the caller has and this does not. At a fold it
-  // approaches zero and the quotient is garbage rather than large. Reported
-  // rather than stopped, for the reason the record's own rows are: the point is
-  // still the point, and a consumer whose other outputs do not read it can carry
-  // on -- where a stop takes those too.
-  if (!util::is_finite(residual_slope) || residual_slope == 0.0) {
-    into = p;
-    return {false, 0,
-            "dR/dp is " + util::format_double(residual_slope) +
-                " at the operating point, so the implicit function theorem does "
-                "not apply there (a fold?)"};
-  }
-  for (input_and_derivative<S>& term : against) {
-    term.derivative /= -residual_slope;
-  }
-  return record_with_derivatives<S>(p, against, into);
-}
-
 // The value y* defined implicitly by a scalar equation F(y) = 0, made
 // differentiable. y* is solved in double, off the tape, by whatever root-find the
 // caller already has; this returns it on the tape carrying the derivative the
@@ -135,17 +98,16 @@ template <class S>
 //     dy*/dp = -(dF/dp) / (dF/dy).
 //
 // dF/dp is taped: F is evaluated once, at S, and its derivative in every active
-// input the residual reads IS dF/dp. dF/dy is the caller's, for the same reason
-// implicit_root's is -- the two differ only in whether the row is supplied or
-// taped, and both take the slope. A residual mostly knows its own slope: it is
+// input the residual reads IS dF/dp. dF/dy is the caller's, because a residual
+// mostly knows its own slope: it is
 // one term of the expression the caller just wrote. One that does not can take a
 // tangent through its own body and hand the answer here, which is a local three
 // lines rather than a rebindable parameter object every caller must carry.
 //
 // dF/dy is read at the point, so its own dependence on p belongs to the second
-// derivative rather than to this one. It is what the theorem divides by, so a
-// non-invertible operating point stops here: at a fold it approaches zero and the
-// quotient is garbage rather than large.
+// derivative rather than to this one. It is what the theorem divides by, so a fold
+// -- where it approaches zero and the quotient is garbage rather than large -- is
+// what the two forms below part company over.
 //
 // ⚠️ THE POLICY BELONGS TO THE CALLER, WHICH IS WHY THIS REPORTS AND THE FORM BELOW
 // STOPS. Both are the same theorem; what differs is what a degenerate slope means

@@ -115,10 +115,16 @@ compile_implicit_value_interface <- function() {
           Rcpp::_["why"] = report.why);
     }
 
-    // A root p of R(p; u, v) = 0 with both slopes supplied, and one output that
-    // depends on p recorded against it. Nothing here relates any of it to u or v
-    // except those slopes, so what comes back can only be the quotient the
-    // theorem gives and the chain through p.
+    // A root p of R(p; u, v) = 0 and one output that depends on p recorded against
+    // it. The residual is written so that its derivatives ARE the two slopes and its
+    // value at the root is exactly zero, so what comes back can only be the quotient
+    // the theorem gives and the chain through p.
+    //
+    // This used to call `implicit_root`, which took those slopes as supplied rows.
+    // That form had one consumer in the whole family -- an interior collar in
+    // phylloptim -- and it now closes on its residual like every other kind, so the
+    // supplied-row form is gone and this exercises the same theorem through the
+    // reporting one that replaced it.
     // [[Rcpp::export]]
     Rcpp::List implicit_root_gradient(double p, double residual_slope,
                                       double dR_du, double dR_dv, double dy_dp) {
@@ -128,9 +134,16 @@ compile_implicit_value_interface <- function() {
       tape.registerInput(v);
       tape.newRecording();
 
+      const double u0 = 1.5, v0 = -0.25;
       adouble root;
-      const odelia::record_report on_root = odelia::implicit_root<adouble>(
-          p, residual_slope, {{u, dR_du}, {v, dR_dv}}, root);
+      const odelia::record_report on_root =
+          odelia::implicit_value_reported<adouble>(
+              p, residual_slope,
+              [&](const adouble& y) -> adouble {
+                (void)y;
+                return adouble(dR_du * (u - u0) + dR_dv * (v - v0));
+              },
+              root);
       adouble y;
       const odelia::record_report on_y =
           odelia::record_with_derivatives<adouble>(7.5, {{root, dy_dp}}, y);
@@ -228,7 +241,7 @@ testthat::test_that("implicit_value returns the operating point and its IFT deri
   }
 })
 
-testthat::test_that("implicit_root turns supplied slopes into the theorem's quotient", {
+testthat::test_that("the theorem turns a residual's rows into its quotient's quotient", {
   compile_implicit_value_interface()
 
   p <- -1.75
@@ -250,7 +263,7 @@ testthat::test_that("implicit_root turns supplied slopes into the theorem's quot
   testthat::expect_equal(chained$d_dv, 4.25 * (3.5 / slope))
 })
 
-testthat::test_that("implicit_root reports where the theorem does not apply", {
+testthat::test_that("the reporting form says where the theorem does not apply", {
   compile_implicit_value_interface()
 
   # dR/dp of zero is the fold: the quotient is garbage rather than large, and a
@@ -265,8 +278,8 @@ testthat::test_that("implicit_root reports where the theorem does not apply", {
     testthat::expect_equal(at_fold$d_du, 0.0)
   }
 
-  # And a supplied slope that is not finite is still refused by the record it
-  # records through, after the quotient rather than before it.
+  # And a residual row that is not finite is still refused by the record it records
+  # through, after the quotient rather than before it.
   bad_slope <- implicit_root_gradient(1.0, -0.8, NaN, -3.5, 1.0)
   testthat::expect_false(bad_slope$root_whole)
   testthat::expect_match(bad_slope$root_why, "is not finite")
