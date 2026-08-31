@@ -381,8 +381,7 @@ private:
 // ⚠️ THE REGION IS NOT THE CIRCLE alpha^2 + beta^2 <= 9. That circle sits inside
 // it, so testing against it fires on spans that were already monotone and flattens
 // them: measured on a sine at 100 knots, the circle reads 5.3e-04 against 1.6e-05
-// for the region below -- worse than the global fit this replaced, where the region
-// is better than it. Both keep an intermittent series inside its own values.
+// for the region below. Both keep an intermittent series inside its own values.
 inline std::vector<double> monotone_slopes(const std::vector<double>& x,
                                            const std::vector<double>& y) {
   util::check_length(y.size(), x.size());

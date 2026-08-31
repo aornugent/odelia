@@ -19,8 +19,8 @@ namespace odelia {
 //
 // THE INPUT IS BORROWED, and must outlive the record it is handed to. Held by
 // reference because copying an active scalar is not free: the copy registers a
-// tape slot and records a statement, for a value that is only ever read. A row
-// over n inputs cost n of those before this was a reference.
+// tape slot and records a statement, for a value that is only ever read: n
+// inputs would cost n of those per row.
 template <class S>
 struct input_and_derivative {
   const S& input;

@@ -211,11 +211,10 @@ struct active_system {
   // Every active value back to unregistered, so the clear below it is safe and
   // the next recording registers them fresh.
   //
-  // The check is the point. Releasing every value `for_each_active` reaches has
-  // to return the tape to the number of values it counted before this System
-  // existed -- so a System holding one the walk does not reach says so here,
-  // rather than in a row that is finite and no longer the model's. That is an
-  // audit of the model turned into one number.
+  // Releasing every value `for_each_active` reaches has to return the tape to
+  // the number of values it counted before this System existed. So a System
+  // holding one the walk does not reach is caught here, rather than producing a
+  // row that is finite and is not the model's.
   //
   // Against zero, which the destructor above is what makes true: every clear
   // returns the count to zero, every recording registers this System's values,
