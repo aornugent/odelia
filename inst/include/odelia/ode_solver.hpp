@@ -76,7 +76,7 @@ public:
   }
 
   // Record the wider state an insertion just reached, on the row it followed.
-  void push_inserted() { solver.push_inserted(system); }
+  void push_junction() { solver.push_junction(system); }
 
   void set_state(std::vector<double> y, double time)
   {
@@ -153,55 +153,51 @@ public:
   // without a segment loop wrapped around it -- and it is the same map the sweep
   // transposes, so a tangent replayed through here traverses exactly the function
   // under test rather than a second spelling of it.
-  void advance_recorded(const std::vector<recorded_step>& steps)
+  void advance_recorded(const std::vector<ode::instruction>& program)
   {
-    if (steps.empty())
+    if (program.empty())
     {
-      util::stop("'steps' must be a recording of at least length 1");
+      util::stop("'program' must hold at least the entry it starts from");
     }
-    if (!std::isnan(steps.front().step_size))
+    if (program.front().kind != ode::instruction::op::step ||
+        !std::isnan(program.front().step_size))
     {
-      util::stop("The first recorded step must have a NaN size, being the start "
-                 "that no step reached");
+      util::stop("A program's first entry is where it starts, which no "
+                 "instruction reached, so it must be a step of NaN size");
     }
 
     // Held across the walk rather than made per junction. `widened` is written
     // and not read: what the map leaves on the System is what this wants.
     std::vector<value_type> before;
     std::vector<value_type> widened;
-    const auto junction_after = [&](const recorded_step& row) -> void
-    {
-      if (!row.junction)
-      {
-        return;
-      }
-      before.assign(system.ode_size(), value_type(0.0));
-      system.ode_state(before.begin());
-      ode::apply_insertion(system, row.time, before.begin(), widened);
-      set_state_from_system();
-    };
 
     if (collect)
     {
       history.push_back(system);
     }
-    junction_after(steps.front());
 
-    for (std::size_t k = 1; k < steps.size(); ++k)
+    for (std::size_t k = 1; k < program.size(); ++k)
     {
-      if (std::isnan(steps[k].step_size))
+      if (program[k].kind == ode::instruction::op::junction)
       {
-        solver.step_to(system, steps[k].time);
+        before.assign(system.ode_size(), value_type(0.0));
+        system.ode_state(before.begin());
+        ode::apply_insertion(system, program[k].time, before.begin(), widened);
+        set_state_from_system();
+        continue;
+      }
+      if (std::isnan(program[k].step_size))
+      {
+        solver.step_to(system, program[k].time);
       }
       else
       {
-        solver.step_by(system, steps[k].step_size, steps[k].time);
+        solver.step_by(system, program[k].step_size, program[k].time);
       }
       if (collect)
       {
         history.push_back(system);
       }
-      junction_after(steps[k]);
     }
   }
 
@@ -264,10 +260,9 @@ public:
   std::span<const ode::step_record<System>> recording() const {
     return solver.recording();
   }
-  std::size_t recorded_steps() const { return solver.recorded_steps(); }
   // The schedule a replay of this run would take. Read off the record, so the
   // time and the size that reached it cannot be paired across two runs.
-  std::vector<ode::recorded_step> schedule() const { return solver.schedule(); }
+  std::vector<ode::instruction> schedule() const { return solver.schedule(); }
 
   // Carry lambda back over recorded rows k_last down to k_first + 1, highest
   // first, adding each row's parameter contribution into `parameter_adjoint`.
@@ -302,12 +297,24 @@ public:
       util::stop("the adjoint segment is not a range of recorded steps");
     }
 
-    // Where the descent stops. An insertion AT k_first is a stop: it carries the
-    // state the run began from into the first width, and nothing below it is swept.
-    // A split there would cut nothing, so it is not.
+    // A junction is where the width changes, so the descent has to stop and
+    // transpose the map that widened it. It needs the row below it to run that map
+    // on, which is why a junction at k_first is still a stop but a junction below
+    // it is out of range.
+    // A junction is a row the sweep carries an adjoint ACROSS, so it cannot be one
+    // the descent starts at or the one it is left standing on. Neither happens on a
+    // recording a run made -- the schedule puts every introduction at the start of
+    // an interval that then steps -- and both are checked here rather than at each
+    // be_at_step, because the width this leaves the System at is a promise and the
+    // call that restores it cannot raise.
+    if (rec.back().kind == ode::instruction::op::junction ||
+        rec[k_last].kind == ode::instruction::op::junction) {
+      util::stop("solve_adjoint: a recording cannot end at a junction, because "
+                 "nothing stepped away from the state it made");
+    }
     std::vector<size_t> stops;
-    for (const size_t at : ode::insertion_rows(rec)) {
-      if (at >= k_first && at < k_last) {
+    for (const size_t at : ode::junction_rows(rec)) {
+      if (at > k_first && at <= k_last) {
         stops.push_back(at);
       }
     }
@@ -316,7 +323,7 @@ public:
         stops.push_back(at);
       }
     }
-    // Sorted and deduplicated, so a split landing on a widening is that widening
+    // Sorted and deduplicated, so a split landing on a junction is that junction
     // rather than a second stop at the same row.
     std::sort(stops.begin(), stops.end());
     stops.erase(std::unique(stops.begin(), stops.end()), stops.end());
@@ -349,42 +356,51 @@ public:
     // One range per width, highest first: the System is put at the range's top, so
     // whoever narrows it is whoever rebinds on it and no descent inherits a width
     // another call left behind.
+    //
+    // A stop is either a junction the run recorded or a cut a caller asked for, and
+    // they leave the descent in different places. A cut is a row the sweep resumes
+    // at; a junction is a row the sweep carries the adjoint ACROSS, so it resumes
+    // one row below, on the state the map ran on.
     size_t swept = 0;
-    for (size_t j = stops.size() + 1; j-- > 0;) {
-      const size_t hi = (j == stops.size()) ? k_last : stops[j];
-      const size_t lo = (j == 0) ? k_first : stops[j - 1];
+    size_t hi = k_last;
+    const auto sweep_down_to = [&](size_t lo) -> void {
       ode::be_at_step(system, rec, hi);
-
-      // The insertion that widened `hi`, transposed at the width below it -- which
-      // is the width the range below runs at. The topmost range ends at k_last,
-      // which no insertion inside this range widened.
-      //
-      // Its active System is its own and dies with it, because applying the
-      // insertion is what widens the System: what this records on cannot be swept
-      // at the width it started from.
-      // A stop is either a junction the run recorded or a cut a caller asked for.
-      // Only the first has a map to transpose, which is what keeps a cut free.
-      if (j < stops.size() && rec[hi].junction) {
-        const double when = rec[hi].time;
-        auto insert = [&](auto& sys,
-                          typename std::vector<scalar>::const_iterator x,
-                          std::vector<scalar>& y) -> void {
-          ode::apply_insertion(sys, when, x, y);
-        };
-        ode::active_system<System> widened{system, tape};
-        ode::adjoint_rows narrowed;
-        ode::state_and_parameter_adjoints(widened, rec[hi].state, lambda, insert,
-                                         narrowed, parameter_adjoint);
-        lambda = std::move(narrowed);
-      }
-
-      // A range with no step in it cuts nothing, which is what an insertion at the
-      // range's first row gives.
+      // A range with no step in it cuts nothing, which is what two stops in a row
+      // gives.
       if (lo < hi) {
         sweep_range(tape, rec, lambda, parameter_adjoint, lo, hi);
         ++swept;
       }
+    };
+
+    for (size_t j = stops.size(); j-- > 0;) {
+      const size_t at = stops[j];
+      sweep_down_to(at);
+      if (rec[at].kind != ode::instruction::op::junction) {
+        hi = at;
+        continue;
+      }
+      // The map that widened `at`, transposed at the width below it -- which is
+      // the width the range below runs at, and the width the row below holds.
+      //
+      // Its active System is its own and dies with it, because applying the map is
+      // what widens the System: what this records on cannot be swept at the width
+      // it started from.
+      ode::be_at_step(system, rec, at - 1);
+      const double when = rec[at].time;
+      auto insert = [&](auto& sys,
+                        typename std::vector<scalar>::const_iterator x,
+                        std::vector<scalar>& y) -> void {
+        ode::apply_insertion(sys, when, x, y);
+      };
+      ode::active_system<System> widened{system, tape};
+      ode::adjoint_rows narrowed;
+      ode::state_and_parameter_adjoints(widened, rec[at - 1].state, lambda, insert,
+                                       narrowed, parameter_adjoint);
+      lambda = std::move(narrowed);
+      hi = at - 1;
     }
+    sweep_down_to(k_first);
     return swept;
   }
 
@@ -439,9 +455,9 @@ private:
     }
     ode::adjoint_rows lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
-      // What the run's step k ran from, which is the wider state where an
-      // insertion followed row k - 1 and that row's own where none did.
-      const state_type<System>& from = rec[k - 1].ran_from();
+      // What the run's step k ran from: the row below it, whether that row is a
+      // step's landing or a junction's output.
+      const state_type<System>& from = rec[k - 1].state;
       util::check_length(from.size(), active.system.ode_size());
       solver.step_adjoint(active, rec[k].solved, rec[k - 1].time,
                           rec[k].step_size, from,

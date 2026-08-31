@@ -96,25 +96,35 @@ public:
     }
     return {prev_steps.data(), prev_steps.size()};
   }
-  std::size_t recorded_steps() const { return prev_steps.size(); }
 
-  // The schedule a replay of this run would take: each recorded time and the
-  // size that reached it, paired as the run paired them. Available whether or
-  // not states were kept, because a schedule is what the run decided and a
-  // state is what it held.
-  std::vector<recorded_step> schedule() const {
-    return {prev_steps.begin(), prev_steps.end()};
+  // The steps this run took: each time it reached and the size that reached it,
+  // paired as the run paired them. Available whether or not states were kept,
+  // because what the run decided is not what it held.
+  //
+  // Junction rows are left out, and this is the one place that decides so. A
+  // junction shares its time with the row below it, so a caller pinning these
+  // times would be handed one twice -- and the two callers that pin them
+  // (a schedule written back into Parameters, and a replay driven interval by
+  // interval) both apply their own junctions. get_times and get_step_sizes are
+  // this list split in two rather than two more walks that could disagree.
+  std::vector<instruction> schedule() const {
+    std::vector<instruction> ret;
+    ret.reserve(prev_steps.size());
+    for (const step_record<System>& s : prev_steps) {
+      if (s.kind == instruction::op::step) {
+        ret.push_back(s);
+      }
+    }
+    return ret;
   }
 
   // One accepted step, into the record: the time it reached, the size that
   // reached it, and the state there where the run was asked to keep states.
   void push_step(System& system, double time_, double step_size);
-  // The wider state an insertion just reached, onto the row it followed, and the
-  // flag saying one did. It shares that row's time, so it cannot be a row of its
-  // own: NodeSchedule::distribute_ode_steps drops any step whose time matches an
-  // interval boundary, which is exactly where an insertion sits, so a second row
-  // at one time is deleted rather than refused.
-  void push_inserted(System& system);
+  // The junction the caller just applied, as a row of its own: it holds the state
+  // the map produced, at the time the row below it holds. Only schedule() has to
+  // know that two rows share a time, and it drops these.
+  void push_junction(System& system);
   void step_to(System& system, double time_max_);
   // `reached` is the time a recording says this step ended at; NaN accumulates.
   void step_by(System& system, double step_size, double reached);
@@ -267,29 +277,31 @@ void SolverInternal<System>::push_step(System& system, double time_,
   prev_steps.push_back(std::move(record));
 }
 
-// The flag holds on every run; the state it made is kept only where the states
-// are, because nothing but a sweep reads that and a sweep needs states anyway.
+// The row goes in on every run, because where a run widened is what it decided;
+// its state is filled only where states are kept, because nothing but a sweep
+// reads one.
 template <class System>
-void SolverInternal<System>::push_inserted(System& system) {
+void SolverInternal<System>::push_junction(System& system) {
   if (prev_steps.empty()) {
-    util::stop("push_inserted: no recorded step for an insertion to follow");
+    util::stop("push_junction: no recorded step for a junction to follow");
   }
-  // Before the states check, deliberately: where a junction was is the schedule's
-  // and holds on a run that keeps nothing, where the state it made is a recording.
-  prev_steps.back().junction = true;
-  if (!keep_states_) {
-    return;
+  step_record<System> record{{prev_steps.back().time,
+                              std::numeric_limits<double>::quiet_NaN(),
+                              instruction::op::junction},
+                             state_type()};
+  if (keep_states_) {
+    record.state.resize(system.ode_size());
+    system.ode_state(record.state.begin());
   }
-  state_type& into = prev_steps.back().inserted;
-  into.resize(system.ode_size());
-  system.ode_state(into.begin());
+  prev_steps.push_back(std::move(record));
 }
 
 template <class System>
 std::vector<double> SolverInternal<System>::get_times() const {
+  const std::vector<instruction> steps = schedule();
   std::vector<double> ret;
-  ret.reserve(prev_steps.size());
-  for (const step_record<System>& s : prev_steps) {
+  ret.reserve(steps.size());
+  for (const instruction& s : steps) {
     ret.push_back(s.time);
   }
   return ret;
@@ -299,9 +311,10 @@ std::vector<double> SolverInternal<System>::get_times() const {
 // time, which no step reached.
 template <class System>
 std::vector<double> SolverInternal<System>::get_step_sizes() const {
+  const std::vector<instruction> steps = schedule();
   std::vector<double> ret;
-  ret.reserve(prev_steps.size());
-  for (const step_record<System>& s : prev_steps) {
+  ret.reserve(steps.size());
+  for (const instruction& s : steps) {
     ret.push_back(s.step_size);
   }
   return ret;

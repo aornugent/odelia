@@ -175,7 +175,7 @@ compile_recording_interface <- function() {
       odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<odelia::ode::recorded_step> recording = solver.schedule();
+      const std::vector<odelia::ode::instruction> recording = solver.schedule();
 
       // Replays the recorded sizes, keeping its states, so the sweep reads the
       // record the replay itself kept -- rather than copying a whole System per
@@ -213,7 +213,7 @@ compile_recording_interface <- function() {
       odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<odelia::ode::recorded_step> recording = solver.schedule();
+      const std::vector<odelia::ode::instruction> recording = solver.schedule();
 
       // Keeps its states, so the sweep reads the record this replay kept.
       odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
@@ -244,7 +244,7 @@ compile_recording_interface <- function() {
       odelia::ode::Solver<LotkaVolterra<double> > solver(schedule_system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<odelia::ode::recorded_step> recording = solver.schedule();
+      const std::vector<odelia::ode::instruction> recording = solver.schedule();
 
       LotkaVolterra<double> run_system(run_pars[0], run_pars[1], run_pars[2],
                                        run_pars[3]);
@@ -265,7 +265,7 @@ compile_recording_interface <- function() {
       odelia::ode::Solver<LotkaVolterra<double> > solver(system, ctl);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<odelia::ode::recorded_step> recording = solver.schedule();
+      const std::vector<odelia::ode::instruction> recording = solver.schedule();
 
       odelia::ode::Solver<LotkaVolterra<double> > replay(system, ctl);
       replay.set_state(y_start, 0.0);

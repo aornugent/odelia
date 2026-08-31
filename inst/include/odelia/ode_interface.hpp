@@ -150,46 +150,45 @@ concept SolvesForValues =
     s.end_solved();
   };
 
-// One step of a schedule: a time to stop at, and the size that reached it where
-// something recorded it. Both in one object, because a replay adding sizes does
-// not land where the run landed -- a run sets its last step into an interval to
-// the interval's end rather than adding to it, and fl(t + (t1 - t)) is not t1.
-// Two vectors side by side can also be paired across different runs; one cannot.
+// One instruction of a program: what carries the state from one boundary to the
+// next. A step reaches `time`, by `step_size` where a run pinned it and by whatever
+// the controller chooses where that is NaN. A junction applies the System's own
+// state map and reaches the time it started at, taking none.
+//
+// Time and size are one object because a replay adding sizes does not land where
+// the run landed -- a run sets its last step into an interval to the interval's end
+// rather than adding to it, and fl(t + (t1 - t)) is not t1. Two vectors side by
+// side can also be paired across different runs; one cannot.
 //
 // A NaN size is a time with no size known, which is a grid point rather than a
-// recorded step: step TO it. So one schedule type covers a grid a caller chose
-// and a run a caller recorded, and each entry says which it is rather than a
-// second container's emptiness saying it for all of them.
+// recorded step: step TO it. So one type covers a grid a caller chose and a program
+// a run emitted, and each entry says which it is rather than a second container's
+// emptiness saying it for all of them.
 //
-// The first entry is where the schedule starts, which no step reached: NaN.
-struct recorded_step {
+// The first entry is where a program starts, which no instruction reached: a step
+// of NaN size. `kind` is last and defaults, so a grid written {time, NaN} is a
+// program of steps without saying so.
+struct instruction {
+  enum class op : unsigned char { step, junction };
+
   double time;
   double step_size;
-  // Whether a junction -- a state map rather than a step -- runs after this row.
-  // Authored where the width changes rather than discovered from a state that
-  // grew, so a run keeping no states still knows where its junctions were.
-  bool junction = false;
+  op kind = op::step;
 };
 
-// One row of a recording: the schedule row a replay would take, the state the run
-// held there, and the wider state an insertion made of it where one followed. A
-// recording row IS a schedule row plus its state, so it derives rather than
-// repeating the two fields -- written out separately, they were two structs
-// differing by one member, and pairing a time from one container with a state
-// from another was a thing that compiled.
+// One row of a recording: the instruction the run executed and the state it left
+// the System holding. A recording row IS a program row plus its state, so it
+// derives rather than repeating the two fields -- written out separately, they
+// were two structs differing by one member, and pairing a time from one container
+// with a state from another was a thing that compiled.
 //
-// `inserted` is what the run reached between this row and the step above it, and
-// it is empty at every row no insertion followed. Recorded rather than inferred:
-// the forward pass knew it made an insertion here, and a walk that recovers that
-// from a width which grew has to refuse a width which shrinks, where a recorded
-// fact cannot be wrong. It is a field rather than a row of its own because an
-// insertion shares its time with the step below it -- two rows at one time would
-// move the schedule a replay reads and the step index a recorded stage is
-// addressed by.
+// A junction is a row like any other, and its state is what the map produced. So
+// no row carries two states and nothing has to choose between them. A junction row
+// shares its time with the row below it, which is the row that holds the state the
+// map ran on.
 template <typename System>
-struct step_record : recorded_step {
+struct step_record : instruction {
   state_type<System> state;
-  state_type<System> inserted;
 
   // What this step's five stages solved for, in order. FIVE and not six: the sixth
   // rate evaluation a step makes is the one at the state it ends at, which
@@ -198,12 +197,6 @@ struct step_record : recorded_step {
   // is no slot for it, which is what makes "a walk cannot trust the first stage of a
   // recording it jumped into" structural instead of a warning.
   std::array<solved_values_t<System>, 5> solved;
-
-  // What the step above this row ran from: the wider state where an insertion
-  // followed, and this row's own where none did.
-  const state_type<System>& ran_from() const {
-    return inserted.empty() ? state : inserted;
-  }
 };
 
 // A System whose state vector gains entries during a run does not declare a
@@ -460,22 +453,20 @@ std::vector<double> r_ode_rates(T& obj) {
   return dydt;
 }
 
-// The rows an insertion followed: the rows carrying the wider state the run
-// reached before the step above them. Read off the record, because the forward
-// pass knew it was inserting and wrote it there.
+// The junction rows, in order. Read off the kind the run recorded, not off a width
+// which grew: an inference has to refuse a width which shrinks, where a recorded
+// fact cannot be wrong, and the kind is there on a run that kept no states.
 //
-// Read off the flag the run set where it widened. A walk that recovered these by
-// scanning for a width which grew had to refuse a width which shrinks, because an
-// inference can be wrong where a recorded fact cannot; reading the flag rather
-// than the state it made is the same fact on a run that kept no states.
+// Row 0 cannot be one. A junction runs on the state the row below it holds, and no
+// row is below row 0.
 template <class Record>
-std::vector<std::size_t> insertion_rows(std::span<const Record> rec) {
+std::vector<std::size_t> junction_rows(std::span<const Record> rec) {
     if (rec.size() < 2) {
-        util::stop("insertion_rows: no recorded steps to sweep");
+        util::stop("junction_rows: no recorded steps to sweep");
     }
     std::vector<std::size_t> ret;
-    for (std::size_t k = 0; k + 1 < rec.size(); ++k) {
-        if (rec[k].junction) {
+    for (std::size_t k = 1; k < rec.size(); ++k) {
+        if (rec[k].kind == instruction::op::junction) {
             ret.push_back(k);
         }
     }
