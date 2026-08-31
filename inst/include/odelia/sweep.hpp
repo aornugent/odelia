@@ -62,14 +62,12 @@ double state_at_range(System& system,
 // begins at, which the caller has already put the System on. The schedule is read
 // off the recording, because a recording row is a schedule row plus its state.
 //
-// The program a replay of `rec` from `first` takes: the recording's suffix behind
-// a head instruction the caller owns.
-//
-// The head's time is the solver's own rather than the row's, which is what lets a
-// caller replay a perturbed state at that time. It replaces row `first`, which is
-// the row the caller has already put the System on -- so a walk resuming after a
-// insertion names that insertion's row and a walk starting at the beginning names row
-// 0, and neither has to say which of them still owes a state map.
+// Returns the recording's suffix behind a head instruction the caller owns. The
+// head's time is the solver's own rather than the row's, which is what lets a
+// caller replay a perturbed state at that time. It replaces row `first`, so a
+// walk resuming after an insertion names that insertion's row and a walk starting
+// at the beginning names row 0, and neither has to say which of them still owes a
+// state map.
 //
 // The step sizes are replayed rather than the times: a size differenced back out
 // of two recorded times is not the size that was taken, since fl(fl(t + h) - t)

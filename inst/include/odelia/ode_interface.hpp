@@ -222,12 +222,10 @@ struct step_record : instruction {
 //                                   any scalar and the sweep can transpose it. It
 //                                   leaves the System holding that wider state.
 //
-// The first is as mandatory as ode_size(): a System replayed from a recording has
-// to be loadable from a recorded state, and for a width that never moves that is
-// its ordinary load. The second is asked for only where the width changed, so a
-// System that never widens is never asked for it -- ode::apply_insertion above is
-// what a walk calls, and passing the state through is what an insertion is for
-// such a System.
+// For a width that never moves, the first is a System's ordinary load. The second
+// is asked for only where the width changed, so a System that never widens is
+// never asked for it -- ode::apply_insertion above is what a walk calls, and
+// passing the state through is what an insertion is for such a System.
 //
 // An insertion whose TIME depends on the parameters is a different map: its
 // adjoint carries a term through that time which nothing here computes. A System

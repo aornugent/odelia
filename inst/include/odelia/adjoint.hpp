@@ -37,7 +37,7 @@ public:
   bool empty() const { return rows_ == 0; }
 
   // Every row zeroed at a new shape. A sweep hands back rows at the width of the
-  // segment it swept, so a row the new shape does not reach must not survive as
+  // range it swept, so a row the new shape does not reach must not survive as
   // a number from the last one.
   void assign(std::size_t rows, std::size_t width) {
     rows_ = rows;

@@ -101,7 +101,7 @@ public:
   // paired as the run paired them. Available whether or not states were kept,
   // because what the run decided is not what it held.
   //
-  // Junction rows are left out, and this is the one place that decides so. A
+  // Insertion rows are left out, and this is the one place that decides so. An
   // insertion shares its time with the row below it, so a caller pinning these
   // times would be handed one twice -- and the two callers that pin them
   // (a schedule written back into Parameters, and a replay driven interval by
