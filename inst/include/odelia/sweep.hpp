@@ -27,7 +27,16 @@ double state_at_segment(System& system,
                         std::span<const step_record<System>> rec,
                         std::size_t segment,
                         std::vector<double>& base, std::size_t& start) {
-    const std::vector<std::size_t> rows = junction_rows(rec);
+    // The junction rows, in order, off the kind the run recorded and not off a
+    // width that grew: an inference has to refuse a width that shrinks, where a
+    // recorded fact cannot be wrong. Row 0 is never one -- a junction runs on the
+    // state the row below it holds.
+    std::vector<std::size_t> rows;
+    for (std::size_t k = 1; k < rec.size(); ++k) {
+        if (rec[k].junction) {
+            rows.push_back(k);
+        }
+    }
     if (segment > rows.size()) {
         util::stop("state_at_segment: the recording has no such segment");
     }

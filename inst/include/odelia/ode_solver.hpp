@@ -159,8 +159,7 @@ public:
     {
       util::stop("'program' must hold at least the entry it starts from");
     }
-    if (program.front().kind != ode::instruction::op::step ||
-        !std::isnan(program.front().step_size))
+    if (program.front().junction || !std::isnan(program.front().step_size))
     {
       util::stop("A program's first entry is where it starts, which no "
                  "instruction reached, so it must be a step of NaN size");
@@ -178,7 +177,7 @@ public:
 
     for (std::size_t k = 1; k < program.size(); ++k)
     {
-      if (program[k].kind == ode::instruction::op::junction)
+      if (program[k].junction)
       {
         before.assign(system.ode_size(), value_type(0.0));
         system.ode_state(before.begin());
@@ -303,8 +302,7 @@ public:
     // an interval that then steps -- and both are checked here rather than at each
     // be_at_step, because the width this leaves the System at is a promise and the
     // call that restores it cannot raise.
-    if (rec.back().kind == ode::instruction::op::junction ||
-        rec[k_last].kind == ode::instruction::op::junction) {
+    if (rec.back().junction || rec[k_last].junction) {
       util::stop("solve_adjoint: a recording cannot end at a junction, because "
                  "nothing stepped away from the state it made");
     }
@@ -358,7 +356,7 @@ public:
     // what the bounds say, and each is reached once. A row that is both a widening
     // and a cut is the widening, which is what keeps a cut free of a map.
     for (size_t at = k_last; at-- > k_first + 1;) {
-      const bool junction = rec[at].kind == ode::instruction::op::junction;
+      const bool junction = rec[at].junction;
       if (!junction && std::find(extra_stops.begin(), extra_stops.end(), at) ==
                            extra_stops.end()) {
         continue;

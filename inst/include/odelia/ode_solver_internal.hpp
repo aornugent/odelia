@@ -111,7 +111,7 @@ public:
     std::vector<instruction> ret;
     ret.reserve(prev_steps.size());
     for (const step_record<System>& s : prev_steps) {
-      if (s.kind == instruction::op::step) {
+      if (!s.junction) {
         ret.push_back(s);
       }
     }
@@ -286,8 +286,7 @@ void SolverInternal<System>::push_junction(System& system) {
     util::stop("push_junction: no recorded step for a junction to follow");
   }
   step_record<System> record{{prev_steps.back().time,
-                              std::numeric_limits<double>::quiet_NaN(),
-                              instruction::op::junction},
+                              std::numeric_limits<double>::quiet_NaN(), true},
                              state_type()};
   if (keep_states_) {
     record.state.resize(system.ode_size());

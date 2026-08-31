@@ -166,14 +166,12 @@ concept SolvesForValues =
 // emptiness saying it for all of them.
 //
 // The first entry is where a program starts, which no instruction reached: a step
-// of NaN size. `kind` is last and defaults, so a grid written {time, NaN} is a
+// of NaN size. `junction` is last and defaults, so a grid written {time, NaN} is a
 // program of steps without saying so.
 struct instruction {
-  enum class op : unsigned char { step, junction };
-
   double time;
   double step_size;
-  op kind = op::step;
+  bool junction = false;
 };
 
 // One row of a recording: the instruction the run executed and the state it left
@@ -451,26 +449,6 @@ std::vector<double> r_ode_rates(T& obj) {
   std::vector<double> dydt(obj.ode_size());
   obj.ode_rates(dydt.begin());
   return dydt;
-}
-
-// The junction rows, in order. Read off the kind the run recorded, not off a width
-// which grew: an inference has to refuse a width which shrinks, where a recorded
-// fact cannot be wrong, and the kind is there on a run that kept no states.
-//
-// Row 0 cannot be one. A junction runs on the state the row below it holds, and no
-// row is below row 0.
-template <class Record>
-std::vector<std::size_t> junction_rows(std::span<const Record> rec) {
-    if (rec.size() < 2) {
-        util::stop("junction_rows: no recorded steps to sweep");
-    }
-    std::vector<std::size_t> ret;
-    for (std::size_t k = 1; k < rec.size(); ++k) {
-        if (rec[k].kind == instruction::op::junction) {
-            ret.push_back(k);
-        }
-    }
-    return ret;
 }
 
 // Put the System on the state the run recorded at `step`. The System reconciles
