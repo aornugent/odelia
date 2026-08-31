@@ -152,7 +152,7 @@ concept SolvesForValues =
 
 // One instruction of a program: what carries the state from one boundary to the
 // next. A step reaches `time`, by `step_size` where a run pinned it and by whatever
-// the controller chooses where that is NaN. A junction applies the System's own
+// the controller chooses where that is NaN. A insertion applies the System's own
 // state map and reaches the time it started at, taking none.
 //
 // Time and size are one object because a replay adding sizes does not land where
@@ -166,12 +166,12 @@ concept SolvesForValues =
 // emptiness saying it for all of them.
 //
 // The first entry is where a program starts, which no instruction reached: a step
-// of NaN size. `junction` is last and defaults, so a grid written {time, NaN} is a
+// of NaN size. `insertion` is last and defaults, so a grid written {time, NaN} is a
 // program of steps without saying so.
 struct instruction {
   double time;
   double step_size;
-  bool junction = false;
+  bool insertion = false;
 };
 
 // One row of a recording: the instruction the run executed and the state it left
@@ -180,8 +180,8 @@ struct instruction {
 // were two structs differing by one member, and pairing a time from one container
 // with a state from another was a thing that compiled.
 //
-// A junction is a row like any other, and its state is what the map produced. So
-// no row carries two states and nothing has to choose between them. A junction row
+// A insertion is a row like any other, and its state is what the map produced. So
+// no row carries two states and nothing has to choose between them. A insertion row
 // shares its time with the row below it, which is the row that holds the state the
 // map ran on.
 template <typename System>

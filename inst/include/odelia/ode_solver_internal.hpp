@@ -61,7 +61,7 @@ public:
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
     // The System can be a different width from the one the forward pass left,
-    // because a caller sweeping a segment narrows it between segments. Every seed
+    // because a caller sweeping a range narrows it between ranges. Every seed
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
     resize(lambda_out.width());
@@ -102,16 +102,16 @@ public:
   // because what the run decided is not what it held.
   //
   // Junction rows are left out, and this is the one place that decides so. A
-  // junction shares its time with the row below it, so a caller pinning these
+  // insertion shares its time with the row below it, so a caller pinning these
   // times would be handed one twice -- and the two callers that pin them
   // (a schedule written back into Parameters, and a replay driven interval by
-  // interval) both apply their own junctions. get_times and get_step_sizes are
+  // interval) both apply their own insertions. get_times and get_step_sizes are
   // this list split in two rather than two more walks that could disagree.
   std::vector<instruction> schedule() const {
     std::vector<instruction> ret;
     ret.reserve(prev_steps.size());
     for (const step_record<System>& s : prev_steps) {
-      if (!s.junction) {
+      if (!s.insertion) {
         ret.push_back(s);
       }
     }
@@ -121,10 +121,10 @@ public:
   // One accepted step, into the record: the time it reached, the size that
   // reached it, and the state there where the run was asked to keep states.
   void push_step(System& system, double time_, double step_size);
-  // The junction the caller just applied, as a row of its own: it holds the state
+  // The insertion the caller just applied, as a row of its own: it holds the state
   // the map produced, at the time the row below it holds. Only schedule() has to
   // know that two rows share a time, and it drops these.
-  void push_junction(System& system);
+  void push_insertion(System& system);
   void step_to(System& system, double time_max_);
   // `reached` is the time a recording says this step ended at; NaN accumulates.
   void step_by(System& system, double step_size, double reached);
@@ -281,9 +281,9 @@ void SolverInternal<System>::push_step(System& system, double time_,
 // its state is filled only where states are kept, because nothing but a sweep
 // reads one.
 template <class System>
-void SolverInternal<System>::push_junction(System& system) {
+void SolverInternal<System>::push_insertion(System& system) {
   if (prev_steps.empty()) {
-    util::stop("push_junction: no recorded step for a junction to follow");
+    util::stop("push_insertion: no recorded step for an insertion to follow");
   }
   step_record<System> record{{prev_steps.back().time,
                               std::numeric_limits<double>::quiet_NaN(), true},
