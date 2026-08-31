@@ -2,9 +2,12 @@
 //
 // ode_interface.hpp says a member in a shape it does not list is skipped rather
 // than refused, so the only signal is the slot count afterwards. That warning is
-// the reason a plant type replacing a std::pair has to declare for_each_active --
+// the reason a type standing in for a std::pair has to declare for_each_active --
 // and this runs the dispatch rather than reading it, because the failure it
 // describes has no error to look for.
+//
+// visit_active used to open a std::pair by name. Nothing ever handed it one, so
+// that arm went; a pair now reads out beside the aggregate it used to privilege.
 //
 //   make probe_visit_active && ./probe_visit_active
 
@@ -61,7 +64,8 @@ int main() {
   double scalars[2] = {1.0, 2.0};
 
   std::printf("scalars expected: 2 each\n\n");
-  std::printf("  std::pair<double,double>        %d\n", reached(as_pair));
+  std::printf("  std::pair<double,double>        %d   <-- no longer opened\n",
+              reached(as_pair));
   std::printf("  struct {value, slope}           %d   <-- skipped, no error\n",
               reached(unnamed));
   std::printf("  the same with for_each_active   %d\n", reached(declared));
@@ -70,7 +74,9 @@ int main() {
   std::printf("  double[2]                       %d\n", reached(scalars));
 
   std::printf(
-      "\nSo a named replacement for a pair on a recorded path must declare\n"
-      "for_each_active, and declaring it on the holder is not enough.\n");
+      "\nSo a type standing in for a pair on a recorded path must declare\n"
+      "for_each_active, and declaring it on the holder is not enough. What\n"
+      "reports a miss is active_system::release, counting slots the walk\n"
+      "did not reach.\n");
   return 0;
 }

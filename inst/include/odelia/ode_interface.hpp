@@ -40,21 +40,31 @@ template <typename T = double>
 using adjoint_tape = typename active_scalar<T>::tape_type;
 
 // Every active value among the members handed in, whatever shape they arrive in:
-// a scalar, a container of them, a pair, a pointer to one, or an object that
-// answers for_each_active. A member the visitor cannot be called with is skipped,
-// so a class lists what it holds rather than deciding which of them carry a
+// a scalar, a container of them, a pointer to one, or an object that answers
+// for_each_active. This skips a member the visitor cannot be called with, so a
+// class lists what it holds rather than deciding which of them carry a
 // derivative -- which is the judgment that makes forgetting one likely.
+//
+// The skip is what carries a passive member: the visitor takes the active scalar,
+// so a double or a bool matches no arm at all and this leaves it alone. FF16 and K93 lean on the same thing one level up -- they hold double
+// only, declare no for_each_active, and this walks past them.
 //
 // ⚠️ A MEMBER IN A SHAPE NOT LISTED HERE IS SKIPPED, NOT REFUSED. An active scalar
 // inside something this does not open is passed over in silence, and the count a
-// caller checks afterwards is the only thing that says so.
+// caller checks afterwards is the only thing that says so. This cannot refuse the
+// shape instead: from here a class holding active values and a class holding none
+// look the same, and callers hand over both. What reports the miss is
+// active_system::release, which counts the slots the walk did not reach.
+//
+// This does not open an aggregate of two scalars, so a type standing in for a
+// std::pair on a recorded path declares for_each_active -- odelia's own
+// hermite_interpolator does, and so does plant's with_slope.
+// tests/standalone/probe_visit_active.cpp reads out which shapes reach the
+// visitor.
 template <class F, class T>
 void visit_active(F& f, T& x) {
   if constexpr (requires { x.for_each_active(f); }) {
     x.for_each_active(f);
-  } else if constexpr (requires { x.first; x.second; }) {
-    visit_active(f, x.first);
-    visit_active(f, x.second);
   } else if constexpr (requires { x.begin(); x.end(); }) {
     for (auto& element : x) { visit_active(f, element); }
   } else if constexpr (requires { *x; x == nullptr; }) {
