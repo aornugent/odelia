@@ -297,10 +297,6 @@ public:
       util::stop("the adjoint segment is not a range of recorded steps");
     }
 
-    // A junction is where the width changes, so the descent has to stop and
-    // transpose the map that widened it. It needs the row below it to run that map
-    // on, which is why a junction at k_first is still a stop but a junction below
-    // it is out of range.
     // A junction is a row the sweep carries an adjoint ACROSS, so it cannot be one
     // the descent starts at or the one it is left standing on. Neither happens on a
     // recording a run made -- the schedule puts every introduction at the start of
@@ -312,21 +308,6 @@ public:
       util::stop("solve_adjoint: a recording cannot end at a junction, because "
                  "nothing stepped away from the state it made");
     }
-    std::vector<size_t> stops;
-    for (const size_t at : ode::junction_rows(rec)) {
-      if (at > k_first && at <= k_last) {
-        stops.push_back(at);
-      }
-    }
-    for (const size_t at : extra_stops) {
-      if (at > k_first && at < k_last) {
-        stops.push_back(at);
-      }
-    }
-    // Sorted and deduplicated, so a split landing on a junction is that junction
-    // rather than a second stop at the same row.
-    std::sort(stops.begin(), stops.end());
-    stops.erase(std::unique(stops.begin(), stops.end()), stops.end());
 
     // ⚠️ THE WIDTH ON EXIT IS A PROMISE, AND A THROW IS AN EXIT. The descent starts
     // at the run's own width and narrows as it goes, so a sweep abandoned high up
@@ -373,10 +354,19 @@ public:
       }
     };
 
-    for (size_t j = stops.size(); j-- > 0;) {
-      const size_t at = stops[j];
+    // Descended row by row rather than off a list of stops built first: the rows
+    // this can stop at are the rows strictly inside the range, which is what the
+    // bounds here say, so nothing has to be filtered to them, sorted, or
+    // deduplicated. A row that is both a widening and a cut is reached once, and
+    // it is the widening -- which is what keeps a cut free of a map.
+    for (size_t at = k_last; at-- > k_first + 1;) {
+      const bool junction = rec[at].kind == ode::instruction::op::junction;
+      if (!junction && std::find(extra_stops.begin(), extra_stops.end(), at) ==
+                           extra_stops.end()) {
+        continue;
+      }
       sweep_down_to(at);
-      if (rec[at].kind != ode::instruction::op::junction) {
+      if (!junction) {
         hi = at;
         continue;
       }
