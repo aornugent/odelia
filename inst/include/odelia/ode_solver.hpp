@@ -354,11 +354,9 @@ public:
       }
     };
 
-    // Descended row by row rather than off a list of stops built first: the rows
-    // this can stop at are the rows strictly inside the range, which is what the
-    // bounds here say, so nothing has to be filtered to them, sorted, or
-    // deduplicated. A row that is both a widening and a cut is reached once, and
-    // it is the widening -- which is what keeps a cut free of a map.
+    // The rows this can stop at are the rows strictly inside the range, which is
+    // what the bounds say, and each is reached once. A row that is both a widening
+    // and a cut is the widening, which is what keeps a cut free of a map.
     for (size_t at = k_last; at-- > k_first + 1;) {
       const bool junction = rec[at].kind == ode::instruction::op::junction;
       if (!junction && std::find(extra_stops.begin(), extra_stops.end(), at) ==
