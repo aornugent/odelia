@@ -399,10 +399,8 @@ public:
                          extra_stops);
   }
 
-  // Rate evaluations the sweeps since the last clear have recorded: six a step,
-  // whatever the seed count. A term entering once a step where it belongs once a
-  // stage divides this by six, and no gradient check can see that, because a
-  // tangent and a sweep apply the same multiplier.
+  // Rate evaluations the sweeps since the last clear have recorded; Step::
+  // recorded_rates says what the number means and what it catches.
   std::size_t recorded_rates() const { return solver.recorded_rates(); }
   void clear_recorded_rates() { solver.clear_recorded_rates(); }
 
