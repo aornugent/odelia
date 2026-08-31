@@ -8,7 +8,7 @@
 //
 // A Rosenbrock (linearly-implicit) method: each stage is one RHS evaluation plus
 // one linear solve against a single matrix W = (1/(h*gamma)) I - J, factorized
-// once per step. No Newton iteration, so no convergence machinery -- the only
+// once per step. No Newton iteration, so no convergence loop to control -- the only
 // adaptivity is the existing accuracy-based step-size controller in OdeControl,
 // which consumes the embedded error estimate exactly as it does for the explicit
 // RKCK stepper.

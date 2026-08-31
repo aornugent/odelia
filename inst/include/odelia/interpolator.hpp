@@ -323,9 +323,8 @@ private:
     const std::size_t ns = spans.size();
     // A non-finite query reaches here only as NaN -- the infinities are answered by
     // the end-extension branches above -- and casting NaN to an index is undefined.
-    // Answer from a span that exists and let the arithmetic carry the NaN out, which
-    // is the contract callers rely on: a non-finite position reads back non-finite
-    // rather than throwing.
+    // Answer from a span that exists and let the arithmetic carry the NaN out, so
+    // a non-finite position reads back non-finite rather than throwing.
     if (!util::is_finite(u)) return 0;
     if (uniform) {
       const std::size_t k = static_cast<std::size_t>((u - x.front()) * inv_h0);

@@ -361,13 +361,12 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // once per step and its gradient is the sum over every step swept, so it is the
 // caller's to clear once per sweep and may carry rows past the seeds handed in.
 //
-// Those two are therefore different objects, and one being the other would mean
-// resizing the accumulator between the check on its rows and the writes into
-// them. Refused rather than documented.
+// They are therefore different objects, and passing one as both is refused:
+// that would resize the accumulator between the check on its rows and the
+// writes into them.
 //
-// One width for the whole batch is what removes the other check this used to
-// carry: a row of parameter adjoints cannot be a different length from its
-// neighbours, so there is nothing to test per row.
+// One width for the whole batch, so a row of parameter adjoints cannot be a
+// different length from its neighbours and there is nothing to test per row.
 template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
     active_system<System>& active, const std::vector<double>& state,
