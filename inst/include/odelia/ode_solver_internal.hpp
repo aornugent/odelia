@@ -45,8 +45,6 @@ public:
 
   void advance_adaptive(System &system, double time_max_);
   void advance_fixed(System& system, const std::vector<double>& times);
-  void advance_recorded(System& system,
-                        const std::vector<recorded_step>& steps);
   void advance_euler(System& system, const std::vector<double>& times);
 
   void step(System& system);
@@ -340,30 +338,6 @@ void SolverInternal<System>::advance_fixed(System& system,
   }
   while (t != times.end()) {
     step_to(system, *t++);
-  }
-}
-
-// Step over a schedule, landing on each of its times: at the recorded size where
-// one is known, and to the time itself where it is not. The leading entry is where
-// the schedule starts, which no step reached, so its size is NaN; requiring that is
-// what checks the caller handed over a whole schedule rather than one offset by a
-// step.
-template <class System>
-void SolverInternal<System>::advance_recorded(
-    System& system, const std::vector<recorded_step>& steps) {
-  if (steps.empty()) {
-    util::stop("'steps' must be a recording of at least length 1");
-  }
-  if (!std::isnan(steps.front().step_size)) {
-    util::stop("The first recorded step must have a NaN size, being the start "
-               "that no step reached");
-  }
-  for (std::size_t k = 1; k < steps.size(); ++k) {
-    if (std::isnan(steps[k].step_size)) {
-      step_to(system, steps[k].time);
-    } else {
-      step_by(system, steps[k].step_size, steps[k].time);
-    }
   }
 }
 
