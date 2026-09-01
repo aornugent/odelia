@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <list>
 #include <type_traits>
+#include <limits>
 #include <vector>
 #include <odelia/ode_util.hpp>
 
@@ -382,12 +383,13 @@ private:
 // it, so testing against it fires on spans that were already monotone and flattens
 // them: measured on a sine at 100 knots, the circle reads 5.3e-04 against 1.6e-05
 // for the region below. Both keep an intermittent series inside its own values.
-inline std::vector<double> monotone_slopes(const std::vector<double>& x,
-                                           const std::vector<double>& y) {
+template <class S>
+inline std::vector<S> monotone_slopes(const std::vector<double>& x,
+                                      const std::vector<S>& y) {
   util::check_length(y.size(), x.size());
   if (x.size() < 2) util::stop("monotone_slopes: need at least 2 knots");
   const std::size_t n = x.size();
-  std::vector<double> secant(n - 1), m(n);
+  std::vector<S> secant(n - 1), m(n);
   for (std::size_t k = 0; k + 1 < n; ++k) {
     secant[k] = (y[k + 1] - y[k]) / (x[k + 1] - x[k]);
   }
@@ -411,7 +413,7 @@ inline std::vector<double> monotone_slopes(const std::vector<double>& x,
     }
   }
   for (std::size_t k = 0; k + 1 < n; ++k) {
-    const double s = secant[k];
+    const S s = secant[k];
     if (s == 0.0) {
       // A flat pair pins both its slopes, which is what stops a pulse being
       // smeared back across the dry interval beside it.
@@ -419,11 +421,12 @@ inline std::vector<double> monotone_slopes(const std::vector<double>& x,
       m[k + 1] = 0.0;
       continue;
     }
-    const double alpha = m[k] / s, beta = m[k + 1] / s;
-    const double a2b3 = 2.0 * alpha + beta - 3.0;
-    const double ab23 = alpha + 2.0 * beta - 3.0;
+    const S alpha = m[k] / s, beta = m[k + 1] / s;
+    const S a2b3 = 2.0 * alpha + beta - 3.0;
+    const S ab23 = alpha + 2.0 * beta - 3.0;
     if (a2b3 > 0.0 && ab23 > 0.0 && alpha * (a2b3 + ab23) < a2b3 * a2b3) {
-      const double tau = 3.0 * s / std::sqrt(alpha * alpha + beta * beta);
+      using std::sqrt;
+      const S tau = 3.0 * s / sqrt(alpha * alpha + beta * beta);
       m[k] = tau * alpha;
       m[k + 1] = tau * beta;
     }
@@ -513,6 +516,45 @@ nodes_and_data<S> refine(Function value_and_slope, double a, double b,
   return gather();
 }
 
+// --- Compatibility surface for callers written against basic_interpolator. ---
+// Keeps main's phylloptim and plant compiling while they migrate. Slopes are
+// chosen by monotone_slopes wherever the caller supplies values alone.
+template <typename S, int Order = 3>
+class compat_interpolator : public hermite_interpolator<S, Order> {
+  using base = hermite_interpolator<S, Order>;
+public:
+  using base::init;
+  void init(const std::vector<double>& x_, const std::vector<S>& y_) {
+    xs_ = x_; ys_ = y_; initialise();
+  }
+  void add_point(double xi, S yi) { xs_.push_back(xi); ys_.push_back(yi); }
+  void initialise() { base::init(xs_, ys_, monotone_slopes(xs_, ys_)); }
+  void clear() { xs_.clear(); ys_.clear(); base::clear(); }
+  std::vector<double> get_x() const { return xs_; }
+  std::vector<S> get_y() const { return ys_; }
+  template <class U> S deriv(const U& u) const { return base::slope(u); }
+  // basic_interpolator returned +/-inf on an empty spline and plant's
+  // resource_spline calls max() on a freshly constructed (empty) field, so an
+  // unguarded x.back() segfaults FF16_Environment's constructor.
+  double min() const {
+    return base::size() > 0 ? base::min() : std::numeric_limits<double>::infinity();
+  }
+  double max() const {
+    return base::size() > 0 ? base::max() : -std::numeric_limits<double>::infinity();
+  }
+  void set_extrapolate(bool e) { extrapolate_ = e; }
+  std::vector<S> r_eval(std::vector<double> u) const {
+    std::vector<S> out; out.reserve(u.size());
+    for (double ui : u) out.push_back(base::eval(ui));
+    return out;
+  }
+private:
+  std::vector<double> xs_;
+  std::vector<S> ys_;
+  bool extrapolate_ = false;
+};
+template <typename S> using basic_interpolator = compat_interpolator<S, 3>;
+using Interpolator = basic_interpolator<double>;
 }
 }
 

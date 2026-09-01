@@ -21,6 +21,11 @@
 namespace odelia {
 namespace ode {
 
+// Compatibility aliases for callers written against the double-only state.
+// Purely additive: the templated state_type above is the live spelling.
+typedef std::vector<double>::const_iterator const_iterator;
+typedef std::vector<double>::iterator       iterator;
+
 // Type alias for state vectors based on System's value_type
 template<typename System>
 using state_type = std::vector<typename System::value_type>;
