@@ -62,8 +62,9 @@ using adjoint_tape = typename active_scalar<T>::tape_type;
 // active_system::release, which counts the slots the walk did not reach.
 //
 // This does not open an aggregate of two scalars, so a type standing in for a
-// std::pair on a recorded path declares for_each_active -- odelia's own
-// hermite_interpolator does, and so does plant's with_slope.
+// std::pair on a recorded path declares for_each_active -- hermite_interpolator
+// and with_slope both do, which is why with_slope lives here rather than in a
+// model: the obligation is this library's.
 // tests/standalone/probe_visit_active.cpp reads out which shapes reach the
 // visitor.
 template <class F, class T>
