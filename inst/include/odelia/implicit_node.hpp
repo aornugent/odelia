@@ -197,6 +197,86 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
   }
 }
 
+
+// The same value, with the residual's own statements taken OFF the caller's tape.
+//
+// The three-argument form above leaves them there: `corr` has to stay reachable
+// for the outer sweep to walk it, so a residual costing T statements costs the
+// consumer T statements per solve, and the consumer sweeps them once per output
+// it asks for. This form sweeps the residual ONCE, here, keeps the numbers that
+// fall out, and rewinds. The consumer sees one statement.
+//
+// `inputs` are the values whose rows are wanted, in whatever shape they are held
+// -- `visit_active` opens a scalar, a container, a pointer, or anything declaring
+// `for_each_active`. They are the residual's own inputs, so a caller hands over
+// what it already holds rather than assembling a list.
+//
+// ⚠️ A SHAPE `visit_active` DOES NOT OPEN IS SKIPPED IN SILENCE, and here that is
+// a row that never arrives -- an exact zero in a column, which is the signature
+// of a missing accumulator rather than of insensitivity. `reached` is how many
+// the walk found, for a caller that can check it against what it handed over.
+//
+// ⚠️ THE ADJOINTS ARE ZEROED AS THEY ARE READ, because they accumulate: a second
+// solve against the same inputs would otherwise add to the first, and every row
+// after the first would be wrong with every number still finite.
+template <class S, class Residual, class... Inputs>
+S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
+                 Inputs&... inputs) {
+  if constexpr (std::is_same_v<S, double>) {
+    reached = 0;
+    return y_star;
+  } else {
+    static_assert(
+        std::is_same_v<std::invoke_result_t<Residual&, const S&>, S>,
+        "implicit_value: the residual must return its own scalar exactly "
+        "([](const S& y) -> S { ... }). A deduced return type is an expression "
+        "template referencing temporaries that are dead by the time this "
+        "evaluates it.");
+    if (!util::is_finite(dFdy) || dFdy == 0.0) {
+      util::stop("implicit_value: dF/dy is " + util::format_double(dFdy) +
+                 " at the operating point, so the implicit function theorem "
+                 "does not apply there (a fold?)");
+    }
+    using tape_type = typename S::tape_type;
+    tape_type* tape = tape_type::getActive();
+    if (tape == nullptr) {
+      reached = 0;
+      return S(y_star);
+    }
+    const typename tape_type::position_type mark = tape->getPosition();
+    {
+      S corr = F(S(y_star)) / dFdy;
+      tape->registerOutput(corr);
+      xad::derivative(corr) = 1.0;
+      tape->computeAdjointsTo(mark);
+    }
+    // Rewound BEFORE the rows are written, so the statement closed below carries
+    // them rather than the residual's own.
+    tape->resetTo(mark);
+    S out = y_star;
+    std::size_t seen = 0;
+    auto harvest = [&](S& x) {
+      const typename tape_type::slot_type slot = x.getSlot();
+      if (slot == tape_type::INVALID_SLOT) {
+        return;
+      }
+      ++seen;
+      const double adj = xad::derivative(x);
+      xad::derivative(x) = 0.0;
+      if (adj == 0.0) {
+        return;
+      }
+      // -(dF/dp)/(dF/dy) is the theorem; dF/dy divided the residual above.
+      const double row = -adj;
+      tape->pushAll(&row, &slot, 1u);
+    };
+    odelia::ode::visit_active(harvest, inputs...);
+    tape->registerOutput(out);
+    reached = seen;
+    return out;
+  }
+}
+
 }
 
 #endif

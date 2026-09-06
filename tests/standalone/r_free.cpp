@@ -525,6 +525,88 @@ void test_supplied_rows_carry_a_direction() {
         "and the direction carries the supplied row");
 }
 
+
+// A residual taken off the caller's tape gives the same rows as one left on it.
+//
+// F(p) = p^2 - x*y has the root p* = sqrt(x*y), so dp*/dx = y/(2p*) and
+// dp*/dy = x/(2p*) in closed form -- which is the referee here, rather than the
+// two routes agreeing with each other.
+void test_a_preaccumulated_residual_keeps_its_rows() {
+  using A = odelia::ode::active_scalar<double>;
+  using Tape = odelia::ode::adjoint_tape<double>;
+  const double x0 = 2.0, y0 = 8.0;
+  const double root = 4.0;          // sqrt(2*8)
+  const double dFdp = 2.0 * root;   // 8
+  const double want_dx = y0 / dFdp; // 1.0
+  const double want_dy = x0 / dFdp; // 0.25
+
+  double got_dx[2], got_dy[2];
+  std::size_t statements[2];
+  std::size_t reached = 0;
+
+  for (int arm = 0; arm < 2; ++arm) {
+    Tape tape;
+    A x = x0, y = y0;
+    tape.registerInput(x);
+    tape.registerInput(y);
+    tape.newRecording();
+    auto residual = [&](const A& p) -> A { return p * p - x * y; };
+    const std::size_t s0 = tape.getNumStatements();
+    A p_star = (arm == 0)
+                   ? odelia::implicit_value<A>(root, dFdp, residual)
+                   : odelia::implicit_value<A>(root, dFdp, reached, residual, x, y);
+    statements[arm] = tape.getNumStatements() - s0;
+    tape.registerOutput(p_star);
+    xad::derivative(p_star) = 1.0;
+    tape.computeAdjoints();
+    got_dx[arm] = xad::derivative(x);
+    got_dy[arm] = xad::derivative(y);
+    check(std::fabs(xad::value(p_star) - root) < 1e-14,
+          arm == 0 ? "the value is the root (on the tape)"
+                   : "the value is the root (preaccumulated)");
+  }
+
+  check(std::fabs(got_dx[0] - want_dx) < 1e-12 &&
+            std::fabs(got_dy[0] - want_dy) < 1e-12,
+        "the recorded residual gives the theorem's rows");
+  check(std::fabs(got_dx[1] - want_dx) < 1e-12 &&
+            std::fabs(got_dy[1] - want_dy) < 1e-12,
+        "and so does the preaccumulated one");
+  check(reached == 2, "the walk reached both inputs");
+  check(statements[1] == 1, "which costs one statement");
+  check(statements[1] < statements[0],
+        "against the whole residual left on the tape");
+  std::printf("       (on the tape %zu statements, preaccumulated %zu)\n",
+              statements[0], statements[1]);
+}
+
+// The rows accumulate, so a second solve against the same inputs must not add to
+// the first. Every number stays finite when it does, which is what makes it worth
+// a check of its own.
+void test_two_preaccumulated_solves_do_not_add_up() {
+  using A = odelia::ode::active_scalar<double>;
+  using Tape = odelia::ode::adjoint_tape<double>;
+  Tape tape;
+  A x = 2.0, y = 8.0;
+  tape.registerInput(x);
+  tape.registerInput(y);
+  tape.newRecording();
+  auto residual = [&](const A& p) -> A { return p * p - x * y; };
+  std::size_t reached = 0;
+  const A first =
+      odelia::implicit_value<A>(4.0, 8.0, reached, residual, x, y);
+  const A second =
+      odelia::implicit_value<A>(4.0, 8.0, reached, residual, x, y);
+  A sum = first + second;
+  tape.registerOutput(sum);
+  xad::derivative(sum) = 1.0;
+  tape.computeAdjoints();
+  // Two identical solves, so each row is twice one solve's and no more.
+  check(std::fabs(xad::derivative(x) - 2.0 * 1.0) < 1e-12 &&
+            std::fabs(xad::derivative(y) - 2.0 * 0.25) < 1e-12,
+        "two solves carry two rows, not three");
+}
+
 } // namespace
 
 int main() {
@@ -540,6 +622,8 @@ int main() {
   test_unreachable_domain_fails_with_a_reason();
   test_supplied_rows_cost_one_statement();
   test_supplied_rows_carry_a_direction();
+  test_a_preaccumulated_residual_keeps_its_rows();
+  test_two_preaccumulated_solves_do_not_add_up();
   if (failures == 0) {
     std::printf("all checks passed\n");
     return 0;
