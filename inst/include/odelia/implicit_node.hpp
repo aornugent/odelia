@@ -39,16 +39,25 @@ struct record_report {
   std::string why;
 };
 
+// The scalar that carries an adjoint, so a row set can be a statement's operand
+// run. A direction has no tape to hold one and takes the arithmetic below.
+template <class S>
+concept CarriesAdjoint = xad::ExprTraits<S>::isReverse;
+
 // `into` receives `value` carrying the derivatives supplied against it: the
 // number is `value` itself, and its derivative with respect to each input is the
-// one supplied. Each term is an input minus its own passive copy, which is zero
-// in value and carries the derivative, so the number is untouched and only the
-// tape sees the terms.
+// one supplied.
 //
 // This is how a quantity computed away from the tape gets onto it -- a
 // root-find, a submodel's own solve, anything whose derivative is known by some
 // means other than recording the steps that produced it. At a plain double the
-// terms all vanish and this is the value.
+// rows vanish and this is the value.
+//
+// ONE STATEMENT, whatever the row count. A tape statement is a left-hand side
+// over a run of operations, so n rows are n operations under one lhs -- not the
+// n recorded assignments that writing the sum out as `out += d * (x -
+// to_passive(x))` costs. Carrying a leaf-shaped boundary that way put the whole
+// of a submodel's arithmetic on a consumer's tape.
 //
 // NOTHING PARTIAL. Every row is tested before any is recorded, because a value
 // carrying some of its rows is a channel that has gone missing with every number
@@ -77,17 +86,52 @@ template <class S>
                   "cannot be recorded"};
     }
   }
-  S out = value;
-  for (const input_and_derivative<S>& term : against) {
-    // A zero derivative contributes exactly zero to the value and exactly nothing
-    // to the transpose, and recording it costs a tape edge that the sweep then walks
-    // twice.
-    if (term.derivative == 0.0) {
-      continue;
+  // A zero derivative contributes exactly zero to the value and exactly nothing to
+  // the transpose, and carrying it costs a tape edge the sweep then walks.
+  if constexpr (CarriesAdjoint<S>) {
+    using tape_type = typename S::tape_type;
+    std::vector<double> multipliers;
+    std::vector<typename tape_type::slot_type> slots;
+    multipliers.reserve(against.size());
+    slots.reserve(against.size());
+    for (const input_and_derivative<S>& term : against) {
+      if (term.derivative == 0.0) {
+        continue;
+      }
+      // ⚠️ A PASSIVE INPUT HOLDS NO SLOT, and the sweep indexes the slot it is
+      // pushed without a bounds check, so pushing one corrupts memory rather than
+      // raising. It has no row to carry either way: nothing outside reads it.
+      const typename tape_type::slot_type slot = term.input.getSlot();
+      if (slot == tape_type::INVALID_SLOT) {
+        continue;
+      }
+      multipliers.push_back(term.derivative);
+      slots.push_back(slot);
     }
-    out += term.derivative * (term.input - util::to_passive(term.input));
+    // ⚠️ THE ORDER IS THE VALUE, THEN THE ROWS, THEN THE CLOSE, and each step is
+    // load-bearing. A statement's operations are everything pushed since the last
+    // left-hand side, so anything that pushes between these two claims them --
+    // which is why every row is tested above rather than here. `registerOutput` is
+    // a no-op on a value that already holds a slot, leaving the rows for whatever
+    // statement closes next, so the destination is built here and moved out.
+    S out = value;
+    if (tape_type* tape = tape_type::getActive()) {
+      tape->pushAll(multipliers.data(), slots.data(),
+                    static_cast<unsigned>(multipliers.size()));
+      tape->registerOutput(out);
+    }
+    into = std::move(out);
+  } else {
+    S out = value;
+    for (const input_and_derivative<S>& term : against) {
+      if (term.derivative == 0.0) {
+        continue;
+      }
+      // Zero in value and carrying the derivative, so the number is untouched.
+      out += term.derivative * (term.input - util::to_passive(term.input));
+    }
+    into = out;
   }
-  into = out;
   return {};
 }
 // The value y* defined implicitly by a scalar equation F(y) = 0, made

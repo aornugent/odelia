@@ -29,6 +29,8 @@
 #include <odelia/ode_solver_internal.hpp>
 #include <odelia/ode_solver.hpp>
 #include <odelia/sweep.hpp>
+#include <odelia/implicit_node.hpp>
+#include <odelia/tangent.hpp>
 #include <examples/lorenz_system.hpp>
 
 #include <cmath>
@@ -456,6 +458,73 @@ void test_unreachable_domain_fails_with_a_reason() {
   }
 }
 
+
+// A supplied row set is ONE statement, whatever the row count, and the rows it
+// carries are the ones it was handed. The count is the guard: written as a sum of
+// `out += d * (x - to_passive(x))` the same call is one recorded assignment per
+// row, which is how a submodel's whole arithmetic reaches a consumer's tape.
+void test_supplied_rows_cost_one_statement() {
+  using A = odelia::ode::active_scalar<double>;
+  using Tape = odelia::ode::adjoint_tape<double>;
+
+  for (int n : {1, 5, 31}) {
+    Tape tape;
+    std::vector<A> x(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) {
+      x[static_cast<std::size_t>(i)] = 1.0 + 0.25 * double(i);
+    }
+    // Never registered, so it holds no slot: its row must be dropped rather than
+    // pushed, and the sweep must survive it.
+    const A unregistered = 9.0;
+    tape.registerInputs(x.begin(), x.end());
+    tape.newRecording();
+
+    std::vector<odelia::input_and_derivative<A>> against;
+    for (int i = 0; i < n; ++i) {
+      against.push_back({x[static_cast<std::size_t>(i)], 1.0 / (double(i) + 2.0)});
+    }
+    against.push_back({unregistered, 4.0});
+    against.push_back({x[0], 0.0});
+
+    const std::size_t s0 = tape.getNumStatements();
+    A out;
+    const odelia::record_report report =
+        odelia::record_with_derivatives<A>(7.5, against, out);
+    const std::size_t statements = tape.getNumStatements() - s0;
+
+    tape.registerOutput(out);
+    xad::derivative(out) = 1.0;
+    tape.computeAdjoints();
+
+    double worst = std::fabs(xad::value(out) - 7.5);
+    for (int i = 0; i < n; ++i) {
+      worst = std::fmax(worst, std::fabs(xad::derivative(x[static_cast<std::size_t>(i)]) -
+                                         1.0 / (double(i) + 2.0)));
+    }
+    const std::string at = " (" + std::to_string(n) + " rows)";
+    check(report.whole, "every row is recorded" + at);
+    check(statements == 1, "one statement" + at);
+    check(worst < 1e-15, "the value and every row are the ones supplied" + at);
+  }
+}
+
+// The same call at a direction, which has no tape to hold a statement: the rows
+// are the arithmetic there, and dropping them would be silent.
+void test_supplied_rows_carry_a_direction() {
+  using T = odelia::ode::tangent_scalar<double>;
+  T x = 2.0;
+  odelia::ode::seed_direction(x, 1.0);
+  std::vector<odelia::input_and_derivative<T>> against{{x, 0.25}};
+  T out;
+  const odelia::record_report report =
+      odelia::record_with_derivatives<T>(7.5, against, out);
+  check(report.whole, "a direction records its rows");
+  check(std::fabs(odelia::util::to_passive(out) - 7.5) < 1e-15,
+        "the value is untouched at a direction");
+  check(std::fabs(odelia::ode::derivative_along(out) - 0.25) < 1e-15,
+        "and the direction carries the supplied row");
+}
+
 } // namespace
 
 int main() {
@@ -469,6 +538,8 @@ int main() {
   test_domain_error_becomes_a_rejection();
   test_non_domain_throw_is_not_absorbed();
   test_unreachable_domain_fails_with_a_reason();
+  test_supplied_rows_cost_one_statement();
+  test_supplied_rows_carry_a_direction();
   if (failures == 0) {
     std::printf("all checks passed\n");
     return 0;
