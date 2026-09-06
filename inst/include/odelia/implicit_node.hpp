@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -68,7 +69,7 @@ concept CarriesAdjoint = xad::ExprTraits<S>::isReverse;
 // handed the reading of it.
 template <class S>
 [[nodiscard]] record_report record_with_derivatives(
-    double value, const std::vector<input_and_derivative<S>>& against, S& into) {
+    double value, std::span<const input_and_derivative<S>> against, S& into) {
   for (std::size_t i = 0; i < against.size(); ++i) {
     // Either half being non-finite poisons the VALUE and not only what is
     // recorded against it: NaN times zero is not a number, and an infinite input
@@ -90,34 +91,34 @@ template <class S>
   // the transpose, and carrying it costs a tape edge the sweep then walks.
   if constexpr (CarriesAdjoint<S>) {
     using tape_type = typename S::tape_type;
-    std::vector<double> multipliers;
-    std::vector<typename tape_type::slot_type> slots;
-    multipliers.reserve(against.size());
-    slots.reserve(against.size());
-    for (const input_and_derivative<S>& term : against) {
-      if (term.derivative == 0.0) {
-        continue;
-      }
-      // ⚠️ A PASSIVE INPUT HOLDS NO SLOT, and the sweep indexes the slot it is
-      // pushed without a bounds check, so pushing one corrupts memory rather than
-      // raising. It has no row to carry either way: nothing outside reads it.
-      const typename tape_type::slot_type slot = term.input.getSlot();
-      if (slot == tape_type::INVALID_SLOT) {
-        continue;
-      }
-      multipliers.push_back(term.derivative);
-      slots.push_back(slot);
-    }
     // ⚠️ THE ORDER IS THE VALUE, THEN THE ROWS, THEN THE CLOSE, and each step is
     // load-bearing. A statement's operations are everything pushed since the last
-    // left-hand side, so anything that pushes between these two claims them --
-    // which is why every row is tested above rather than here. `registerOutput` is
-    // a no-op on a value that already holds a slot, leaving the rows for whatever
-    // statement closes next, so the destination is built here and moved out.
+    // left-hand side, so anything that pushes between the first row and the close
+    // claims them -- which is why every row is tested above rather than here.
+    // `registerOutput` is a no-op on a value that already holds a slot, leaving
+    // the rows for whatever statement closes next, so the destination is built
+    // here and moved out.
+    //
+    // Pushed one row at a time rather than gathered first: operations accumulate
+    // until the left-hand side closes over them, so the run is the same run and
+    // the two scratch arrays a gather needs are two allocations per call at a
+    // rate of millions.
     S out = value;
     if (tape_type* tape = tape_type::getActive()) {
-      tape->pushAll(multipliers.data(), slots.data(),
-                    static_cast<unsigned>(multipliers.size()));
+      for (const input_and_derivative<S>& term : against) {
+        if (term.derivative == 0.0) {
+          continue;
+        }
+        // ⚠️ A PASSIVE INPUT HOLDS NO SLOT, and the sweep indexes the slot it is
+        // pushed without a bounds check, so pushing one corrupts memory rather
+        // than raising. It has no row to carry either way: nothing outside reads
+        // it.
+        const typename tape_type::slot_type slot = term.input.getSlot();
+        if (slot == tape_type::INVALID_SLOT) {
+          continue;
+        }
+        tape->pushAll(&term.derivative, &slot, 1u);
+      }
       tape->registerOutput(out);
     }
     into = std::move(out);
