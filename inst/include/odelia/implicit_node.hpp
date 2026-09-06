@@ -221,10 +221,17 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
 // after the first would be wrong with every number still finite.
 template <class S, class Residual, class... Inputs>
 S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
-                 Inputs&... inputs) {
-  if constexpr (std::is_same_v<S, double>) {
-    reached = 0;
-    return y_star;
+                 const Inputs&... inputs) {
+  // A direction has no tape to rewind, and at a double there is nothing to
+  // record at all: both take the arithmetic form, which carries the same rows
+  // where it has any. The walk still runs, so `reached` means the same thing on
+  // every path and a caller checking it needs no branch of its own.
+  if constexpr (!CarriesAdjoint<S>) {
+    std::size_t seen = 0;
+    auto count = [&](const S&) { ++seen; };
+    odelia::ode::visit_active(count, inputs...);
+    reached = seen;
+    return implicit_value<S>(y_star, dFdy, std::forward<Residual>(F));
   } else {
     static_assert(
         std::is_same_v<std::invoke_result_t<Residual&, const S&>, S>,
@@ -255,14 +262,16 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
     tape->resetTo(mark);
     S out = y_star;
     std::size_t seen = 0;
-    auto harvest = [&](S& x) {
+    // Read and cleared through the TAPE, by slot, so an input can arrive const --
+    // which is how every caller already holds the things a residual reads.
+    auto harvest = [&](const S& x) {
       const typename tape_type::slot_type slot = x.getSlot();
       if (slot == tape_type::INVALID_SLOT) {
         return;
       }
       ++seen;
-      const double adj = xad::derivative(x);
-      xad::derivative(x) = 0.0;
+      const double adj = tape->derivative(slot);
+      tape->derivative(slot) = 0.0;
       if (adj == 0.0) {
         return;
       }
