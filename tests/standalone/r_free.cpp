@@ -619,8 +619,8 @@ void test_a_preaccumulated_region_keeps_every_output_row() {
   using A = odelia::ode::active_scalar<double>;
   using Tape = odelia::ode::adjoint_tape<double>;
   const double x0 = 2.0, y0 = 3.0;
-  const double want_dx = 5.0 * (2.0 * x0 * y0) + 7.0 * 1.0;        // 67
-  const double want_dy = 5.0 * (x0 * x0) + 7.0 * (3.0 * y0 * y0);  // 209
+  const double want_dx = 5.0 * (2.0 * x0 * y0) + 7.0 * (1.0 - y0 + 1.0);
+  const double want_dy = 5.0 * (x0 * x0) + 7.0 * (3.0 * y0 * y0 - x0);
 
   double got_dx[2], got_dy[2], got_w[2];
   std::size_t statements[2];
@@ -643,8 +643,14 @@ void test_a_preaccumulated_region_keeps_every_output_row() {
       for (int i = 0; i < 40; ++i) {
         pad = pad * 1.0;
       }
-      u = pad * x * y;
-      v = pad + y * y * y;
+      // Both outputs read the SAME deep intermediate, which is what makes a
+      // sweep that inherits the previous output's adjoints visible here.
+      A shared = pad * y;
+      for (int i = 0; i < 10; ++i) {
+        shared = shared * 1.0;
+      }
+      u = shared * x;
+      v = shared / y + y * y * y - x * y + x;
       outs[0] = &u;
       outs[1] = &v;
       return std::span<A* const>(outs, 2);
