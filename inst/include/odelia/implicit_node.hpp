@@ -361,6 +361,12 @@ std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
     tape->registerOutput(*outputs[j]);
     xad::derivative(*outputs[j]) = 1.0;
     tape->computeAdjointsTo(mark);
+    // ⚠️ THE SEED IS CLEARED TOO. `resetTo` rewinds the statements and NOT the
+    // slot counter, so a seeded output leaves a slot behind carrying 1.0; a later
+    // sweep of the same recording reads it and answers differently depending on
+    // where it started, which is what a decomposition check sees and a single
+    // sweep does not.
+    xad::derivative(*outputs[j]) = 0.0;
     for (std::size_t i = 0; i < n; ++i) {
       scratch[j * n + i] = tape->derivative(slots[i]);
       // Zeroed as it is read: the adjoints accumulate, so the next output would
