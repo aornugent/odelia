@@ -330,8 +330,11 @@ std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
   using tape_type = typename S::tape_type;
   tape_type* tape = tape_type::getActive();
   if (tape == nullptr) {
-    body();
-    return 0;
+    // The scalar carries an adjoint, so the caller means to record: with no tape
+    // running there is nothing to take the region off, and carrying on would
+    // hand back a value whose rows are all missing.
+    util::stop("preaccumulate: the scalar carries an adjoint but no tape is "
+               "active, so there is no recording to take this region out of");
   }
 
   const typename tape_type::position_type mark = tape->getPosition();
