@@ -37,6 +37,7 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <span>
 #include <vector>
 
 namespace {
@@ -607,6 +608,76 @@ void test_two_preaccumulated_solves_do_not_add_up() {
         "two solves carry two rows, not three");
 }
 
+
+// A region with more than one output, taken off the tape and replaced by rows.
+//
+// u = x^2*y and v = x + y^3, so du/dx = 2xy, du/dy = x^2, dv/dx = 1, dv/dy = 3y^2
+// in closed form -- which is the referee, rather than the two routes agreeing.
+// Downstream reads w = 5u + 7v, so the consumer's own sweep has to carry both
+// rows onward for the answer to come out.
+void test_a_preaccumulated_region_keeps_every_output_row() {
+  using A = odelia::ode::active_scalar<double>;
+  using Tape = odelia::ode::adjoint_tape<double>;
+  const double x0 = 2.0, y0 = 3.0;
+  const double want_dx = 5.0 * (2.0 * x0 * y0) + 7.0 * 1.0;        // 67
+  const double want_dy = 5.0 * (x0 * x0) + 7.0 * (3.0 * y0 * y0);  // 209
+
+  double got_dx[2], got_dy[2], got_w[2];
+  std::size_t statements[2];
+  std::vector<double> scratch;
+  std::size_t reached = 0;
+
+  for (int arm = 0; arm < 2; ++arm) {
+    Tape tape;
+    A x = x0, y = y0;
+    tape.registerInput(x);
+    tape.registerInput(y);
+    tape.newRecording();
+    A u, v;
+    auto region = [&]() {
+      // Padded so the region is bigger than its output count, which is the only
+      // shape this trade is for: multiplying by one is exact, so the padding
+      // moves neither value nor row.
+      A pad = x;
+      for (int i = 0; i < 40; ++i) {
+        pad = pad * 1.0;
+      }
+      u = pad * x * y;
+      v = pad + y * y * y;
+    };
+    const std::size_t s0 = tape.getNumStatements();
+    if (arm == 0) {
+      region();
+    } else {
+      A* outs[2] = {&u, &v};
+      reached = odelia::preaccumulate<A>(region, std::span<A* const>(outs, 2),
+                                         scratch, x, y);
+    }
+    statements[arm] = tape.getNumStatements() - s0;
+    A w = 5.0 * u + 7.0 * v;
+    tape.registerOutput(w);
+    xad::derivative(w) = 1.0;
+    tape.computeAdjoints();
+    got_w[arm] = xad::value(w);
+    got_dx[arm] = xad::derivative(x);
+    got_dy[arm] = xad::derivative(y);
+  }
+
+  check(std::fabs(got_w[0] - got_w[1]) < 1e-12, "the region's values are unmoved");
+  check(std::fabs(got_dx[0] - want_dx) < 1e-12 &&
+            std::fabs(got_dy[0] - want_dy) < 1e-12,
+        "the recorded region gives the closed form's rows");
+  check(std::fabs(got_dx[1] - want_dx) < 1e-12 &&
+            std::fabs(got_dy[1] - want_dy) < 1e-12,
+        "and so does the preaccumulated one");
+  check(reached == 2, "the walk reached both inputs");
+  check(statements[1] == 2, "which costs one statement per output");
+  check(statements[1] * 10 < statements[0],
+        "against a region an order larger left on the tape");
+  std::printf("       (on the tape %zu statements, preaccumulated %zu)\n",
+              statements[0], statements[1]);
+}
+
 } // namespace
 
 int main() {
@@ -624,6 +695,7 @@ int main() {
   test_supplied_rows_carry_a_direction();
   test_a_preaccumulated_residual_keeps_its_rows();
   test_two_preaccumulated_solves_do_not_add_up();
+  test_a_preaccumulated_region_keeps_every_output_row();
   if (failures == 0) {
     std::printf("all checks passed\n");
     return 0;

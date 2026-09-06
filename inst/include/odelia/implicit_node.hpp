@@ -286,6 +286,94 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
   }
 }
 
+
+// A whole region of a recording, replaced on the caller's tape by the rows of
+// what it produced.
+//
+// `implicit_value` above does this for a region with ONE output, where the row
+// set is the implicit function theorem's. This is the same trade with the outputs
+// counted: the region is swept once per output rather than left for the consumer
+// to sweep once per output it asks for, and what the consumer keeps is m
+// statements instead of the region's whole arithmetic. It pays whenever the
+// consumer sweeps more often than the region has outputs.
+//
+// `body()` runs the region and leaves its results in the actives `outputs` points
+// at. `inputs` are the values whose rows are wanted, opened by `visit_active`.
+//
+// ⚠️ THE INPUTS MUST BE AN ANTICHAIN -- none computed from another. A row is
+// attached for each of them, and the consumer's own sweep then carries each row
+// onward through whatever produced it, so an input reachable from another input
+// is counted once directly and again through its parent. Every number stays
+// finite and the rows are quietly too large. The safe cut is the values as they
+// crossed into the region, which is why `body` starts after they are all built.
+//
+// ⚠️ A SHAPE `visit_active` DOES NOT OPEN IS SKIPPED IN SILENCE -- a row that
+// never arrives, reading as an exact zero. The return is what the walk reached.
+//
+// `scratch` is the caller's and is reused: this runs per cohort per stage per
+// step, so an allocation here is an allocation there.
+template <class S, class Body, class... Inputs>
+std::size_t preaccumulate(Body&& body, std::span<S* const> outputs,
+                          std::vector<double>& scratch,
+                          const Inputs&... inputs) {
+  static_assert(CarriesAdjoint<S>,
+                "preaccumulate: a region is taken off a TAPE; a direction has "
+                "none to rewind and carries its rows in the arithmetic");
+  using tape_type = typename S::tape_type;
+  tape_type* tape = tape_type::getActive();
+  if (tape == nullptr) {
+    body();
+    return 0;
+  }
+
+  const typename tape_type::position_type mark = tape->getPosition();
+  body();
+
+  // The slots to harvest, gathered once: the walk is over the caller's shapes
+  // and costs more than reading a vector back.
+  std::vector<typename tape_type::slot_type> slots;
+  slots.clear();
+  auto gather = [&](const S& x) {
+    const typename tape_type::slot_type slot = x.getSlot();
+    if (slot != tape_type::INVALID_SLOT) {
+      slots.push_back(slot);
+    }
+  };
+  odelia::ode::visit_active(gather, inputs...);
+
+  const std::size_t m = outputs.size();
+  const std::size_t n = slots.size();
+  scratch.assign(m * n, 0.0);
+  std::vector<double> values(m, 0.0);
+  for (std::size_t j = 0; j < m; ++j) {
+    values[j] = util::to_passive(*outputs[j]);
+    tape->registerOutput(*outputs[j]);
+    xad::derivative(*outputs[j]) = 1.0;
+    tape->computeAdjointsTo(mark);
+    for (std::size_t i = 0; i < n; ++i) {
+      scratch[j * n + i] = tape->derivative(slots[i]);
+      // Zeroed as it is read: the adjoints accumulate, so the next output would
+      // otherwise carry this one's rows as well as its own.
+      tape->derivative(slots[i]) = 0.0;
+    }
+  }
+
+  tape->resetTo(mark);
+  for (std::size_t j = 0; j < m; ++j) {
+    S out = values[j];
+    for (std::size_t i = 0; i < n; ++i) {
+      const double row = scratch[j * n + i];
+      if (row == 0.0) {
+        continue;
+      }
+      tape->pushAll(&row, &slots[i], 1u);
+    }
+    tape->registerOutput(out);
+    *outputs[j] = std::move(out);
+  }
+  return n;
+}
+
 }
 
 #endif
