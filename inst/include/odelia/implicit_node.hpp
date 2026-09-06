@@ -317,9 +317,16 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
 template <class S, class Body, class... Inputs>
 std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
                           const Inputs&... inputs) {
-  static_assert(CarriesAdjoint<S>,
-                "preaccumulate: a region is taken off a TAPE; a direction has "
-                "none to rewind and carries its rows in the arithmetic");
+  // A direction has no tape to rewind and carries its rows in the arithmetic, so
+  // there the region simply runs. The walk still reports what it reached, so a
+  // caller checking that count needs no branch of its own.
+  if constexpr (!CarriesAdjoint<S>) {
+    body();
+    std::size_t seen = 0;
+    auto count = [&](const S&) { ++seen; };
+    odelia::ode::visit_active(count, inputs...);
+    return seen;
+  } else {
   using tape_type = typename S::tape_type;
   tape_type* tape = tape_type::getActive();
   if (tape == nullptr) {
@@ -373,6 +380,7 @@ std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
     *outputs[j] = std::move(out);
   }
   return n;
+  }
 }
 
 }
