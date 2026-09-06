@@ -634,7 +634,8 @@ void test_a_preaccumulated_region_keeps_every_output_row() {
     tape.registerInput(y);
     tape.newRecording();
     A u, v;
-    auto region = [&]() {
+    static A* outs[2];
+    auto region = [&]() -> std::span<A* const> {
       // Padded so the region is bigger than its output count, which is the only
       // shape this trade is for: multiplying by one is exact, so the padding
       // moves neither value nor row.
@@ -644,14 +645,15 @@ void test_a_preaccumulated_region_keeps_every_output_row() {
       }
       u = pad * x * y;
       v = pad + y * y * y;
+      outs[0] = &u;
+      outs[1] = &v;
+      return std::span<A* const>(outs, 2);
     };
     const std::size_t s0 = tape.getNumStatements();
     if (arm == 0) {
       region();
     } else {
-      A* outs[2] = {&u, &v};
-      reached = odelia::preaccumulate<A>(region, std::span<A* const>(outs, 2),
-                                         scratch, x, y);
+      reached = odelia::preaccumulate<A>(region, scratch, x, y);
     }
     statements[arm] = tape.getNumStatements() - s0;
     A w = 5.0 * u + 7.0 * v;

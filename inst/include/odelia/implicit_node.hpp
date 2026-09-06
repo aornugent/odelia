@@ -297,8 +297,10 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
 // statements instead of the region's whole arithmetic. It pays whenever the
 // consumer sweeps more often than the region has outputs.
 //
-// `body()` runs the region and leaves its results in the actives `outputs` points
-// at. `inputs` are the values whose rows are wanted, opened by `visit_active`.
+// `body()` runs the region and RETURNS the actives it produced -- returns rather
+// than fills, because a region sizes its own outputs and a span taken before it
+// runs points at whatever the sizing moved. `inputs` are the values whose rows
+// are wanted, opened by `visit_active`.
 //
 // ⚠️ THE INPUTS MUST BE AN ANTICHAIN -- none computed from another. A row is
 // attached for each of them, and the consumer's own sweep then carries each row
@@ -313,8 +315,7 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
 // `scratch` is the caller's and is reused: this runs per cohort per stage per
 // step, so an allocation here is an allocation there.
 template <class S, class Body, class... Inputs>
-std::size_t preaccumulate(Body&& body, std::span<S* const> outputs,
-                          std::vector<double>& scratch,
+std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
                           const Inputs&... inputs) {
   static_assert(CarriesAdjoint<S>,
                 "preaccumulate: a region is taken off a TAPE; a direction has "
@@ -327,7 +328,7 @@ std::size_t preaccumulate(Body&& body, std::span<S* const> outputs,
   }
 
   const typename tape_type::position_type mark = tape->getPosition();
-  body();
+  const std::span<S* const> outputs = body();
 
   // The slots to harvest, gathered once: the walk is over the caller's shapes
   // and costs more than reading a vector back.
