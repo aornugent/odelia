@@ -7,6 +7,8 @@
 #include <utility>
 #include <XAD/XAD.hpp>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <span>
 #include <vector>
 
@@ -437,6 +439,15 @@ private:
                  util::to_string(static_cast<int>(active.system.ode_size())) +
                  ", so the two are not at the same insertion");
     }
+    // ⚠️ WHERE A NON-FINITE ADJOINT ENTERS IS NOT RECOVERABLE AFTERWARDS. This
+    // hands its caller one number per input, so a NaN the descent picked up three
+    // thousand steps ago arrives indistinguishable from one the last step made --
+    // and a caller polling for a declared refusal finds none. Set
+    // ODELIA_ADJOINT_TRACE to name the first step whose adjoint is not finite.
+    // Read once and gated on a pointer, so an untraced sweep pays one branch per
+    // step and nothing else.
+    static const char* const trace = std::getenv("ODELIA_ADJOINT_TRACE");
+    bool told = false;
     ode::adjoint_rows lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       // What the run's step k ran from: the row below it, whether that row is a
@@ -450,6 +461,23 @@ private:
       // into empty, so the next step allocates one the same size again. Swapping
       // hands it the row above's, which the sweep refills rather than regrows.
       std::swap(lambda, lambda_in);
+      if (trace != nullptr && !told) {
+        for (size_t m = 0; m < lambda.rows() && !told; ++m) {
+          const std::span<double> row = lambda[m];
+          for (size_t j = 0; j < row.size(); ++j) {
+            if (!std::isfinite(row[j])) {
+              std::fprintf(stderr,
+                           "ODELIA_ADJOINT_TRACE first non-finite: step %zu of "
+                           "[%zu, %zu], t=%.12g, h=%.6g, seed %zu, entry %zu of "
+                           "%zu, value %g\n",
+                           k, k_first, k_last, rec[k - 1].time, rec[k].step_size,
+                           m, j, row.size(), row[j]);
+              told = true;
+              break;
+            }
+          }
+        }
+      }
     }
   }
 
