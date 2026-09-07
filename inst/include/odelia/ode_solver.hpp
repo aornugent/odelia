@@ -8,6 +8,7 @@
 #include <XAD/XAD.hpp>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <span>
 #include <vector>
@@ -448,6 +449,16 @@ private:
     // step and nothing else.
     static const char* const trace = std::getenv("ODELIA_ADJOINT_TRACE");
     bool told = false;
+    // The magnitude the step BEFORE the first non-finite one carried. It is what
+    // separates the two causes a bare NaN cannot: a sweep compounding an
+    // amplification arrives at the bad step already enormous, where a discrete
+    // event arrives at the scale every earlier step held.
+    //
+    // ODELIA_ADJOINT_TRACE=steps prints one line per step instead, which is what
+    // says whether a compounding one grew evenly or in one place. One line per
+    // recorded step is thousands of them, so it is not the default.
+    double worst_before = 0.0;
+    const bool per_step = trace != nullptr && std::strcmp(trace, "steps") == 0;
     ode::adjoint_rows lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       // What the run's step k ran from: the row below it, whether that row is a
@@ -462,21 +473,35 @@ private:
       // hands it the row above's, which the sweep refills rather than regrows.
       std::swap(lambda, lambda_in);
       if (trace != nullptr && !told) {
-        for (size_t m = 0; m < lambda.rows() && !told; ++m) {
+        double worst_here = 0.0;
+        for (size_t m = 0; m < lambda.rows(); ++m) {
           const std::span<double> row = lambda[m];
           for (size_t j = 0; j < row.size(); ++j) {
             if (!std::isfinite(row[j])) {
-              std::fprintf(stderr,
-                           "ODELIA_ADJOINT_TRACE first non-finite: step %zu of "
-                           "[%zu, %zu], t=%.12g, h=%.6g, seed %zu, entry %zu of "
-                           "%zu, value %g\n",
-                           k, k_first, k_last, rec[k - 1].time, rec[k].step_size,
-                           m, j, row.size(), row[j]);
-              told = true;
-              break;
+              if (!told) {
+                std::fprintf(stderr,
+                             "ODELIA_ADJOINT_TRACE first non-finite: step %zu of "
+                             "[%zu, %zu], t=%.12g, h=%.6g, seed %zu, entry %zu of "
+                             "%zu, value %g, worst |lambda| one step above %.6g\n",
+                             k, k_first, k_last, rec[k - 1].time,
+                             rec[k].step_size, m, j, row.size(), row[j],
+                             worst_before);
+                told = true;
+              }
+              continue;
             }
+            const double at = std::fabs(row[j]);
+            if (at > worst_here) worst_here = at;
           }
         }
+        if (per_step) {
+          std::fprintf(stderr,
+                       "ODELIA_ADJOINT_TRACE step %zu of [%zu, %zu] t=%.12g "
+                       "h=%.6g worst |lambda| %.6g\n",
+                       k, k_first, k_last, rec[k - 1].time, rec[k].step_size,
+                       worst_here);
+        }
+        worst_before = worst_here;
       }
     }
   }
