@@ -67,6 +67,32 @@ struct DomainError : std::runtime_error {
   throw DomainError(msg);
 }
 
+// An adjoint that left the range a double can hold: neither a bug nor a state the
+// model has no meaning for, and so neither of the two above.
+//
+// ⚠️ A SWEEP IS A PRODUCT OF STEP JACOBIANS AND HAS NO ERROR CONTROL. It can pass
+// far outside the range of the answer it returns and come back: measured on a
+// stand whose gradient is order 1e+03, the descent reaches 4.99978e+281 and is
+// back to 3.69e+46 one range later. So a driver that answers does so with margin
+// rather than by staying small, and one that does not overflows on an
+// INTERMEDIATE while every number it computes is right.
+//
+// Its own type because the consumer's answer is a REFUSAL of every metric --
+// what overflowed is an intermediate of one recording spanning every cohort, so
+// nothing finer has a component to attribute it to. A consumer catching
+// runtime_error broadly would read a genuine length mismatch in the sweep the
+// same way, which is the distinction DomainError above exists to keep.
+struct AdjointRangeError : std::runtime_error {
+  explicit AdjointRangeError(const std::string &msg) : std::runtime_error(msg) {}
+};
+
+// As stop(), for a sweep that left the representable range. Prefer a message
+// naming the step, the entry and the magnitude the step above carried: the last
+// of those is what says whether the descent compounded into it or met it.
+[[noreturn]] inline void stop_adjoint_range(const std::string &msg) {
+  throw AdjointRangeError(msg);
+}
+
 // Not an R warning: nothing in the solver core may assume an R session exists.
 // Callers that need one should raise it from their own R-facing code. Uses
 // fprintf rather than std::cerr to keep <iostream>, and its per-translation-unit

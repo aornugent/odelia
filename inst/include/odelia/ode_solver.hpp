@@ -440,23 +440,19 @@ private:
                  util::to_string(static_cast<int>(active.system.ode_size())) +
                  ", so the two are not at the same insertion");
     }
-    // ⚠️ WHERE A NON-FINITE ADJOINT ENTERS IS NOT RECOVERABLE AFTERWARDS. This
-    // hands its caller one number per input, so a NaN the descent picked up three
-    // thousand steps ago arrives indistinguishable from one the last step made --
-    // and a caller polling for a declared refusal finds none. Set
-    // ODELIA_ADJOINT_TRACE to name the first step whose adjoint is not finite.
-    // Read once and gated on a pointer, so an untraced sweep pays one branch per
-    // step and nothing else.
-    static const char* const trace = std::getenv("ODELIA_ADJOINT_TRACE");
-    bool told = false;
-    // The magnitude the step BEFORE the first non-finite one carried. It is what
-    // separates the two causes a bare NaN cannot: a sweep compounding an
-    // amplification arrives at the bad step already enormous, where a discrete
-    // event arrives at the scale every earlier step held.
+    // ⚠️ THE DESCENT STOPS AT THE FIRST NON-FINITE ENTRY, and must not be changed
+    // to carry it. This hands its caller one number per input, so an overflow the
+    // descent picked up three thousand steps ago would arrive indistinguishable
+    // from a NaN the last step made -- and a caller polling for a declared
+    // refusal would find none, which is the one failure a gradient's contract
+    // forbids. Raised as AdjointRangeError, which the consumer turns into a
+    // refusal of every metric.
     //
-    // ODELIA_ADJOINT_TRACE=steps prints one line per step instead, which is what
-    // says whether a compounding one grew evenly or in one place. One line per
-    // recorded step is thousands of them, so it is not the default.
+    // ODELIA_ADJOINT_TRACE=steps prints the magnitude at every step, which is
+    // what says whether the descent compounded into the failure or met it. One
+    // line per recorded step is thousands of them, so it is not the default; the
+    // magnitude one step above is in the message either way.
+    static const char* const trace = std::getenv("ODELIA_ADJOINT_TRACE");
     double worst_before = 0.0;
     const bool per_step = trace != nullptr && std::strcmp(trace, "steps") == 0;
     ode::adjoint_rows lambda_in;
@@ -472,37 +468,37 @@ private:
       // into empty, so the next step allocates one the same size again. Swapping
       // hands it the row above's, which the sweep refills rather than regrows.
       std::swap(lambda, lambda_in);
-      if (trace != nullptr && !told) {
-        double worst_here = 0.0;
-        for (size_t m = 0; m < lambda.rows(); ++m) {
-          const std::span<double> row = lambda[m];
-          for (size_t j = 0; j < row.size(); ++j) {
-            if (!std::isfinite(row[j])) {
-              if (!told) {
-                std::fprintf(stderr,
-                             "ODELIA_ADJOINT_TRACE first non-finite: step %zu of "
-                             "[%zu, %zu], t=%.12g, h=%.6g, seed %zu, entry %zu of "
-                             "%zu, value %g, worst |lambda| one step above %.6g\n",
-                             k, k_first, k_last, rec[k - 1].time,
-                             rec[k].step_size, m, j, row.size(), row[j],
-                             worst_before);
-                told = true;
-              }
-              continue;
-            }
-            const double at = std::fabs(row[j]);
-            if (at > worst_here) worst_here = at;
+      double worst_here = 0.0;
+      for (size_t m = 0; m < lambda.rows(); ++m) {
+        const std::span<double> row = lambda[m];
+        for (size_t j = 0; j < row.size(); ++j) {
+          if (!std::isfinite(row[j])) {
+            util::stop_adjoint_range(
+                "the adjoint left the representable range at step " +
+                util::to_string(k) + " of [" + util::to_string(k_first) + ", " +
+                util::to_string(k_last) + "], t=" +
+                util::format_double(rec[k - 1].time) + ", h=" +
+                util::format_double(rec[k].step_size) + ": seed " +
+                util::to_string(m) + "'s entry " + util::to_string(j) + " of " +
+                util::to_string(row.size()) + " is " +
+                util::format_double(row[j]) + ", where the step above carried " +
+                util::format_double(worst_before) +
+                ". A descent is a product of step Jacobians and has no error "
+                "control, so it can pass outside the range of the answer it "
+                "returns; this one did not come back.");
           }
+          const double at = std::fabs(row[j]);
+          if (at > worst_here) worst_here = at;
         }
-        if (per_step) {
-          std::fprintf(stderr,
-                       "ODELIA_ADJOINT_TRACE step %zu of [%zu, %zu] t=%.12g "
-                       "h=%.6g worst |lambda| %.6g\n",
-                       k, k_first, k_last, rec[k - 1].time, rec[k].step_size,
-                       worst_here);
-        }
-        worst_before = worst_here;
       }
+      if (per_step) {
+        std::fprintf(stderr,
+                     "ODELIA_ADJOINT_TRACE step %zu of [%zu, %zu] t=%.12g "
+                     "h=%.6g worst |lambda| %.6g\n",
+                     k, k_first, k_last, rec[k - 1].time, rec[k].step_size,
+                     worst_here);
+      }
+      worst_before = worst_here;
     }
   }
 
