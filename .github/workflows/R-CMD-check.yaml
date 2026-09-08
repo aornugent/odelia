@@ -6,6 +6,14 @@ on:
       - main
       - master
       - develop
+      # ⚠️ Feature branches too, and this is not a convenience. With the filter
+      # naming only the long-lived branches, a push to a feature branch ran
+      # nothing, so every failure on it waited for the pull request and arrived
+      # in bulk. phylloptim's cpp-tests.yml records the same defect from the
+      # other direction: it named a branch this repo does not have, and sat
+      # unexercised from the day it was added until the first pull request.
+      - 'ad/**'
+      - 'claude/**'
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
