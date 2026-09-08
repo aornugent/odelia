@@ -15,6 +15,16 @@ namespace ode {
 // carrying a directional derivative and no tape. Nest it for a curvature -- a
 // tangent of a tangent -- which is the only second-order scalar this family
 // uses.
+//
+// ⚠️ NEVER NEST A TANGENT ABOVE AN ADJOINT, and never fuse an expression at a
+// nested scalar. `BinaryExpr` stores its operands and its cached value BY VALUE,
+// and `value()` and `derivative()` return the scalar by value, so at an active
+// inner scalar every one of those copies is a recorded statement. Three kernels
+// that cost 31 statements at the working scalar cost 566 nested, which is 18.3
+// times as much, and the growth is SUPERLINEAR in expression depth: one fused
+// nest measured 160 statements against 99 for the same arithmetic written flat.
+// Where a nested scalar is unavoidable, flatten the expression into named
+// intermediates rather than fusing it into one.
 template <typename T = double>
 using tangent_scalar = typename xad::fwd<T>::active_type;
 

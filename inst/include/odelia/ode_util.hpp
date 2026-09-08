@@ -32,6 +32,15 @@ inline bool is_finite(double x) {
 // nested FReal<AReal<double>>, where it yields AReal<double>; this recurses until
 // it bottoms out at double. `value` is found by argument-dependent lookup at the
 // point of use, so this header needs no XAD include.
+// The value of an active scalar with every derivative layer removed.
+//
+// ⚠️ EVERY LAYER, NOT ONE. At a nested scalar -- a tangent above an adjoint, which
+// is how a curvature is taken -- this strips the inner direction as well as the
+// outer, and it does so silently because the result is a plain double either way.
+// The correction `x - to_passive(x)` that `implicit_node.hpp` records is therefore
+// zero in value at one layer and zero in EVERY derivative at two. Measured on a
+// mixed second derivative: exactly 0.0 against a differenced 2.97e-03. A second
+// derivative that needs this has to strip one layer by hand.
 inline double to_passive(double x) { return x; }
 template <typename T>
 inline double to_passive(const T& x) { return to_passive(value(x)); }

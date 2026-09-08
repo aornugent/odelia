@@ -174,6 +174,12 @@ struct active_system {
   // Declared first, so the destructor's tape is initialised before the System it
   // releases. Read back rather than handed to a transpose beside the System: the
   // two arriving separately is a pairing a caller can get wrong.
+  //
+  // ⚠️ A POINTER TO A TAPE SOMEONE ELSE HOLDS, NEVER A TAPE OF ITS OWN.
+  // Constructing a `Tape` reserves 192 MiB, so a tape built per placement or per
+  // recording is the dominant cost of anything that does it. A private tape is
+  // affordable only as a member held for a whole run, and reusing one costs
+  // 0.14 us per cycle -- the cycle was never the expense.
   adjoint_tape<double>* tape_;
   adjoint_tape<double>& tape() const { return *tape_; }
 

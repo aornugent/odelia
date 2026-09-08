@@ -34,6 +34,15 @@ using state_type = std::vector<typename System::value_type>;
 // what a System is rebound to for a gradient, and the type its seeds and recorded values
 // have. T is a parameter so the layer can sit on another active scalar; at the default
 // it sits on double, which is the scalar an ordinary solve is differentiated from.
+//
+// ⚠️ DO NOT WIDEN THIS TO CARRY SEVERAL SEEDS AT ONCE. `xad::adj` takes a second,
+// defaulted template argument for the derivative width, so `xad::adj<T, 3>` would
+// sweep three metrics in one walk and is one line to write. It does not pay:
+// widening triples the bytes the derivative array occupies, and the cache gives
+// back more than the shared traversal saves. Measured at width three, from 1.15x
+// SLOWER to 0.97x, decided only by whether the array still fits; width four is
+// slower than four separate walks everywhere. Every width agrees bit for bit, so
+// what is ruled out is the cost and never the answer.
 template <typename T = double>
 using active_scalar = typename xad::adj<T>::active_type;
 
