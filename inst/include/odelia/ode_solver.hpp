@@ -444,8 +444,8 @@ private:
     // to carry it. This hands its caller one number per input, so an overflow the
     // descent picked up three thousand steps ago would arrive indistinguishable
     // from a NaN the last step made -- and a caller polling for a declared
-    // refusal would find none, which is the one failure a gradient's contract
-    // forbids. Raised as AdjointRangeError, which the consumer turns into a
+    // refusal would find none, which is the one failure this gradient must never
+    // produce. Raised as AdjointRangeError, which the consumer turns into a
     // refusal of every metric.
     //
     // ODELIA_ADJOINT_TRACE=steps prints the magnitude at every step, which is

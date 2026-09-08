@@ -6,8 +6,8 @@
 // and this runs the dispatch rather than reading it, because the failure it
 // describes has no error to look for.
 //
-// visit_active used to open a std::pair by name. Nothing ever handed it one, so
-// that arm went; a pair now reads out beside the aggregate it used to privilege.
+// A std::pair reads out through the same aggregate path as everything else and
+// gets no arm of its own; nothing in the family hands visit_active a bare pair.
 //
 //   make probe_visit_active && ./probe_visit_active
 

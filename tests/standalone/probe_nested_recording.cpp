@@ -52,8 +52,6 @@
 using active = xad::AReal<double>;
 using tape_t = xad::Tape<double>;
 
-// ---------------------------------------------------------------- introspection
-
 struct Status
 {
     long stmts = -1, ops = -1, total_der = -1, der_alloc = -1, curr_der = -1, act_max = -1,
@@ -111,8 +109,6 @@ static void row(const char* label, tape_t& tape, bool with_probe = true)
                 "ops=%-8ld probeSlot=%ld\n",
                 label, st.curr_der, st.next_idx, st.total_der, st.der_alloc, st.stmts, st.ops, p);
 }
-
-// ------------------------------------------------------------------ experiment 1
 
 static void exp1()
 {
@@ -177,8 +173,6 @@ static void exp1()
         row("after  deactivate()", tape, false);
     }
 }
-
-// ------------------------------------------------------------------ experiment 2
 
 static const int NM = 8;
 
@@ -281,8 +275,6 @@ static void exp2(bool use_clear_all)
     }
 }
 
-// ------------------------------------------------------------------ experiment 3
-
 static void exp3(int nrec, int ntmp)
 {
     std::printf("=== EXP 3: slot growth under newRecording(), %d temporaries/recording ===\n",
@@ -323,8 +315,6 @@ static void exp3(int nrec, int ntmp)
         }
     }
 }
-
-// ------------------------------------------------------------------ experiment 4
 
 static void exp4(int nmem, int nrec)
 {
@@ -375,7 +365,6 @@ static void exp4(int nmem, int nrec)
                 t_noslot, 1e9 * t_noslot / double(n));
 }
 
-// ------------------------------------------------------------------ experiment 5
 // THE NESTED-RECORDING HYPOTHESIS.
 //
 //   m_i = (i+1) * s[i%3] + 0.5 * p0        (i = 0..5, members WRITTEN each nest)
@@ -646,7 +635,6 @@ static int exp5_run(const Exp5Opts& o)
     return nwrong;
 }
 
-// ------------------------------------------------------------------ experiment 6
 // The same idea written with the public getPosition() / resetTo() pair instead of
 // a nested recording.
 
@@ -744,8 +732,6 @@ static void exp6(int nrec, int ntmp)
     tape.deactivate();
 }
 
-
-// ------------------------------------------------------------------ experiment 7
 // VARIANT 3: run the whole nested loop INSIDE one real checkpoint callback, where
 // prevMax_ is a valid slot number, against UNMODIFIED vendored XAD.
 
@@ -966,8 +952,6 @@ static void exp7(int nrec, int ntmp, bool verbose, bool zero_outer, bool cb_thro
     }
     tape.deactivate();
 }
-
-// ---------------------------------------------------------------------- driver
 
 int main(int argc, char** argv)
 {

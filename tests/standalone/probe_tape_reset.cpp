@@ -47,7 +47,7 @@ using ad_t     = xad::adj<double>;
 using active   = ad_t::active_type;
 using tape_t   = ad_t::tape_type;
 
-// ---- the pattern under test -------------------------------------------------
+// The pattern under test.
 template <typename T>
 struct Sys
 {

@@ -120,11 +120,8 @@ compile_implicit_value_interface <- function() {
     // value at the root is exactly zero, so what comes back can only be the quotient
     // the theorem gives and the chain through p.
     //
-    // This used to call `implicit_root`, which took those slopes as supplied rows.
-    // That form had one consumer in the whole family -- an interior collar in
-    // phylloptim -- and it now closes on its residual like every other kind, so the
-    // supplied-row form is gone and this exercises the same theorem through
-    // implicit_value.
+    // Every kind closes on its residual, so this exercises the theorem through
+    // implicit_value rather than through supplied slope rows.
     // [[Rcpp::export]]
     Rcpp::List implicit_root_gradient(double p, double residual_slope,
                                       double dR_du, double dR_dv, double dy_dp) {

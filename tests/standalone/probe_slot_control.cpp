@@ -36,7 +36,6 @@ void check(const char* what, double got, double want, double tol = 1e-12) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 1. A statement written by hand, with its operations in any order.
 //
 // A statement is (where its operations start, the slot it writes) and the sweep
@@ -68,7 +67,6 @@ void hand_written_statement() {
                 std::size_t(tape.getNumStatements()), std::size_t(tape.getNumOperations()));
 }
 
-// ---------------------------------------------------------------------------
 // 2. A callback writing adjoints into slots of its choosing, mid-sweep.
 //
 // insertCallback puts a marker statement on the tape. When the sweep reaches it,
@@ -115,7 +113,6 @@ void callback_writes_slots() {
     std::printf("  callback ran %d time(s)\n", supplied.calls);
 }
 
-// ---------------------------------------------------------------------------
 // 3. One recording, swept once per seed -- which is what the stand gradient does
 //    for each census metric.
 //
@@ -183,7 +180,6 @@ void sweep_the_same_recording_twice() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 4. Rewinding the slot counter with nothing but the public API.
 //
 // unregisterVariable rewinds the counter only for the slot it issued last, so a
