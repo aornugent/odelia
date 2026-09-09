@@ -131,5 +131,3 @@ RODAS is planned (odelia issue #35).
 - For models with **external time-varying forcing**, and how to define your own
   ODE system in C++, see
   [Building your own model with external drivers](https://traitecoevo.github.io/odelia/articles/leaf-thermal.html).
-- To recover parameters from data using exact gradients, see
-  `vignette("parameter-fitting", package = "odelia")`.
