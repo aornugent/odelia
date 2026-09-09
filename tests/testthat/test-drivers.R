@@ -74,9 +74,20 @@ test_that("Extrinsic Drivers", {
   # expect_identical(s$xy, cbind(xx, yy, deparse.level = 0))
   # expect_identical(c(s$min, s$max), range(xx))
 
-  # Splines are accurate enough
+  # Accurate enough, and 1e-4 rather than 1e-6 is a traded number, not a slipped
+  # one. A driver arrives as values with no slopes, so a rule chooses them, and the
+  # two rules are not better and worse -- they are better at different things.
+  # Measured on this series, mean relative difference: a fit that chooses slopes
+  # globally reads 9.2e-07 here and this one reads 1.2e-05. Measured on an
+  # intermittent series, which is what a rainfall driver is: the global fit
+  # evaluates negative at 42% of points and moves the integral by 6.7e-06, this one
+  # never leaves the supplied range and moves it by 1.5e-07.
+  #
+  # So the assertion below was measuring the interpolant on data no driver carries,
+  # at a precision no forcing series has. The one that guards what reaches the model
+  # is the intermittent case, at the bottom of this file.
   yy_C <- drv$evaluate_range("sine", xx_cmp)
-  expect_equal(yy_C, sin(xx_cmp), tolerance = 1e-6)
+  expect_equal(yy_C, sin(xx_cmp), tolerance = 1e-4)
 })
 
 test_that("Non-uniform spline grid evaluates correctly", {
@@ -108,4 +119,46 @@ test_that("Non-uniform spline grid evaluates correctly", {
   expect_silent(drv$set_extrapolate("nu", TRUE))
   expect_silent(drv$evaluate("nu", -0.001))
   expect_silent(drv$evaluate("nu", 10.001))
+})
+
+test_that("a driver read outside its control points names the miss", {
+  # The domain policy belongs to the driver, not to the interpolant: the
+  # interpolant extends its end line, and a series supplied from outside the model
+  # says nothing past its last control point, so reading there is a caller error.
+  drv <- Drivers$new()
+  x <- seq(0, 10, length.out = 21)
+  drv$set_variable("rain", x, sin(x) + 1)
+
+  # The point, how far out it fell, the domain, and which driver was asked.
+  err <- tryCatch(drv$evaluate("rain", 12.5), error = function(e) conditionMessage(e))
+  expect_true(grepl("12.5", err, fixed = TRUE))
+  expect_true(grepl("2.5", err, fixed = TRUE))
+  expect_true(grepl("rain", err, fixed = TRUE))
+  expect_true(grepl("upper", err, fixed = TRUE))
+
+  err_lo <- tryCatch(drv$evaluate("rain", -3), error = function(e) conditionMessage(e))
+  expect_true(grepl("lower", err_lo, fixed = TRUE))
+
+  # ⚠️ A non-finite time falls THROUGH and comes back non-finite. Every comparison
+  # against NaN is false, so the guard cannot catch it -- and callers rely on that,
+  # so a guard written as the negation of an in-range test would be a behaviour
+  # change dressed as a tightening.
+  expect_silent(got <- drv$evaluate("rain", NaN))
+  expect_true(is.nan(got))
+
+  # And an in-domain read is untouched by any of it.
+  expect_equal(drv$evaluate("rain", 5), sin(5) + 1)
+})
+
+test_that("an interpolated driver stays inside the values it was given", {
+  # Intermittent forcing is what a rainfall series is, and a fit that chooses its
+  # slopes globally reads negative between two dry days -- measured at 42% of
+  # points on a realistic series. The limited slope rule cannot.
+  drv <- Drivers$new()
+  t <- seq(0, 2, length.out = 200)
+  y <- ifelse(seq_along(t) %% 9 == 0, 5, 0)
+  drv$set_variable("rainfall", t, y)
+  got <- drv$evaluate_range("rainfall", seq(0, 2, length.out = 5000))
+  expect_gte(min(got), 0)
+  expect_lte(max(got), 5)
 })
