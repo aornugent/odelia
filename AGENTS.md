@@ -70,8 +70,13 @@ non-obvious choice — and nothing else. The bar the AD surface is held to:
   the file — the physics is the point. Give an example a real applied domain, not an
   abstract stand-in.
 
-`AUTODIFF.md` is the reference for the AD surface a System implements; `ARCHITECTURE.md`
-for the XAD `Tape` link. Don't hand-edit generated files (`R/RcppExports.R`,
+The contract a System implements to be differentiable is stated as concepts in
+`inst/include/odelia/ode_interface.hpp` -- `Rebindable`, `HasOdeTime`,
+`SolvesForValues` -- so a System that does not satisfy it fails to compile naming
+the requirement it missed. Read those rather than any prose account: a prose copy
+of a compiler-checked contract drifts, and the one this repository used to carry
+listed a member that had been removed. `ARCHITECTURE.md` covers the XAD `Tape`
+link. Don't hand-edit generated files (`R/RcppExports.R`,
 `src/RcppExports.cpp`, `NAMESPACE`, `man/`).
 
 ## Plant family
