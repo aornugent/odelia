@@ -25,8 +25,21 @@ namespace ode {
 // nest measured 160 statements against 99 for the same arithmetic written flat.
 // Where a nested scalar is unavoidable, flatten the expression into named
 // intermediates rather than fusing it into one.
+//
+// REFUSED HERE RATHER THAN DESCRIBED, because describing it did not hold: the
+// leaf's dA/dci and dC/dsigma were taken this way and cost 521 tape statements
+// against the 17 of the kernel they differentiate. A slope wanted AT an adjoint
+// scalar is taken through the kernel at double and handed over as supplied rows
+// -- `record_with_derivatives`, one statement whatever the row count.
+template <typename T>
+struct tangent_over {
+  static_assert(!xad::ExprTraits<T>::isReverse,
+                "a tangent above an adjoint records every operand copy; take "
+                "the slope through the kernel at double and supply the row");
+  using type = typename xad::fwd<T>::active_type;
+};
 template <typename T = double>
-using tangent_scalar = typename xad::fwd<T>::active_type;
+using tangent_scalar = typename tangent_over<T>::type;
 
 // A scalar that carries a direction rather than an adjoint accumulator.
 template <typename S>
