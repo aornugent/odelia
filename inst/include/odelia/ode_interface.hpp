@@ -74,7 +74,7 @@ using adjoint_tape = typename active_scalar<T>::tape_type;
 // std::pair on a recorded path declares for_each_active -- hermite_interpolator
 // and with_slope both do, which is why with_slope lives here rather than in a
 // model: the obligation is this library's.
-// tests/standalone/probe_visit_active.cpp reads out which shapes reach the
+// notes/probes/probe_visit_active.cpp reads out which shapes reach the
 // visitor.
 template <class F, class T>
 void visit_active(F& f, T& x) {

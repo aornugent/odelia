@@ -27,3 +27,6 @@ tests/standalone/probe_*
 # Agent worktrees. A worktree checked out here records as a gitlink with no
 # .gitmodules entry, which clones as an empty directory nothing can populate.
 .claude/worktrees/
+notes/probes/probe_*
+!notes/probes/probe_*.cpp
+tests/standalone/r_free

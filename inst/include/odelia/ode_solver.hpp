@@ -69,7 +69,6 @@ public:
 
   // The control this solver was built with, so a driver builds the active solver
   // with the same integration settings.
-  OdeControl get_control() const { return control_; }
 
   // Synchronize internal ODE buffers from the current system state without
   // resetting solver history/step-size state.

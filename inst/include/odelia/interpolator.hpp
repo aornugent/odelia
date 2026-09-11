@@ -540,11 +540,8 @@ public:
   void init(const std::vector<double>& x_, const std::vector<S>& y_) {
     xs_ = x_; ys_ = y_; initialise();
   }
-  void add_point(double xi, S yi) { xs_.push_back(xi); ys_.push_back(yi); }
   void initialise() { base::init(xs_, ys_, monotone_slopes(xs_, ys_)); }
   void clear() { xs_.clear(); ys_.clear(); base::clear(); }
-  std::vector<double> get_x() const { return xs_; }
-  std::vector<S> get_y() const { return ys_; }
   template <class U> S deriv(const U& u) const { return base::slope(u); }
   // basic_interpolator returned +/-inf on an empty spline and plant's
   // resource_spline calls max() on a freshly constructed (empty) field, so an
@@ -554,11 +551,6 @@ public:
   }
   double max() const {
     return base::size() > 0 ? base::max() : -std::numeric_limits<double>::infinity();
-  }
-  std::vector<S> r_eval(std::vector<double> u) const {
-    std::vector<S> out; out.reserve(u.size());
-    for (double ui : u) out.push_back(base::eval(ui));
-    return out;
   }
 private:
   std::vector<double> xs_;

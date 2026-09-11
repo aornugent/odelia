@@ -684,6 +684,7 @@ void test_a_preaccumulated_region_keeps_every_output_row() {
         "against a region an order larger left on the tape");
   std::printf("       (on the tape %zu statements, preaccumulated %zu)\n",
               statements[0], statements[1]);
+}
 
 // --- The same bargain on the pinned path (plant#642) ------------------------
 //
