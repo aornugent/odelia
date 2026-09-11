@@ -174,6 +174,10 @@ public:
 
   bool is_initialised() const { return initialised; }
   std::size_t size() const { return x.size(); }
+  // ⚠️ NOT GUARDED, and a consumer that may read a domain before filling one owes
+  // its own check: these are `x.front()` and `x.back()` on an empty vector.
+  // `eval` checks, because it can afford to; these two sit inside a caller's own
+  // bound test, which is where the hot path reads them.
   double min() const { return x.front(); }
   double max() const { return x.back(); }
   const std::vector<double>& knots() const { return x; }
@@ -529,38 +533,6 @@ nodes_and_data<S> refine(Function value_and_slope, double a, double b,
   return gather();
 }
 
-// --- Compatibility surface for callers written against basic_interpolator. ---
-// phylloptim is the only consumer: it names `Interpolator` at its three
-// vulnerability curves. plant names none of the three aliases and holds
-// hermite_interpolator directly. Slopes are chosen by monotone_slopes wherever
-// the caller supplies values alone.
-template <typename S, int Order = 3>
-class compat_interpolator : public hermite_interpolator<S, Order> {
-  using base = hermite_interpolator<S, Order>;
-public:
-  using base::init;
-  void init(const std::vector<double>& x_, const std::vector<S>& y_) {
-    xs_ = x_; ys_ = y_; initialise();
-  }
-  void initialise() { base::init(xs_, ys_, monotone_slopes(xs_, ys_)); }
-  void clear() { xs_.clear(); ys_.clear(); base::clear(); }
-  template <class U> S deriv(const U& u) const { return base::slope(u); }
-  // basic_interpolator returned +/-inf on an empty spline, so a caller that
-  // reads a domain before filling one gets a sentinel rather than
-  // `x.back()` on an empty vector. The base does NOT guard these -- a consumer
-  // holding hermite_interpolator directly owns that check itself.
-  double min() const {
-    return base::size() > 0 ? base::min() : std::numeric_limits<double>::infinity();
-  }
-  double max() const {
-    return base::size() > 0 ? base::max() : -std::numeric_limits<double>::infinity();
-  }
-private:
-  std::vector<double> xs_;
-  std::vector<S> ys_;
-};
-template <typename S> using basic_interpolator = compat_interpolator<S, 3>;
-using Interpolator = basic_interpolator<double>;
 }
 }
 
