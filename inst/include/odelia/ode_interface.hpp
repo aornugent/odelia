@@ -78,6 +78,19 @@ using adjoint_tape = typename active_scalar<T>::tape_type;
 // visitor.
 template <class F, class T>
 void visit_active(F& f, T& x) {
+  // ⚠️ A TYPE THAT DECLARES for_each_active AND CANNOT BE WALKED CONST IS A
+  // SILENT ZERO, not a compile error, because the arm below simply stops
+  // matching. The rewinding forms in implicit_node.hpp hand their inputs over
+  // const, so such a type reaches one of them and contributes no rows at all.
+  // Refused here instead: give the type a const overload beside its non-const
+  // one, as with_slope and hermite_interpolator do.
+  static_assert(
+      !(std::is_const_v<T> &&
+        requires(std::remove_const_t<T>& mutable_x) { mutable_x.for_each_active(f); } &&
+        !requires { x.for_each_active(f); }),
+      "visit_active: this type declares for_each_active but cannot be walked "
+      "through a const reference, so every active scalar it holds would be "
+      "skipped in silence. Add a const overload of for_each_active.");
   if constexpr (requires { x.for_each_active(f); }) {
     x.for_each_active(f);
   } else if constexpr (requires { x.begin(); x.end(); }) {
