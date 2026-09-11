@@ -211,14 +211,23 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
 // `for_each_active`. They are the residual's own inputs, so a caller hands over
 // what it already holds rather than assembling a list.
 //
-// ⚠️ A SHAPE `visit_active` DOES NOT OPEN IS SKIPPED IN SILENCE, and here that is
-// a row that never arrives -- an exact zero in a column, which is the signature
-// of a missing accumulator rather than of insensitivity. `reached` is how many
-// the walk found, for a caller that can check it against what it handed over.
+// ⚠️ A SHAPE `visit_active` DOES NOT OPEN IS SKIPPED IN SILENCE, AND THE COLUMN
+// IT COSTS DOES NOT COME BACK ZERO. The sweep below deposits the missing row on
+// that input's slot, and nothing here can reach it to clear it: XAD's
+// `clearDerivativesAfter` reaches only slots created after the mark, and an
+// input predates it by construction. So the consumer's own sweep adds to what
+// was left. Measured on a region whose true dw/dy is 27, with y undeclared: the
+// answer is 11, not 7 and not 0.
 //
-// ⚠️ THE ADJOINTS ARE ZEROED AS THEY ARE READ, because they accumulate: a second
-// solve against the same inputs would otherwise add to the first, and every row
-// after the first would be wrong with every number still finite.
+// `reached` is therefore the ONLY defence, and a caller that does not compare it
+// against what it handed over has none. It is the count of inputs the walk
+// found.
+//
+// ⚠️ THE INPUTS' ADJOINTS ARE HELD AND PUT BACK, not zeroed, and the row is the
+// difference. They accumulate on the caller's tape, so a second solve against the
+// same inputs would otherwise add to the first -- and a caller that had already
+// swept something into one of those slots would see its own answer reported as
+// this node's row, and then destroyed.
 template <class S, class Residual, class... Inputs>
 S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
                  const Inputs&... inputs) {
@@ -251,6 +260,30 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
       return S(y_star);
     }
     const typename tape_type::position_type mark = tape->getPosition();
+
+    // ⚠️ THE INPUTS' ADJOINTS ARE HELD AND PUT BACK, NOT ZEROED. The sweep below
+    // runs on the CALLER'S tape and ACCUMULATES, so a slot the caller has already
+    // swept something into arrives non-zero -- and reading it afterwards reports
+    // the caller's own answer as this residual's row. Measured on a region whose
+    // true row is 12, against a caller that had left 9 on the same slot: the
+    // harvest read 21, and zeroing afterwards destroyed the 9 as well.
+    //
+    // Gathered before the sweep for the same reason: the slot list has to be the
+    // one that was zeroed, not one read back out of a tape the sweep has touched.
+    std::vector<typename tape_type::slot_type> slots;
+    auto gather = [&](const S& x) {
+      const typename tape_type::slot_type slot = x.getSlot();
+      if (slot != tape_type::INVALID_SLOT) {
+        slots.push_back(slot);
+      }
+    };
+    odelia::ode::visit_active(gather, inputs...);
+    std::vector<double> held(slots.size());
+    for (std::size_t i = 0; i < slots.size(); ++i) {
+      held[i] = tape->derivative(slots[i]);
+      tape->derivative(slots[i]) = 0.0;
+    }
+
     {
       S corr = F(S(y_star)) / dFdy;
       tape->registerOutput(corr);
@@ -261,27 +294,22 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
     // them rather than the residual's own.
     tape->resetTo(mark);
     S out = y_star;
-    std::size_t seen = 0;
     // Read and cleared through the TAPE, by slot, so an input can arrive const --
     // which is how every caller already holds the things a residual reads.
-    auto harvest = [&](const S& x) {
-      const typename tape_type::slot_type slot = x.getSlot();
-      if (slot == tape_type::INVALID_SLOT) {
-        return;
-      }
-      ++seen;
-      const double adj = tape->derivative(slot);
-      tape->derivative(slot) = 0.0;
-      if (adj == 0.0) {
-        return;
+    for (std::size_t i = 0; i < held.size(); ++i) {
+      const double adj = tape->derivative(slots[i]);
+      // The caller's own adjoint goes back, because this node had no business
+      // taking it: what the residual deposited is adj - held[i].
+      tape->derivative(slots[i]) = held[i];
+      const double row = -(adj - held[i]);
+      if (row == 0.0) {
+        continue;
       }
       // -(dF/dp)/(dF/dy) is the theorem; dF/dy divided the residual above.
-      const double row = -adj;
-      tape->pushAll(&row, &slot, 1u);
-    };
-    odelia::ode::visit_active(harvest, inputs...);
+      tape->pushAll(&row, &slots[i], 1u);
+    }
     tape->registerOutput(out);
-    reached = seen;
+    reached = slots.size();
     return out;
   }
 }
@@ -352,6 +380,15 @@ std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
   };
   odelia::ode::visit_active(gather, inputs...);
 
+  // Held and put back, for the reason implicit_value gives: the sweeps below run
+  // on the CALLER'S tape and accumulate, so a slot it has already swept into
+  // arrives non-zero and would be read as this region's row.
+  std::vector<double> held(slots.size());
+  for (std::size_t i = 0; i < slots.size(); ++i) {
+    held[i] = tape->derivative(slots[i]);
+    tape->derivative(slots[i]) = 0.0;
+  }
+
   const std::size_t m = outputs.size();
   const std::size_t n = slots.size();
   scratch.assign(m * n, 0.0);
@@ -376,6 +413,9 @@ std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
   }
 
   tape->resetTo(mark);
+  for (std::size_t i = 0; i < n; ++i) {
+    tape->derivative(slots[i]) = held[i];
+  }
   for (std::size_t j = 0; j < m; ++j) {
     S out = values[j];
     for (std::size_t i = 0; i < n; ++i) {

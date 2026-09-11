@@ -17,7 +17,7 @@ WARN    ?= -Wall -Wextra
 INCLUDES = -I../../inst/include
 HEADERS  = $(wildcard ../../inst/include/odelia/*.hpp)
 
-PROBES = probe_width probe_implicit_tangent probe_tape_reset \
+PROBES = probe_preaccumulate_rows probe_width probe_implicit_tangent probe_tape_reset \
          probe_nested_recording probe_slot_control probe_trapezium \
          probe_visit_active
 
@@ -74,3 +74,9 @@ probe_visit_active: probe_visit_active.cpp $(HEADERS)
 
 clean:
 	rm -f $(PROBES)
+
+# Two questions about what a rewound region leaves behind on the caller's tape:
+# whether the harvest reports the caller's own adjoint as the region's row, and
+# what an input left out of the declared list actually costs.
+probe_preaccumulate_rows: probe_preaccumulate_rows.cpp ../../src/Tape.cpp $(HEADERS)
+	$(CXX) $(CXXSTD) $(OPT) $(WARN) $(INCLUDES) $< ../../src/Tape.cpp -o $@
