@@ -34,9 +34,10 @@ inline bool is_finite(double x) {
 // point of use, so this header needs no XAD include.
 // The value of an active scalar with every derivative layer removed.
 //
-// ⚠️ EVERY LAYER, NOT ONE. At a nested scalar -- a tangent above an adjoint, which
-// is how a curvature is taken -- this strips the inner direction as well as the
-// outer, and it does so silently because the result is a plain double either way.
+// ⚠️ EVERY LAYER, NOT ONE. At a nested scalar -- a tangent above a tangent, which
+// is how a curvature is taken, since tangent.hpp refuses a tangent above an
+// adjoint -- this strips the inner direction as well as the outer, and it does so
+// silently because the result is a plain double either way.
 // The correction `x - to_passive(x)` that `implicit_node.hpp` records is therefore
 // zero in value at one layer and zero in EVERY derivative at two. Measured on a
 // mixed second derivative: exactly 0.0 against a differenced 2.97e-03. A second

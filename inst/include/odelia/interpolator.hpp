@@ -530,8 +530,10 @@ nodes_and_data<S> refine(Function value_and_slope, double a, double b,
 }
 
 // --- Compatibility surface for callers written against basic_interpolator. ---
-// Keeps main's phylloptim and plant compiling while they migrate. Slopes are
-// chosen by monotone_slopes wherever the caller supplies values alone.
+// phylloptim is the only consumer: it names `Interpolator` at its three
+// vulnerability curves. plant names none of the three aliases and holds
+// hermite_interpolator directly. Slopes are chosen by monotone_slopes wherever
+// the caller supplies values alone.
 template <typename S, int Order = 3>
 class compat_interpolator : public hermite_interpolator<S, Order> {
   using base = hermite_interpolator<S, Order>;
@@ -543,9 +545,10 @@ public:
   void initialise() { base::init(xs_, ys_, monotone_slopes(xs_, ys_)); }
   void clear() { xs_.clear(); ys_.clear(); base::clear(); }
   template <class U> S deriv(const U& u) const { return base::slope(u); }
-  // basic_interpolator returned +/-inf on an empty spline and plant's
-  // resource_spline calls max() on a freshly constructed (empty) field, so an
-  // unguarded x.back() segfaults FF16_Environment's constructor.
+  // basic_interpolator returned +/-inf on an empty spline, so a caller that
+  // reads a domain before filling one gets a sentinel rather than
+  // `x.back()` on an empty vector. The base does NOT guard these -- a consumer
+  // holding hermite_interpolator directly owns that check itself.
   double min() const {
     return base::size() > 0 ? base::min() : std::numeric_limits<double>::infinity();
   }
