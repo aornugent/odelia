@@ -219,27 +219,30 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
 // was left. Measured on a region whose true dw/dy is 27, with y undeclared: the
 // answer is 11, not 7 and not 0.
 //
-// `reached` is therefore the ONLY defence, and a caller that does not compare it
-// against what it handed over has none. It is the count of inputs the walk
-// found.
+// ⚠️ AND NOTHING HERE CAN DETECT IT, which is why this does not hand back a count
+// for a caller to check. The only count available is of the values the list DOES
+// name, so it says nothing about one left out -- and it cannot say a row was
+// written either, since a named input whose adjoint comes back zero is still one
+// of them. A test that knows its own list and wants the number calls
+// `ode::count_active_slots` beside the call, where it reads as the assertion it
+// is; five call sites carrying an out-parameter none of them reads does not.
 //
 // ⚠️ THE INPUTS' ADJOINTS ARE HELD AND PUT BACK, not zeroed, and the row is the
 // difference. They accumulate on the caller's tape, so a second solve against the
 // same inputs would otherwise add to the first -- and a caller that had already
 // swept something into one of those slots would see its own answer reported as
 // this node's row, and then destroyed.
-template <class S, class Residual, class... Inputs>
-S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
-                 const Inputs&... inputs) {
+// ⚠️ AT LEAST ONE INPUT, SPELLED IN THE SIGNATURE. Rewinding with none discards
+// the residual and supplies nothing in its place, which is a value with no rows
+// rather than a value -- so the arity says what the form needs. Three arguments
+// is the other overload, which leaves the residual on the tape.
+template <class S, class Residual, class First, class... Rest>
+S implicit_value(double y_star, double dFdy, Residual&& F, const First& first,
+                 const Rest&... rest) {
   // A direction has no tape to rewind, and at a double there is nothing to
   // record at all: both take the arithmetic form, which carries the same rows
-  // where it has any. The walk still runs, so `reached` means the same thing on
-  // every path and a caller checking it needs no branch of its own.
+  // where it has any.
   if constexpr (!CarriesAdjoint<S>) {
-    std::size_t seen = 0;
-    auto count = [&](const S&) { ++seen; };
-    odelia::ode::visit_active(count, inputs...);
-    reached = seen;
     return implicit_value<S>(y_star, dFdy, std::forward<Residual>(F));
   } else {
     static_assert(
@@ -256,7 +259,6 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
     using tape_type = typename S::tape_type;
     tape_type* tape = tape_type::getActive();
     if (tape == nullptr) {
-      reached = 0;
       return S(y_star);
     }
     const typename tape_type::position_type mark = tape->getPosition();
@@ -277,7 +279,7 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
         slots.push_back(slot);
       }
     };
-    odelia::ode::visit_active(gather, inputs...);
+    odelia::ode::visit_active(gather, first, rest...);
     std::vector<double> held(slots.size());
     for (std::size_t i = 0; i < slots.size(); ++i) {
       held[i] = tape->derivative(slots[i]);
@@ -309,7 +311,6 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
       tape->pushAll(&row, &slots[i], 1u);
     }
     tape->registerOutput(out);
-    reached = slots.size();
     return out;
   }
 }
@@ -338,22 +339,20 @@ S implicit_value(double y_star, double dFdy, std::size_t& reached, Residual&& F,
 // crossed into the region, which is why `body` starts after they are all built.
 //
 // ⚠️ A SHAPE `visit_active` DOES NOT OPEN IS SKIPPED IN SILENCE -- a row that
-// never arrives, reading as an exact zero. The return is what the walk reached.
+// never arrives. No count comes back to say so, for implicit_value's reason: the
+// only count available is of the values the list DOES name. A test that wants it
+// calls `ode::count_active_slots` beside this.
 //
 // `scratch` is the caller's and is reused: this runs per cohort per stage per
 // step, so an allocation here is an allocation there.
 template <class S, class Body, class... Inputs>
-std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
-                          const Inputs&... inputs) {
+void preaccumulate(Body&& body, std::vector<double>& scratch,
+                   const Inputs&... inputs) {
   // A direction has no tape to rewind and carries its rows in the arithmetic, so
-  // there the region simply runs. The walk still reports what it reached, so a
-  // caller checking that count needs no branch of its own.
+  // there the region simply runs.
   if constexpr (!CarriesAdjoint<S>) {
     body();
-    std::size_t seen = 0;
-    auto count = [&](const S&) { ++seen; };
-    odelia::ode::visit_active(count, inputs...);
-    return seen;
+    return;
   } else {
   using tape_type = typename S::tape_type;
   tape_type* tape = tape_type::getActive();
@@ -428,7 +427,6 @@ std::size_t preaccumulate(Body&& body, std::vector<double>& scratch,
     tape->registerOutput(out);
     *outputs[j] = std::move(out);
   }
-  return n;
   }
 }
 

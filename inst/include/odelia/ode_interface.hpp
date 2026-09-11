@@ -108,6 +108,25 @@ void visit_active(F& f, A& a, B& b, Rest&... rest) {
   visit_active(f, b, rest...);
 }
 
+// How many of these hold a tape slot -- which is what the walk above can reach
+// and no more. A test that knows its own input list asserts this beside the call
+// it is testing; production code has nothing to compare it against, because the
+// only other count of the same thing is this walk.
+//
+// It says nothing about a value the list LEAVES OUT, or a member a type's
+// for_each_active omits: neither is walked, so neither is counted.
+template <class S, class... Inputs>
+std::size_t count_active_slots(const Inputs&... inputs) {
+  std::size_t n = 0;
+  auto count = [&](const S& x) {
+    if (x.getSlot() != S::tape_type::INVALID_SLOT) {
+      ++n;
+    }
+  };
+  visit_active(count, inputs...);
+  return n;
+}
+
 // A System that carries its own clock. One that does not is time homogeneous,
 // and the calls below hand it no time rather than refusing it.
 template <typename T>

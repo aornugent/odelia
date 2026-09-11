@@ -543,7 +543,7 @@ void test_a_preaccumulated_residual_keeps_its_rows() {
 
   double got_dx[2], got_dy[2];
   std::size_t statements[2];
-  std::size_t reached = 0;
+
 
   for (int arm = 0; arm < 2; ++arm) {
     Tape tape;
@@ -555,7 +555,7 @@ void test_a_preaccumulated_residual_keeps_its_rows() {
     const std::size_t s0 = tape.getNumStatements();
     A p_star = (arm == 0)
                    ? odelia::implicit_value<A>(root, dFdp, residual)
-                   : odelia::implicit_value<A>(root, dFdp, reached, residual, x, y);
+                   : odelia::implicit_value<A>(root, dFdp, residual, x, y);
     statements[arm] = tape.getNumStatements() - s0;
     tape.registerOutput(p_star);
     xad::derivative(p_star) = 1.0;
@@ -565,6 +565,10 @@ void test_a_preaccumulated_residual_keeps_its_rows() {
     check(std::fabs(xad::value(p_star) - root) < 1e-14,
           arm == 0 ? "the value is the root (on the tape)"
                    : "the value is the root (preaccumulated)");
+    if (arm == 1) {
+      check(odelia::ode::count_active_slots<A>(x, y) == 2,
+            "the walk had both inputs to reach");
+    }
   }
 
   check(std::fabs(got_dx[0] - want_dx) < 1e-12 &&
@@ -573,7 +577,6 @@ void test_a_preaccumulated_residual_keeps_its_rows() {
   check(std::fabs(got_dx[1] - want_dx) < 1e-12 &&
             std::fabs(got_dy[1] - want_dy) < 1e-12,
         "and so does the preaccumulated one");
-  check(reached == 2, "the walk reached both inputs");
   check(statements[1] == 1, "which costs one statement");
   check(statements[1] < statements[0],
         "against the whole residual left on the tape");
@@ -593,11 +596,8 @@ void test_two_preaccumulated_solves_do_not_add_up() {
   tape.registerInput(y);
   tape.newRecording();
   auto residual = [&](const A& p) -> A { return p * p - x * y; };
-  std::size_t reached = 0;
-  const A first =
-      odelia::implicit_value<A>(4.0, 8.0, reached, residual, x, y);
-  const A second =
-      odelia::implicit_value<A>(4.0, 8.0, reached, residual, x, y);
+  const A first = odelia::implicit_value<A>(4.0, 8.0, residual, x, y);
+  const A second = odelia::implicit_value<A>(4.0, 8.0, residual, x, y);
   A sum = first + second;
   tape.registerOutput(sum);
   xad::derivative(sum) = 1.0;
@@ -625,7 +625,7 @@ void test_a_preaccumulated_region_keeps_every_output_row() {
   double got_dx[2], got_dy[2], got_w[2];
   std::size_t statements[2];
   std::vector<double> scratch;
-  std::size_t reached = 0;
+
 
   for (int arm = 0; arm < 2; ++arm) {
     Tape tape;
@@ -659,7 +659,7 @@ void test_a_preaccumulated_region_keeps_every_output_row() {
     if (arm == 0) {
       region();
     } else {
-      reached = odelia::preaccumulate<A>(region, scratch, x, y);
+      odelia::preaccumulate<A>(region, scratch, x, y);
     }
     statements[arm] = tape.getNumStatements() - s0;
     A w = 5.0 * u + 7.0 * v;
@@ -678,7 +678,6 @@ void test_a_preaccumulated_region_keeps_every_output_row() {
   check(std::fabs(got_dx[1] - want_dx) < 1e-12 &&
             std::fabs(got_dy[1] - want_dy) < 1e-12,
         "and so does the preaccumulated one");
-  check(reached == 2, "the walk reached both inputs");
   check(statements[1] == 2, "which costs one statement per output");
   check(statements[1] * 10 < statements[0],
         "against a region an order larger left on the tape");
