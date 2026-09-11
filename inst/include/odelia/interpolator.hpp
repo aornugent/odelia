@@ -542,7 +542,6 @@ public:
   double max() const {
     return base::size() > 0 ? base::max() : -std::numeric_limits<double>::infinity();
   }
-  void set_extrapolate(bool e) { extrapolate_ = e; }
   std::vector<S> r_eval(std::vector<double> u) const {
     std::vector<S> out; out.reserve(u.size());
     for (double ui : u) out.push_back(base::eval(ui));
@@ -551,7 +550,6 @@ public:
 private:
   std::vector<double> xs_;
   std::vector<S> ys_;
-  bool extrapolate_ = false;
 };
 template <typename S> using basic_interpolator = compat_interpolator<S, 3>;
 using Interpolator = basic_interpolator<double>;

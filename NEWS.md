@@ -1,3 +1,57 @@
+## odelia 0.5.0
+
+**A recorded run can now be differentiated in reverse mode, so one solve yields the
+derivative with respect to every parameter at once.** Forward mode answers for one
+parameter per solve; reverse mode answers for all of them, but it must first record
+every operation the solve performed, and a run of several thousand adaptive steps
+performs far more of them than memory will hold. The solver stores its state at each
+accepted step and replays one step's arithmetic at a time while the derivative is
+taken, so what is held is bounded by a single step rather than by the run. Memory
+then grows with the number of steps, which is cheap, rather than with the
+arithmetic, which is not.
+
+A value a submodel solved for rather than computed is lifted onto the record
+carrying a derivative obtained by other means — `implicit_value` and
+`record_with_derivatives` — which keeps an iterative solver's own iterations out of
+the answer. What *selects* rather than *moves* (a step size, a knot position, an
+arm) stays a plain `double` and is replayed, because differentiating a selector
+manufactures a discontinuity the model does not have.
+
+The forward-mode scalar lives in `tangent.hpp`, apart from the reverse-mode
+machinery in `adjoint.hpp`, so a consumer wanting a directional derivative and no
+record is never handed vocabulary for one. `tangent.hpp` rejects a forward scalar
+nested above a reverse one at compile time: three kernels costing 31 statements flat
+cost 566 nested.
+
+**The spline becomes an interpolator that reads a slope alongside each knot value,
+and every value between knots moves.** `basic_spline` was a global natural cubic, C2,
+with quadratic extrapolation; `hermite_interpolator` is local Hermite, C1, with
+linear end extension. Knots are hit exactly and everything between and beyond
+differs. On the curve this library tabulates the global fit converged at `h^2`
+against `h^3.7` for the same knots read as a Hermite — a global solve spreads a local
+defect — and it made every knot influence every span, which turns an O(1) adjoint
+into an O(K) one. Nothing read a second derivative. A caller with only values gets
+Fritsch-Carlson limited slopes from `monotone_slopes(x, y)`.
+
+**⚠️ This retracts 0.2.2.** That entry promised that an out-of-domain interpolator
+read is refused with a message naming the point, how far out it lies and what the
+domain was. It is no longer true and there is no switch that restores it:
+`hermite_interpolator` extends linearly from the end knot in `eval`, `value_at` and
+`slope` alike, so a read past the last knot is answered rather than refused. The
+`set_extrapolate` that used to gate it is gone rather than kept as a no-op. **A
+consumer that relied on the refusal must bound its own reads** — clamp the argument,
+cap the value, or check the domain and raise — as `phylloptim` now does at each of
+its three curves.
+
+`spline.hpp` and `ode_fit.hpp` are removed. Nothing in `phylloptim` or `plant`
+included either. For an outside consumer, `basic_spline::set_points/operator()/deriv`
+becomes `hermite_interpolator::init(x, y, m)` with `eval` and `slope`;
+`compute_gradient` has no drop-in, and `vector_jacobian_product` plus `sweep.hpp`
+replace it, with the loss and the optimiser loop becoming the caller's.
+
+A **minor** bump, and a breaking one for any consumer of the interpolator or of the
+two removed headers.
+
 ## odelia 0.4.0
 
 **Step rejection now works when the integration is pinned to fixed times (plant#642).** `advance_fixed()` steps exactly to a caller-supplied set of times — how a replay reproduces a trajectory recorded earlier. It called the stepper bare, so both of the ways #55 gave a system to refuse a state were unreachable from it: a `util::DomainError` from a stage killed the solve, and a declared `ode_state_valid()` was never consulted at all.

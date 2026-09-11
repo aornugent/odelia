@@ -1,4 +1,4 @@
-PKG_CXXFLAGS = -I../inst/include -fno-stack-protector
+PKG_CXXFLAGS = -I../inst/include
 CXX_STD = CXX20
 
 ## Must match plant/src/Makevars exactly -- see the note there. XAD's active tape
