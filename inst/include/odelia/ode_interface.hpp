@@ -245,13 +245,16 @@ template <typename System>
 struct step_record : instruction {
   state_type<System> state;
 
-  // What this step's five stages solved for, in order. FIVE and not six: the sixth
-  // rate evaluation a step makes is the one at the state it ends at, which
-  // first-same-as-last hands the next step as its own first rates -- and a sweep
-  // re-derives that one at the state it was handed rather than reading it. So there
-  // is no slot for it, which is what makes "a walk cannot trust the first stage of a
-  // recording it jumped into" structural instead of a warning.
-  std::array<solved_values_t<System>, 5> solved;
+  // What this step's six rate evaluations solved for, in order: its five stages,
+  // then the evaluation at the state it ends at, which first-same-as-last hands
+  // the next step as its own first rates.
+  //
+  // A SWEEP reads only the first five -- it re-derives the sixth at the state it
+  // was handed -- which is what makes "a walk cannot trust the first stage of a
+  // recording it jumped into" structural instead of a warning. A FORWARD REPLAY
+  // reads all six, because re-deriving is the thing it is replaying to avoid and
+  // a step whose k1 was re-derived is wrong at first order in h.
+  std::array<solved_values_t<System>, 6> solved;
 };
 
 // A System whose state vector gains entries during a run does not declare a

@@ -202,6 +202,67 @@ public:
     }
   }
 
+  // The same walk over a RECORDING rather than a program, which is a recording
+  // minus its rows. Each step is taken at the size that run took, and its stages
+  // LOAD what that run solved for instead of solving again -- so a pass that must
+  // not re-decide (an invader standing in a resident's field; anything re-running
+  // the model to tape it) traverses the function the run computed rather than a
+  // second spelling of it.
+  //
+  // The row travels WITH the step, because `step_record` is the instruction plus
+  // what the step left: a program and a row-vector side by side can be paired
+  // across different runs, and one object cannot.
+  //
+  // ⚠️ `rec[k].solved` is what the stages of the step that REACHED `rec[k].time`
+  // solved, which is the same pairing `solve_adjoint` walks. Off by one here and
+  // every stage loads its neighbour's answer, finitely.
+  void advance_recorded(std::span<const ode::step_record<System>> rec)
+  {
+    if (rec.empty())
+    {
+      util::stop("'rec' must hold at least the entry it starts from");
+    }
+    if (rec.front().insertion || !std::isnan(rec.front().step_size))
+    {
+      util::stop("A recording's first entry is where it starts, which no "
+                 "instruction reached, so it must be a step of NaN size");
+    }
+
+    std::vector<value_type> before;
+    std::vector<value_type> widened;
+
+    if (collect)
+    {
+      history.push_back(system);
+    }
+
+    for (std::size_t k = 1; k < rec.size(); ++k)
+    {
+      if (rec[k].insertion)
+      {
+        before.assign(system.ode_size(), value_type(0.0));
+        system.ode_state(before.begin());
+        ode::apply_insertion(system, rec[k].time, before.begin(), widened);
+        set_state_from_system();
+        continue;
+      }
+      if (std::isnan(rec[k].step_size))
+      {
+        // A recording's steps are steps that were taken, so every one of them
+        // has a size. A NaN here is a grid someone built by hand and called a
+        // recording, and stepping TO the time would leave the rows unread.
+        util::stop("A recorded step carries the size it took; entry " +
+                   util::to_string(k) + " has none, so it is a grid rather "
+                   "than a recording and cannot supply what its stages solved");
+      }
+      solver.step_by(system, rec[k].step_size, rec[k].time, &rec[k].solved);
+      if (collect)
+      {
+        history.push_back(system);
+      }
+    }
+  }
+
   // Take a series of plain forward-Euler steps over the supplied grid. One
   // derivative evaluation per step, no error control (cf. advance_fixed, which
   // drives the full RKCK stepper). Collects history at each supplied time.

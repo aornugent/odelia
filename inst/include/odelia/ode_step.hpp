@@ -18,15 +18,29 @@ public:
   using value_type = typename System::value_type;
   using state_type = std::vector<value_type>;
   
-  // What one step's five stages solve for. One name, because the forward walk, the
-  // sweep and the record all have to agree on the shape.
-  using solved_row = std::array<solved_values_t<System>, 5>;
+  // What one step's SIX rate evaluations solve for. One name, because the forward
+  // walk, the sweep and the record all have to agree on the shape.
+  //
+  // ⚠️ SIX AND NOT FIVE, and the sixth is the one to understand. Five of them are
+  // the stages; the sixth is the evaluation at the state the step ends at, which
+  // first-same-as-last hands the next step as its own k1. A SWEEP re-derives that
+  // one at the state it was handed and reads only 0..4 -- but a FORWARD replay
+  // cannot re-derive it, because re-deriving is exactly what it is replaying to
+  // avoid, and a step whose k1 was re-derived is wrong at first order in h.
+  using solved_row = std::array<solved_values_t<System>, 6>;
 
   void resize(size_t size_);
   size_t order() const;
   // `solved` is the row this step is about to create: what its five stages solve
   // for goes in, and nothing is asked of the System about where it is.
-  void step(System& system, solved_row& solved,
+  //
+  // Or the row an earlier run already created, where a caller hands a CONST one:
+  // the stages then LOAD what that run solved instead of solving again. Which of
+  // the two happens is the constness of what was handed over and nothing else --
+  // the rule `solved_scope` already follows one level down -- so there is no mode
+  // here to keep, and none to hold a stale answer to.
+  template <class Row>
+  void step(System& system, Row& solved,
             double time, double step_size,
 	    state_type &y,
 	    state_type &yerr,
@@ -113,8 +127,9 @@ size_t Step<System>::order() const {
 }
 
 template <class System>
+template <class Row>
 void Step<System>::step(System& system,
-                        solved_row& solved,
+                        Row& solved,
                         double time, double step_size,
                         state_type &y,
                         state_type &yerr,
@@ -143,9 +158,13 @@ void Step<System>::step(System& system,
 
   step_end(y, k, h, y);
   // The sixth evaluation, at the state the step ends at, which first-same-as-last
-  // hands the next step as its own first rates. No slot: a sweep re-derives it at
-  // the state it was handed rather than reading it.
-  ode::derivs(system, y, dydt_out, time + h);
+  // hands the next step as its own first rates -- so it carries a slot of its own:
+  // see `solved_row` for why a sweep never reads it and a forward replay must.
+  if constexpr (SolvesForValues<System>) {
+    ode::derivs(system, y, dydt_out, time + h, solved[5]);
+  } else {
+    ode::derivs(system, y, dydt_out, time + h);
+  }
 
   // Difference between 4th and 5th order, for error calculations
   for (size_t q = 0; q < size; ++q) {

@@ -127,7 +127,9 @@ public:
   void push_insertion(System& system);
   void step_to(System& system, double time_max_);
   // `reached` is the time a recording says this step ended at; NaN accumulates.
-  void step_by(System& system, double step_size, double reached);
+  // `replay`, where a recording is being walked, is that step's own solved row.
+  void step_by(System& system, double step_size, double reached,
+               const typename Step<System>::solved_row* replay = nullptr);
   void step_euler(System& system, double time_max_);
 
   void set_time_max(double time_max_);
@@ -144,10 +146,22 @@ private:
   // The step index the stages are addressed by is this object's own count of
   // accepted steps, which is the step about to be taken -- read here rather than
   // passed, so no caller can disagree with it.
+  //
+  // `replay` is the row an earlier run wrote, where a caller is replaying one:
+  // the stages then load it instead of solving again, and nothing is cleared
+  // because nothing is written.
   void stepper_step(System& system, double time_, double step_size,
                     state_type& y_, state_type& yerr_,
-                    const state_type& dydt_in_, state_type& dydt_out_) {
+                    const state_type& dydt_in_, state_type& dydt_out_,
+                    const typename Step<System>::solved_row* replay = nullptr) {
     if (method == Method::rodas) {
+      if (replay != nullptr) {
+        // RODAS takes no row at all, so it has nowhere to put one. Said here
+        // rather than dropped silently, which would replay a run's choices by
+        // re-deriving them.
+        util::stop("method='rodas' cannot replay what a run solved for: the "
+                   "Rosenbrock stepper keeps no per-stage row; use method='rkck'.");
+      }
       if constexpr (RodasStep<System>::supported) {
         rodas_stepper.step(system, time_, step_size, y_, yerr_, dydt_in_,
                            dydt_out_);
@@ -165,9 +179,14 @@ private:
       // and only the one that is accepted is committed -- which is what makes
       // "a rejected attempt writes the same slot as its retry" nothing anyone has
       // to arrange.
-      for (solved_values_t<System>& row : solved_scratch_) { row = {}; }
-      stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
-                   dydt_in_, dydt_out_);
+      if (replay != nullptr) {
+        stepper.step(system, *replay, time_, step_size, y_, yerr_, dydt_in_,
+                     dydt_out_);
+      } else {
+        for (solved_values_t<System>& row : solved_scratch_) { row = {}; }
+        stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
+                     dydt_in_, dydt_out_);
+      }
     }
   }
   size_t stepper_order() const {
@@ -647,7 +666,9 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
 // says.  This is used by advance_fixed_steps.
 template <class System>
 void SolverInternal<System>::step_by(System& system, double step_size,
-                                     double reached) {
+                                     double reached,
+                                     const typename Step<System>::solved_row*
+                                       replay) {
   if (!util::is_finite(step_size)) {
     util::stop("step_size must be finite!");
   }
@@ -655,7 +676,7 @@ void SolverInternal<System>::step_by(System& system, double step_size,
     util::stop("step_size must be greater than (or equal to) zero");
   }
   setup_dydt_in(system);
-  stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
+  stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay);
   save_dydt_out_as_in();
 
   // The time the run reached, where a recording says what it was, rather than
