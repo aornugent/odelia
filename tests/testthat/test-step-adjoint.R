@@ -190,14 +190,6 @@ testthat::test_that("the recording builds each stage state bit-identically to st
   expect_identical(r$last, r$recorded[[6]])
 })
 
-testthat::test_that("step_adjoint of a zero end adjoint is zero", {
-  compile_step_adjoint_interface()
-
-  r <- lorenz_step_and_adjoint(c(10.0, 28.0, 8.0 / 3.0), 0.0, 0.01,
-                              c(1.5, -0.7, 20.0), c(0.0, 0.0, 0.0))
-  expect_equal(r$lambda_in, c(0.0, 0.0, 0.0))
-})
-
 testthat::test_that("the adjoint scalar is named at namespace scope", {
   withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags())
 

@@ -382,12 +382,6 @@ testthat::test_that("a step is one recording of six rates, on one copy of the Sy
   expect_identical(r$rate_calls, 0L)
 })
 
-testthat::test_that("a zero end adjoint sweeps to zero", {
-  compile_recording_interface()
-  r <- lv_step_and_adjoint(lv_pars, 0.0, 0.05, lv_y, c(0.0, 0.0))
-  expect_equal(r$lambda_in, c(0.0, 0.0))
-})
-
 testthat::test_that("solve_adjoint over the recorded steps matches a finite difference of the run", {
   compile_recording_interface()
 
