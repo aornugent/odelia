@@ -17,6 +17,28 @@ the answer. What *selects* rather than *moves* (a step size, a knot position, an
 arm) stays a plain `double` and is replayed, because differentiating a selector
 manufactures a discontinuity the model does not have.
 
+**A forward pass can now REPLAY a recording instead of only taking one.** The
+store/load channel already picked its direction by the constness of what a walk
+handed over, and `step_adjoint` already handed a const row — but every forward
+entry point funnelled through one place that zeroed its scratch and passed it
+mutable, so nothing on the way forward could load. `Step::step`'s row parameter is
+templated, so a const row loads and a mutable one stores with no change to the
+body; `advance_recorded()` gains an overload taking a **recording** rather than a
+program, pairing each step with its own row so the two cannot be crossed. No new
+concept and no new name. `method='rodas'` refuses rather than silently re-deriving:
+the Rosenbrock stepper keeps no per-stage row.
+
+What this is for: a pass that must take the run's answers rather than its own. The
+first consumer is plant's invasion run, where an invader stands in a resident's
+recorded field — exogenous to it, so its derivative is zero rather than severed.
+
+**⚠️ The recorded row is six long, not five, and that changes `step_record`.** Five
+of the six are a step's stages; the sixth is the evaluation at the state the step
+ends at, which first-same-as-last hands the next step as its own k1. A sweep
+re-derives that one at the state it was handed and still reads only the first five.
+A forward replay cannot — re-deriving is the thing it replays to avoid — and a step
+whose k1 was re-derived is wrong at first order in `h`.
+
 The forward-mode scalar lives in `tangent.hpp`, apart from the reverse-mode
 machinery in `adjoint.hpp`, so a consumer wanting a directional derivative and no
 record is never handed vocabulary for one. `tangent.hpp` rejects a forward scalar
@@ -62,7 +84,7 @@ An unreachable domain still fails, and now says where it gave up and why, rather
 
 This was not a rare corner. `plant`'s mutant replay pins the stepper to a resident's recorded times, and its TF24 model reports an empty carbon pool this way as a matter of routine — ~480 rejections in a resident run that goes on to complete normally — so a replay was near-certain to meet one and die. Invasion-fitness analysis was impossible for that model, not merely slow.
 
-One caveat for systems that cache per-stage data through `cache(system, rk_step)`: the stage indices restart at 0 on each sub-step, so a subdivided interval leaves the system holding the last sub-step's stages rather than stages spanning the whole interval. A consumer recording such a cache for later replay gets a coarser record of a subdivided step than of a plain one.
+One caveat for systems that cache per-stage data through `cache(system, rk_step)`: the stage indices restart at 0 on each sub-step, so a subdivided interval leaves the system holding the last sub-step's stages rather than stages spanning the whole interval. A consumer recording such a cache for later replay gets a coarser record of a subdivided step than of a plain one. **⚠️ 0.5.0 deletes `cache(system, rk_step)` and this caveat's machinery with it** — the per-stage record is now `step_record::solved`, addressed by the walk rather than by a cursor in the System. The hazard it names did not go away with the spelling: a replay driven by `step_by` takes the recorded size and has no subdivision path at all, so a system that refuses a state mid-replay fails rather than shrinking.
 
 A **minor** bump, so downstreams can pin against the capability (`odelia (>= 0.4.0)`). Systems that never refuse a state are unaffected.
 
