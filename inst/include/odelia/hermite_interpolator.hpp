@@ -1,0 +1,286 @@
+// -*-c++-*-
+#ifndef ODELIA_HERMITE_INTERPOLATOR_HPP_
+#define ODELIA_HERMITE_INTERPOLATOR_HPP_
+
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <type_traits>
+#include <vector>
+#include <odelia/ode_util.hpp>
+
+namespace odelia {
+namespace interpolator {
+
+// A C1 piecewise-cubic interpolant built from a value AND a slope at each knot.
+//
+// The value and the slope come from one polynomial, so a caller that needs both
+// gets a consistent pair: slope(u) is the exact derivative of what eval(u)
+// returns. An interpolant fitted to values alone offers no such guarantee -- its
+// analytic tangent is whatever the fit happened to produce, and where the target
+// has a curvature break between knots that tangent is wrong by an amount the value
+// error does not reveal.
+//
+// Each span reads only its own two knots, so a query reaches back to two knots
+// rather than to the whole knot set as a C2 band solve does, and moving one knot
+// changes the interpolant only in the two spans that touch it.
+//
+// Knot positions are double; values and slopes carry the working scalar S. The two
+// halves of a build are separate: set_nodes lays out the spans from the positions,
+// and set_data fills the coefficients. A caller whose positions are fixed for a run
+// calls set_nodes once and set_data per stage.
+//
+// eval and slope take either a double position or an active one. At an active
+// position the value is read at its passive part and the query's own derivative is
+// grafted on through the slope, so d(value)/d(u) is recorded.
+template <typename S>
+class hermite_interpolator {
+public:
+  // Knot positions, strictly ascending; at least two are needed (one span).
+  // Discards any data already set.
+  void set_nodes(const std::vector<double>& x_) {
+    if (x_.size() < 2) util::stop("hermite_interpolator: need at least 2 knots");
+    for (std::size_t i = 1; i < x_.size(); ++i) {
+      if (!(x_[i] > x_[i - 1]))
+        util::stop("hermite_interpolator: knots must be strictly ascending");
+    }
+    x = x_;
+    const std::size_t ns = x.size() - 1;
+    spans.assign(ns, Span());
+    for (std::size_t k = 0; k < ns; ++k) {
+      spans[k].x0 = x[k];
+      spans[k].inv_h = 1.0 / (x[k + 1] - x[k]);
+    }
+    // An equally spaced knot set indexes by arithmetic instead of a search.
+    uniform = false;
+    if (ns > 1) {
+      const double h0 = x[1] - x[0];
+      const double tol = 1e-12 * (x.back() - x.front());
+      uniform = true;
+      for (std::size_t k = 1; k < ns; ++k) {
+        if (std::abs((x[k + 1] - x[k]) - h0) > tol) { uniform = false; break; }
+      }
+      if (uniform) inv_h0 = 1.0 / h0;
+    }
+    initialised = false;
+  }
+
+  // Values and dy/dx at the nodes already set, one entry each per node.
+  void set_data(const std::vector<S>& y_, const std::vector<S>& dydx_) {
+    if (spans.empty()) util::stop("hermite_interpolator: no knots set");
+    util::check_length(y_.size(), x.size());
+    util::check_length(dydx_.size(), x.size());
+    y = y_;
+    m = dydx_;
+    for (std::size_t k = 0; k < spans.size(); ++k) {
+      const double h = x[k + 1] - x[k];
+      const S a = y[k], b = y[k + 1];
+      const S sa = m[k] * h, sb = m[k + 1] * h;
+      Span& s = spans[k];
+      s.y0 = a;
+      s.c1 = sa;
+      s.c2 = 3.0 * (b - a) - 2.0 * sa - sb;
+      s.c3 = 2.0 * (a - b) + sa + sb;
+    }
+    initialised = true;
+  }
+
+  // Nodes and data in one call, for a caller that rebuilds both together.
+  void init(const std::vector<double>& x_, const std::vector<S>& y_,
+            const std::vector<S>& dydx_) {
+    set_nodes(x_);
+    set_data(y_, dydx_);
+  }
+
+  // Nodes a lattice of `spacing` needs to reach one node past `upper`, which is
+  // what puts a query at exactly `upper` inside a span rather than on the last
+  // node. Arithmetic only, so a caller can bound the count before an allocation
+  // is asked for and refuse in the words of its own domain.
+  static std::size_t lattice_size(double spacing, double upper) {
+    if (!(spacing > 0.0))
+      util::stop("hermite_interpolator: lattice spacing must be positive");
+    if (!(upper >= 0.0))
+      util::stop("hermite_interpolator: lattice bound must not be negative");
+    return static_cast<std::size_t>(std::ceil(upper / spacing)) + 2;
+  }
+
+  // Lay the lattice k * spacing, or extend the one already held to `nodes`.
+  //
+  // Every position is a constant of the lattice rather than of the caller's
+  // state, which is the property a reverse pass needs: a node the caller's own
+  // values could move would carry a derivative the interpolant does not take.
+  // An extension adds nodes past the ones every existing span covers, so it is
+  // bit-identical for every query the old grid answered.
+  //
+  // Long enough is not the whole test. A grid laid by init() or restored from
+  // stored state can be long enough while sitting somewhere else entirely, so
+  // whether the held nodes ARE this lattice is read off them rather than
+  // remembered, and the two cannot drift.
+  void ensure_lattice(double spacing, std::size_t nodes) {
+    if (nodes < 2)
+      util::stop("hermite_interpolator: a lattice needs at least 2 nodes");
+    const bool held_is_lattice =
+      x.size() >= 2 && x.front() == 0.0 && x[1] == spacing &&
+      x.back() == static_cast<double>(x.size() - 1) * spacing;
+    if (held_is_lattice && x.size() >= nodes) {
+      return;
+    }
+    std::vector<double> lattice(nodes);
+    for (std::size_t k = 0; k < nodes; ++k) {
+      lattice[k] = static_cast<double>(k) * spacing;
+    }
+    set_nodes(lattice);
+  }
+
+  void clear() {
+    x.clear(); y.clear(); m.clear(); spans.clear();
+    inv_h0 = 0.0;
+    uniform = false;
+    initialised = false;
+  }
+
+  bool is_initialised() const { return initialised; }
+  std::size_t size() const { return x.size(); }
+  // An empty interpolant covers nothing, so its bounds are an empty interval
+  // rather than a read off an empty vector.
+  double min() const { return x.empty() ? 0.0 : x.front(); }
+  double max() const { return x.empty() ? 0.0 : x.back(); }
+  const std::vector<double>& knots() const { return x; }
+  // The data as supplied. A knot slope read back out of a span is m * h * (1/h)
+  // and not bit-identical to the m that went in, so a caller storing state reads
+  // it here rather than reconstructing it.
+  const std::vector<S>& values() const { return y; }
+  const std::vector<S>& slopes() const { return m; }
+
+  // Value at u. Outside the knot range the end span's line is extended (value and
+  // slope of the nearest end), which keeps the read C1 across the boundary instead
+  // of letting a cubic run away.
+  template <typename U>
+  S eval(const U& u) const {
+    check_initialised();
+    const double up = util::to_passive(u);
+    if constexpr (std::is_same_v<U, double>) {
+      return value_at(up);
+    } else {
+      return graft(value_at(up), slope_at(up), u, up);
+    }
+  }
+
+  // The same read without the initialised check, for a caller reading once per
+  // quadrature point. Matches Interpolator, whose operator() is its fast read.
+  template <typename U>
+  S operator()(const U& u) const {
+    const double up = util::to_passive(u);
+    if constexpr (std::is_same_v<U, double>) {
+      return value_at(up);
+    } else {
+      return graft(value_at(up), slope_at(up), u, up);
+    }
+  }
+
+  // dy/du at u -- the exact derivative of the polynomial eval() uses. (odelia's
+  // value-fitted interpolator spells the same operation `deriv`.)
+  template <typename U>
+  S slope(const U& u) const {
+    check_initialised();
+    return slope_at(util::to_passive(u));
+  }
+
+  // Both from one knot lookup and one span load. A crown integral wants the pair at
+  // every quadrature point, so this halves that work.
+  template <typename U>
+  void value_and_slope(const U& u, S& value, S& dydu) const {
+    check_initialised();
+    const double up = util::to_passive(u);
+    if (up <= x.front()) {
+      value = y.front() + m.front() * (up - x.front());
+      dydu = m.front();
+    } else if (up >= x.back()) {
+      value = y.back() + m.back() * (up - x.back());
+      dydu = m.back();
+    } else {
+      const Span& s = spans[span_of(up)];
+      const double t = (up - s.x0) * s.inv_h;
+      value = s.y0 + t * (s.c1 + t * (s.c2 + t * s.c3));
+      dydu = (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
+    }
+    if constexpr (!std::is_same_v<U, double>) {
+      // The span is indexed at the passive position, so d(value)/d(u) is not
+      // recorded by the read itself; the slope carries it. Without this a height
+      // adjoint through the interpolant measures as exactly zero.
+      value = graft(value, dydu, u, up);
+    }
+  }
+
+private:
+  // One span's whole polynomial, contiguous: a query touches a single cache line
+  // rather than one per coefficient array.
+  struct Span {
+    double x0 = 0.0, inv_h = 0.0;
+    S y0{}, c1{}, c2{}, c3{};
+  };
+
+  // The query's derivative, materialised while its operands are alive. A deduced
+  // return type here would hand back an XAD expression template referencing the
+  // temporaries of this return statement, which die on return.
+  template <typename U>
+  static S graft(const S& value, const S& dydu, const U& u, double up) {
+    static_assert(std::is_constructible_v<S, U>,
+                  "hermite_interpolator: reading at an active position needs the "
+                  "knot values on the same scalar, so the derivative of the query "
+                  "has somewhere to go -- an active position with S = double would "
+                  "silently drop it.");
+    return value + dydu * (u - up);
+  }
+
+  S value_at(double u) const {
+    if (u <= x.front()) return y.front() + m.front() * (u - x.front());
+    if (u >= x.back())  return y.back()  + m.back()  * (u - x.back());
+    const Span& s = spans[span_of(u)];
+    const double t = (u - s.x0) * s.inv_h;
+    return s.y0 + t * (s.c1 + t * (s.c2 + t * s.c3));
+  }
+
+  S slope_at(double u) const {
+    if (u <= x.front()) return m.front();
+    if (u >= x.back())  return m.back();
+    const Span& s = spans[span_of(u)];
+    const double t = (u - s.x0) * s.inv_h;
+    return (s.c1 + t * (2.0 * s.c2 + t * 3.0 * s.c3)) * s.inv_h;
+  }
+
+  // Both routes are written so that every value of `u` lands on a span that
+  // exists, without a test for one that cannot. A NaN query reaches here because
+  // it compares false against both ends, and it would otherwise convert to an
+  // unspecified index on the arithmetic route and index one past the last span on
+  // the search route -- so the bound is taken in double, before the conversion,
+  // and read off the spans rather than off the knots.
+  std::size_t span_of(double u) const {
+    const std::size_t ns = spans.size();
+    if (uniform) {
+      const double k = (u - x.front()) * inv_h0;
+      return k >= 0.0 && k < static_cast<double>(ns)
+                 ? static_cast<std::size_t>(k)
+                 : ns - 1;
+    }
+    const std::size_t k =
+        static_cast<std::size_t>(std::upper_bound(x.begin(), x.end(), u) - x.begin());
+    return k > 0 ? (k <= ns ? k - 1 : ns - 1) : 0;
+  }
+
+  void check_initialised() const {
+    if (!initialised) util::stop("hermite_interpolator: not initialised");
+  }
+
+  std::vector<double> x;   // knot positions, contiguous for the search
+  std::vector<S> y, m;     // knot values and slopes, as supplied
+  std::vector<Span> spans;
+  double inv_h0 = 0.0;
+  bool uniform = false;
+  bool initialised = false;
+};
+
+}
+}
+
+#endif
