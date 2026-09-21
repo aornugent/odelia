@@ -7,6 +7,7 @@
 #include <span>
 #include <array>
 #include <vector>
+#include <odelia/ode_control.hpp>
 #include <odelia/ode_util.hpp>
 #include <odelia/tangent.hpp>
 
@@ -255,6 +256,12 @@ struct step_record : instruction {
   // reads all six, because re-deriving is the thing it is replaying to avoid and
   // a step whose k1 was re-derived is wrong at first order in h.
   std::array<solved_values_t<System>, 6> solved;
+
+  // Which component set this step's size -- the one attaining the largest
+  // weighted error ratio -- and that ratio. OdeControl::no_component where the
+  // step formed no estimate, which is every step of a fixed grid or a replay.
+  std::size_t error_index = OdeControl::no_component;
+  double error_ratio = 0.0;
 };
 
 // A System whose state vector gains entries during a run does not declare a

@@ -39,6 +39,7 @@ struct OdeControl {
     set_step_size_max(step_size_max_);
     set_step_size_initial(step_size_initial_);
     last_step_size_shrank = false;
+    forget_error_component();
   }
 
   std::vector<double> get_controls() const {
@@ -76,6 +77,7 @@ struct OdeControl {
     double rmax = std::numeric_limits<double>::min();
     const double S = 0.9;
     bool nonfinite = false;
+    forget_error_component();
 
     for (size_t i = 0; i < dim; i++)
     {
@@ -110,9 +112,16 @@ struct OdeControl {
       if (!std::isfinite(r))
       {
         nonfinite = true;
+        error_index = i;
+        error_ratio = r;
         break;
       }
-      rmax = std::max(r, rmax);
+      if (r > rmax)
+      {
+        rmax = r;
+        error_index = i;
+        error_ratio = r;
+      }
     }
 
     if (nonfinite)
@@ -203,10 +212,25 @@ struct OdeControl {
   {
     return last_step_size_shrank;
   }
-  
+
+  // Said before a step that forms no error estimate, so what a recording reports
+  // for it is that nothing was measured rather than the previous step's answer.
+  void forget_error_component()
+  {
+    error_index = no_component;
+    error_ratio = 0.0;
+  }
+
   double tol_abs, tol_rel, a_y, a_dydt;
   double step_size_min, step_size_max, step_size_initial;
   bool last_step_size_shrank;
+
+  // The component that set the size of the last step passed through
+  // adjust_step_size: the one attaining the largest weighted error ratio, and
+  // that ratio. A step with no error estimate leaves no_component here.
+  static constexpr size_t no_component = static_cast<size_t>(-1);
+  size_t error_index;
+  double error_ratio;
 };
 
 }

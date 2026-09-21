@@ -202,6 +202,64 @@ void test_control_rejects_nonfinite_error() {
   }
 }
 
+// Which component the step size came from. The controller names the index
+// attaining the largest weighted error ratio, and every accepted step carries
+// that index on its recorded row.
+void test_control_names_the_binding_component() {
+  const std::vector<double> y{0.2, 0.2, 0.2};
+  const std::vector<double> dydt{0.0, 0.0, 0.0};
+  const double h = 1e-3;
+  odelia::ode::OdeControl c(1e-4, 1e-4, 1.0, 0.0, 1e-6, 5.0, 1e-6);
+
+  {
+    const std::vector<double> yerr{1e-12, 1e-6, 1e-9};
+    c.adjust_step_size(y.size(), 5, h, y, yerr, dydt);
+    check(c.error_index == 1, "the largest weighted error names its component");
+    check(std::abs(c.error_ratio - 1e-6 / c.errlevel(y[1], dydt[1], h)) < 1e-18,
+          "and the ratio it attained");
+  }
+  {
+    // The weighting is per component, so the largest |yerr| need not bind.
+    const std::vector<double> y_mixed{1e6, 1.0, 1.0};
+    const std::vector<double> yerr{1.0, 1e-3, 1e-9};
+    c.adjust_step_size(y_mixed.size(), 5, h, y_mixed, yerr, dydt);
+    check(c.error_index == 1, "a large error against a large state need not bind");
+  }
+  {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const std::vector<double> yerr{1e-12, nan, 1e-12};
+    c.adjust_step_size(y.size(), 5, h, y, yerr, dydt);
+    check(c.error_index == 1, "a non-finite ratio names the component it came from");
+  }
+
+  using System = LorenzSystem<double>;
+  System sys(10.0, 28.0, 8.0 / 3.0);
+  odelia::ode::Solver<System> solver(sys, odelia::ode::OdeControl());
+  solver.set_keep_states(true);
+  solver.advance_adaptive({0.0, 1.0});
+  const auto rec = solver.recording();
+  check(rec.size() > 2, "the run took steps to name a component for");
+  bool named = true;
+  for (size_t k = 1; k < rec.size(); ++k) {
+    named = named && rec[k].error_index < 3 && rec[k].error_ratio > 0.0;
+  }
+  check(named, "every accepted adaptive step carries the component that set it");
+  check(rec.front().error_index == odelia::ode::OdeControl::no_component,
+        "the state the run started from was reached by no step");
+
+  System pinned_sys(10.0, 28.0, 8.0 / 3.0);
+  odelia::ode::Solver<System> pinned(pinned_sys, odelia::ode::OdeControl());
+  pinned.set_keep_states(true);
+  pinned.advance_fixed({0.0, 0.25, 0.5});
+  const auto pinned_rec = pinned.recording();
+  bool unmeasured = true;
+  for (const auto& row : pinned_rec) {
+    unmeasured =
+        unmeasured && row.error_index == odelia::ode::OdeControl::no_component;
+  }
+  check(unmeasured, "a pinned step forms no error estimate and names nothing");
+}
+
 // End to end: a system whose derivatives go non-finite outside a bounded range
 // must fail loudly rather than integrate on with a poisoned state.
 namespace {
@@ -858,6 +916,7 @@ int main() {
   test_interpolator();
   test_solver_runs();
   test_control_rejects_nonfinite_error();
+  test_control_names_the_binding_component();
   test_solver_refuses_nonfinite_state();
   test_predicate_rejects_out_of_domain_step();
   test_domain_error_becomes_a_rejection();

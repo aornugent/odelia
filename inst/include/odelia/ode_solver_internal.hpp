@@ -288,6 +288,8 @@ template <class System>
 void SolverInternal<System>::push_step(System& system, double time_,
                                        double step_size) {
   step_record<System> record{{time_, step_size}, state_type()};
+  record.error_index = control.error_index;
+  record.error_ratio = control.error_ratio;
   if (keep_states_) {
     record.state.resize(system.ode_size());
     system.ode_state(record.state.begin());
@@ -402,6 +404,7 @@ template <class System>
 void SolverInternal<System>::step_euler(System& system, double time_max_) {
   set_time_max(time_max_);
   const double h = time_max - time;
+  control.forget_error_component();
   // Derivatives at the current state (also sets the system to y at this time).
   ode::derivs(system, y, dydt_in, time);
   const size_t size = y.size();
@@ -590,6 +593,7 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
   // retry below takes to cross it: a replay reproduces the caller's times from
   // this row, and a shrunken sub-step is a detail of how this run got there.
   const double step_size = time_max - time;
+  control.forget_error_component();
   setup_dydt_in(system);
 
   // The sub-step, named apart from the interval above because the retry
@@ -675,6 +679,7 @@ void SolverInternal<System>::step_by(System& system, double step_size,
   if (step_size < 0.0) {
     util::stop("step_size must be greater than (or equal to) zero");
   }
+  control.forget_error_component();
   setup_dydt_in(system);
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay);
   save_dydt_out_as_in();
