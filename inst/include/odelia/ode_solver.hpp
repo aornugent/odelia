@@ -467,6 +467,10 @@ public:
   std::size_t recorded_rates() const { return solver.recorded_rates(); }
   void clear_recorded_rates() { solver.clear_recorded_rates(); }
 
+  // How the attempts at each error-controlled step ended; step_outcomes says
+  // what each count covers.
+  const ode::step_outcomes& outcomes() const { return solver.outcomes(); }
+
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?
 std::vector<System> history;

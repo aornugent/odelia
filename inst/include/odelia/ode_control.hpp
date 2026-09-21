@@ -128,7 +128,7 @@ struct OdeControl {
     {
       step_size = reject_step(step_size);
     }
-    else if (rmax > 1.1)
+    else if (rmax > tolerable_ratio)
     {
       // decrease step, no more than factor of 5
       double r = S / pow(rmax, 1.0 / ord);
@@ -181,7 +181,7 @@ struct OdeControl {
   // Shrink hardest (the same floor the accuracy branch clamps to) and always
   // report the shrink, even when already at step_size_min and so unable to
   // decrease. That makes the caller raise rather than commit the state, and it is
-  // deliberately unlike the `rmax > 1.1` branch above, which reports no shrink
+  // deliberately unlike the accuracy branch above, which reports no shrink
   // once it cannot decrease further and so lets an inaccurate step through at the
   // floor. That trade is defensible for accuracy and never for validity.
   double reject_step(double step_size)
@@ -213,6 +213,14 @@ struct OdeControl {
     return last_step_size_shrank;
   }
 
+  // Whether the last error estimate was over tolerance. With a shrink that is a
+  // rejection; without one the step stood at step_size_min. Written so a
+  // non-finite ratio answers true.
+  bool error_over_tolerance() const
+  {
+    return !(error_ratio <= tolerable_ratio);
+  }
+
   // Said before a step that forms no error estimate, so what a recording reports
   // for it is that nothing was measured rather than the previous step's answer.
   void forget_error_component()
@@ -220,6 +228,9 @@ struct OdeControl {
     error_index = no_component;
     error_ratio = 0.0;
   }
+
+  // The largest weighted error ratio a step may carry and still be taken.
+  static constexpr double tolerable_ratio = 1.1;
 
   double tol_abs, tol_rel, a_y, a_dydt;
   double step_size_min, step_size_max, step_size_initial;

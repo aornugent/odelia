@@ -437,6 +437,60 @@ void test_domain_error_becomes_a_rejection() {
   }
 }
 
+// Every attempt at a step lands in exactly one of the counted outcomes, and each
+// kind is reachable.
+void test_step_outcomes_are_counted() {
+  {
+    Logistic<OnLeave::throw_domain> sys;
+    odelia::ode::Solver<Logistic<OnLeave::throw_domain>> s(sys, loose_control());
+    s.advance_adaptive(std::vector<double>{0.0, 1.0});
+    const auto& o = s.outcomes();
+    check(o.rejected_thrown > 0, "a stage that raises DomainError is counted");
+    check(o.rejected_refused == 0,
+          "and a system declaring no domain refuses nothing");
+    check(o.accepted + o.accepted_at_minimum == s.times().size() - 1,
+          "the accepted counts are the steps the record holds");
+  }
+  {
+    LogisticChecked::refusals = 0;
+    LogisticChecked sys;
+    odelia::ode::Solver<LogisticChecked> s(sys, loose_control());
+    s.advance_adaptive(std::vector<double>{0.0, 1.0});
+    const auto& o = s.outcomes();
+    check(o.rejected_refused == static_cast<std::size_t>(LogisticChecked::refusals),
+          "a refused step is counted once per refusal");
+    check(o.rejected_thrown == 0, "and nothing was raised to confuse it with");
+  }
+  {
+    // Tight enough that the first step, taken at step_size_initial, is far over
+    // tolerance and has to be cut back.
+    using System = LorenzSystem<double>;
+    System sys(10.0, 28.0, 8.0 / 3.0);
+    odelia::ode::Solver<System> s(sys, odelia::ode::OdeControl());
+    s.advance_adaptive(std::vector<double>{0.0, 1.0});
+    const auto& o = s.outcomes();
+    check(o.rejected_inaccurate > 0, "an error estimate over tolerance is counted");
+    check(o.attempts() == o.accepted + o.accepted_at_minimum + o.rejected_inaccurate,
+          "and a system that neither raises nor refuses makes no other kind");
+    check(o.accepted + o.accepted_at_minimum == s.times().size() - 1,
+          "the accepted counts are the steps the record holds");
+    s.reset();
+    check(s.outcomes().attempts() == 0, "a reset run starts from nothing");
+  }
+  {
+    // step_size_min set to the whole interval, so the controller cannot cut the
+    // step it is told is over tolerance and the step stands.
+    using System = LorenzSystem<double>;
+    System sys(10.0, 28.0, 8.0 / 3.0);
+    odelia::ode::OdeControl floored(1e-10, 1e-10, 1.0, 0.0, 0.1, 10.0, 0.1);
+    odelia::ode::Solver<System> s(sys, floored);
+    s.advance_adaptive(std::vector<double>{0.0, 0.1});
+    const auto& o = s.outcomes();
+    check(o.accepted_at_minimum > 0 && o.accepted == 0,
+          "a step over tolerance at step_size_min is taken, and counted apart");
+  }
+}
+
 // The other half of that bargain: only DomainError is absorbed. A plain
 // util::stop() is how the core reports a bug, and turning one into step-shrinking
 // would hide it behind an accuracy complaint.
@@ -920,6 +974,7 @@ int main() {
   test_solver_refuses_nonfinite_state();
   test_predicate_rejects_out_of_domain_step();
   test_domain_error_becomes_a_rejection();
+  test_step_outcomes_are_counted();
   test_non_domain_throw_is_not_absorbed();
   test_unreachable_domain_fails_with_a_reason();
   test_supplied_rows_cost_one_statement();

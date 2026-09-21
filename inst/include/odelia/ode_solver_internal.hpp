@@ -23,6 +23,26 @@ namespace ode {
 // implicit RODAS4(3) Rosenbrock stepper for stiff systems.
 enum class Method { rkck, rodas };
 
+// How each attempt at an error-controlled step ended, since the last reset. The
+// pinned paths (step_to, step_by, step_euler) form no error estimate and count
+// nothing.
+struct step_outcomes {
+  std::size_t accepted = 0;
+  // Over tolerance, and the step size could not decrease, so the step stood.
+  std::size_t accepted_at_minimum = 0;
+  // The error estimate asked for a smaller step.
+  std::size_t rejected_inaccurate = 0;
+  // A stage raised DomainError.
+  std::size_t rejected_thrown = 0;
+  // ode_state_valid() refused the completed step.
+  std::size_t rejected_refused = 0;
+
+  std::size_t attempts() const {
+    return accepted + accepted_at_minimum + rejected_inaccurate +
+           rejected_thrown + rejected_refused;
+  }
+};
+
 template <class System>
 class SolverInternal {
 public:
@@ -74,6 +94,10 @@ public:
   // Rate evaluations recorded since the count was last cleared.
   std::size_t recorded_rates() const { return stepper.recorded_rates; }
   void clear_recorded_rates() { stepper.recorded_rates = 0; }
+
+  // How the attempts this run has made ended. accepted + accepted_at_minimum is
+  // the number of rows step() added to the record.
+  const ode::step_outcomes& outcomes() const { return outcomes_; }
 
 
   // Keep the state at each accepted step as well as the time and the size. The
@@ -224,6 +248,7 @@ private:
   // had to be emptied as it was read, and every consumer after the first repeated
   // the whole run to refill it.
   std::vector<step_record<System>> prev_steps;
+  ode::step_outcomes outcomes_;
   // Whether to keep the states. The caller's: a run whose gradient will be taken
   // needs them and a run that is only integrating does not. The same flag decides
   // whether what a step solves for is kept, because those are one recording.
@@ -254,6 +279,7 @@ SolverInternal<System>::SolverInternal(System &system, OdeControl control_,
 template <class System>
 void SolverInternal<System>::reset(System& system) {
   prev_steps.clear();
+  outcomes_ = ode::step_outcomes();
   step_size_last = control.step_size_initial;
   time_max = std::numeric_limits<double>::infinity();
   set_state_from_system(system);
@@ -487,6 +513,7 @@ void SolverInternal<System>::step(System& system) {
       // yerr and dydt_out were never completed, so there is no error estimate to
       // form: reject on the strength of the throw alone.
       step_size_next = control.reject_step(step_size);
+      ++outcomes_.rejected_thrown;
     } else {
       step_size_next =
         control.adjust_step_size(size, stepper_order(), step_size,
@@ -496,6 +523,13 @@ void SolverInternal<System>::step(System& system) {
         invalid_reason = "ode_state_valid() refused the state after the step";
         // Overrides whatever the error estimate concluded, including "accept".
         step_size_next = control.reject_step(step_size);
+        ++outcomes_.rejected_refused;
+      } else if (control.step_size_shrank()) {
+        ++outcomes_.rejected_inaccurate;
+      } else if (control.error_over_tolerance()) {
+        ++outcomes_.accepted_at_minimum;
+      } else {
+        ++outcomes_.accepted;
       }
     }
 
