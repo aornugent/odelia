@@ -154,7 +154,8 @@ public:
   // here. A schedule that says where its insertions are is one a walk can execute
   // without a range loop wrapped around it -- and it is the same map the sweep
   // transposes, so a tangent replayed through here traverses exactly the function
-  // under test rather than a second spelling of it.
+  // under test rather than a second spelling of it. The walk records each
+  // insertion as a row, as the run it follows did.
   void advance_recorded(const std::vector<ode::instruction>& program)
   {
     if (program.empty())
@@ -185,6 +186,7 @@ public:
         system.ode_state(before.begin());
         ode::apply_insertion(system, program[k].time, before.begin(), widened);
         set_state_from_system();
+        push_insertion();
         continue;
       }
       if (std::isnan(program[k].step_size))
@@ -203,11 +205,9 @@ public:
   }
 
   // The same walk over a RECORDING rather than a program, which is a recording
-  // minus its rows. Each step is taken at the size that run took, and its stages
-  // LOAD what that run solved for instead of solving again -- so a pass that must
-  // not re-decide (an invader standing in a resident's field; anything re-running
-  // the model to tape it) traverses the function the run computed rather than a
-  // second spelling of it.
+  // minus its rows. Each step is taken at the size that run took, and its own row
+  // starts as a copy of the recorded one: a System reads what the recorded run
+  // left there and stores what it solves for itself.
   //
   // The row travels WITH the step, because `step_record` is the instruction plus
   // what the step left: a program and a row-vector side by side can be paired
@@ -215,7 +215,7 @@ public:
   //
   // ⚠️ `rec[k].solved` is what the stages of the step that REACHED `rec[k].time`
   // solved, which is the same pairing `solve_adjoint` walks. Off by one here and
-  // every stage loads its neighbour's answer, finitely.
+  // every stage reads its neighbour's row, finitely.
   void advance_recorded(std::span<const ode::step_record<System>> rec)
   {
     if (rec.empty())
@@ -244,6 +244,7 @@ public:
         system.ode_state(before.begin());
         ode::apply_insertion(system, rec[k].time, before.begin(), widened);
         set_state_from_system();
+        push_insertion();
         continue;
       }
       if (std::isnan(rec[k].step_size))

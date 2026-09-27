@@ -17,27 +17,29 @@ the answer. What *selects* rather than *moves* (a step size, a knot position, an
 arm) stays a plain `double` and is replayed, because differentiating a selector
 manufactures a discontinuity the model does not have.
 
-**A forward pass can now REPLAY a recording instead of only taking one.** The
-store/load channel already picked its direction by the constness of what a walk
-handed over, and `step_adjoint` already handed a const row — but every forward
-entry point funnelled through one place that zeroed its scratch and passed it
-mutable, so nothing on the way forward could load. `Step::step`'s row parameter is
-templated, so a const row loads and a mutable one stores with no change to the
-body; `advance_recorded()` gains an overload taking a **recording** rather than a
-program, pairing each step with its own row so the two cannot be crossed. No new
-concept and no new name. `method='rodas'` refuses rather than silently re-deriving:
-the Rosenbrock stepper keeps no per-stage row.
+**A forward pass can walk a recording as well as a program.** `advance_recorded()`
+gains an overload taking a **recording**, which pairs each step with its own row so
+the two cannot be crossed.
+- *Each step takes the size that run took.* Its own row starts as a copy of the
+  recorded one, and its stages store into it. So a System can read what the
+  recorded run left there before storing what it solves for itself.
+- *Only the sweep loads a row.* `Step::step` takes a mutable row and `step_adjoint`
+  a const one.
+- *A walk of either kind records the insertions it applies,* so its recording has
+  the rows of the run it follows, and can itself be swept.
+- `method='rodas'` refuses a recording, because the Rosenbrock stepper keeps no
+  per-stage row.
 
-What this is for: a pass that must take the run's answers rather than its own. The
-first consumer is plant's invasion run, where an invader stands in a resident's
-recorded field — exogenous to it, so its derivative is zero rather than severed.
+The first consumer is plant's invasion run. There an invader's rates are evaluated
+in a field recorded by another run, whose derivative with respect to the invader is
+zero, and the invader solves for its own leaf operating points.
 
 **⚠️ The recorded row is six long, not five, and that changes `step_record`.** Five
-of the six are a step's stages; the sixth is the evaluation at the state the step
-ends at, which first-same-as-last hands the next step as its own k1. A sweep
-re-derives that one at the state it was handed and still reads only the first five.
-A forward replay cannot — re-deriving is the thing it replays to avoid — and a step
-whose k1 was re-derived is wrong at first order in `h`.
+of the six are a step's stages. The sixth is the evaluation at the state the step
+ends at, which first-same-as-last hands the next step as its first rates. A sweep
+re-derives that one at the state it was handed and reads only the first five. A
+walk over a recording needs all six, because the sixth is where the next step's
+first rates were evaluated.
 
 The forward-mode scalar lives in `tangent.hpp`, apart from the reverse-mode
 machinery in `adjoint.hpp`, so a consumer wanting a directional derivative and no

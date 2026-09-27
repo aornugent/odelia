@@ -191,10 +191,10 @@ using solved_values_t = typename solved_values<System>::type;
 // other side of a branch, and what is then taped is a function the run never
 // computed, with every number finite.
 //
-// So the run STORES what it solved for and a later pass LOADS it. Which of the two
-// is happening is not a flag anyone keeps: a walk hands over the values, and
-// whether it hands them over to be written or to be read is the constness of what
-// it hands over.
+// So every forward pass STORES what it solved for, and only the sweep LOADS it.
+// Which of the two is happening is not a flag anyone keeps: it is the constness
+// of the values a walk hands over. A walk over a recording hands each evaluation
+// a copy of the recorded values to store into, so a System can read them first.
 //
 // The extent is one rate evaluation, which is what `derivs` is. A walk that hands
 // over nothing opens no extent, so a reload out of band cannot read a record and a
@@ -248,13 +248,8 @@ struct step_record : instruction {
 
   // What this step's six rate evaluations solved for, in order: its five stages,
   // then the evaluation at the state it ends at, which first-same-as-last hands
-  // the next step as its own first rates.
-  //
-  // A SWEEP reads only the first five -- it re-derives the sixth at the state it
-  // was handed -- which is what makes "a walk cannot trust the first stage of a
-  // recording it jumped into" structural instead of a warning. A FORWARD REPLAY
-  // reads all six, because re-deriving is the thing it is replaying to avoid and
-  // a step whose k1 was re-derived is wrong at first order in h.
+  // the next step as its own first rates. A sweep loads the first five and
+  // re-derives the sixth; a walk over the recording starts all six from here.
   std::array<solved_values_t<System>, 6> solved;
 
   // Which component set this step's size -- the one attaining the largest

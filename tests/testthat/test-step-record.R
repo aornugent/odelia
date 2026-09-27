@@ -1,8 +1,9 @@
-# Tests that the solver records the step size each accepted step took, and that a
+# Tests that the solver records the step size each accepted step took, that a
 # replay driven by those sizes reproduces the adaptive run bitwise where a replay
-# driven by the recorded times does not.
+# driven by the recorded times does not, and that a walk over a recording stores
+# its own rows.
 
-compile_step_record_interface <- function() {
+source_odelia_cpp <- function(code) {
   ensure_ode_interface_loaded()
 
   include_dir <- odelia_include_dir()
@@ -20,7 +21,11 @@ compile_step_record_interface <- function() {
     PKG_CPPFLAGS = odelia_cppflags(include_dir),
     PKG_LIBS = pkg_libs
   )
-  Rcpp::sourceCpp(code = '
+  Rcpp::sourceCpp(code = code, verbose = FALSE)
+}
+
+compile_step_record_interface <- function() {
+  source_odelia_cpp('
     // [[Rcpp::plugins(cpp20)]]
     #include <Rcpp.h>
     #include <vector>
@@ -70,7 +75,7 @@ compile_step_record_interface <- function() {
         Rcpp::Named("time_by_steps") = by_steps.time(),
         Rcpp::Named("time_adaptive") = solver.time());
     }
-  ', verbose = FALSE)
+  ')
 }
 
 bits <- function(x) vapply(x, function(v) paste(writeBin(v, raw()), collapse = ""),
@@ -109,3 +114,148 @@ test_that("a replay over the recorded step sizes reproduces the adaptive run bit
   expect_gt(differing, 0)
 })
 
+
+# A decay whose state gains a component at an insertion, and each of whose rate
+# evaluations stores the time it ran at: the smallest System that both solves for
+# values and widens.
+compile_widening_interface <- function() {
+  source_odelia_cpp('
+    // [[Rcpp::plugins(cpp20)]]
+    #include <Rcpp.h>
+    #include <limits>
+    #include <span>
+    #include <vector>
+    #include <odelia/ode_solver.hpp>
+
+    using namespace odelia;
+
+    struct Widening {
+      using value_type = double;
+      struct solved_values {
+        double seeded = std::numeric_limits<double>::quiet_NaN();
+        double found = std::numeric_limits<double>::quiet_NaN();
+      };
+
+      size_t ode_size() const { return y.size(); }
+      double ode_time() const { return time; }
+      void reset() { y.assign(1, 1.0); time = 0.0; }
+      template <typename It> It set_ode_state(It it, double t) {
+        for (double& v : y) v = *it++;
+        time = t;
+        return it;
+      }
+      template <typename It> It ode_state(It it) const {
+        for (double v : y) *it++ = v;
+        return it;
+      }
+      template <typename It> It ode_rates(It it) {
+        if (slot != nullptr) slot->found = time;
+        for (size_t i = 0; i < y.size(); ++i) *it++ = -(1.0 + i) * y[i];
+        return it;
+      }
+
+      // What the slot held when this evaluation began, and then its own value.
+      void store_solved(solved_values& into) {
+        into.seeded = into.found;
+        slot = &into;
+      }
+      void load_solved(const solved_values&) {}
+      void end_solved() { slot = nullptr; }
+
+      template <class It>
+      void apply_insertion(double t, It x, std::vector<double>& out) {
+        for (double& v : y) v = *x++;
+        time = t;
+        y.push_back(1.0);
+        out = y;
+      }
+      void set_recorded_state(const std::vector<double>& s, double t) {
+        y = s;
+        time = t;
+      }
+
+      std::vector<double> y{1.0};
+      double time = 0.0;
+      solved_values* slot = nullptr;
+    };
+
+    using Record = ode::step_record<Widening>;
+
+    static ode::Solver<Widening> kept_solver() {
+      ode::Solver<Widening> solver{Widening{}, ode::OdeControl{}};
+      solver.set_collect(false);
+      solver.set_keep_states(true);
+      solver.reset();
+      return solver;
+    }
+
+    static Rcpp::List describe(std::span<const Record> rec) {
+      Rcpp::LogicalVector insertion;
+      Rcpp::NumericVector time, size, seeded, found;
+      Rcpp::IntegerVector width;
+      for (const Record& row : rec) {
+        insertion.push_back(row.insertion);
+        time.push_back(row.time);
+        size.push_back(row.step_size);
+        width.push_back(static_cast<int>(row.state.size()));
+        for (const Widening::solved_values& v : row.solved) {
+          seeded.push_back(v.seeded);
+          found.push_back(v.found);
+        }
+      }
+      return Rcpp::List::create(
+        Rcpp::Named("insertion") = insertion, Rcpp::Named("time") = time,
+        Rcpp::Named("size") = size, Rcpp::Named("width") = width,
+        Rcpp::Named("seeded") = seeded, Rcpp::Named("found") = found,
+        Rcpp::Named("state_end") = Rcpp::wrap(rec.back().state));
+    }
+
+    // Two adaptive intervals with an insertion between them, then a walk over
+    // that recording whose every value is first marked -1, so what the walk
+    // reads from a row is told apart from what it stores.
+    // [[Rcpp::export]]
+    Rcpp::List widening_walk() {
+      ode::Solver<Widening> run = kept_solver();
+      run.advance_adaptive({0.0, 0.5});
+      Widening& sys = run.get_system_ref();
+      std::vector<double> before(sys.ode_size()), widened;
+      sys.ode_state(before.begin());
+      ode::apply_insertion(sys, 0.5, before.begin(), widened);
+      run.set_state_from_system();
+      run.push_insertion();
+      run.advance_adaptive({0.5, 1.0});
+
+      std::vector<Record> marked(run.recording().begin(), run.recording().end());
+      for (Record& row : marked) {
+        for (Widening::solved_values& v : row.solved) v.found = -1.0;
+      }
+      ode::Solver<Widening> walk = kept_solver();
+      walk.advance_recorded(std::span<const Record>(marked));
+
+      return Rcpp::List::create(Rcpp::Named("run") = describe(run.recording()),
+                                Rcpp::Named("walk") = describe(walk.recording()));
+    }
+  ')
+}
+
+test_that("a walk over a recording stores its own rows", {
+  compile_widening_interface()
+  res <- widening_walk()
+  run <- res$run
+  walk <- res$walk
+
+  # The rows of the run it walks, the insertion among them, at the same times
+  # and widths, reaching the same state.
+  expect_equal(sum(run$insertion), 1L)
+  expect_identical(walk$insertion, run$insertion)
+  expect_identical(bits(walk$time), bits(run$time))
+  expect_identical(walk$width, run$width)
+  expect_identical(bits(walk$state_end), bits(run$state_end))
+
+  # Each step's slots start as the recorded ones, marked -1, and end holding
+  # what the walk's own evaluations stored: the times they ran at.
+  step <- rep(!is.nan(run$size), each = 6)
+  expect_true(all(walk$seeded[step] == -1))
+  expect_identical(bits(walk$found[step]), bits(run$found[step]))
+  expect_true(all(is.finite(run$found[step])))
+})
