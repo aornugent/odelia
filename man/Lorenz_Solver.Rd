@@ -30,6 +30,8 @@ R6 wrapper for the Lorenz ODE solver.
     \item \href{#method-Lorenz_Solver-history_size}{\code{Lorenz_Solver$history_size()}}
     \item \href{#method-Lorenz_Solver-history_step}{\code{Lorenz_Solver$history_step()}}
     \item \href{#method-Lorenz_Solver-history}{\code{Lorenz_Solver$history()}}
+    \item \href{#method-Lorenz_Solver-set_target}{\code{Lorenz_Solver$set_target()}}
+    \item \href{#method-Lorenz_Solver-fit}{\code{Lorenz_Solver$fit()}}
     \item \href{#method-Lorenz_Solver-clone}{\code{Lorenz_Solver$clone()}}
   }
 }
@@ -251,6 +253,59 @@ RK 4(5)) or `"rodas"` (implicit RODAS4(3) Rosenbrock, for stiff systems).}
     \if{html}{\out{<div class="r">}}
     \preformatted{Lorenz_Solver$history()}
     \if{html}{\out{</div>}}
+  }
+}
+
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-Lorenz_Solver-set_target"></a>}}
+\if{latex}{\out{\hypertarget{method-Lorenz_Solver-set_target}{}}}
+\subsection{\code{Lorenz_Solver$set_target()}}{
+  Set the calibration target for `$fit()`.
+  \subsection{Usage}{
+    \if{html}{\out{<div class="r">}}
+    \preformatted{Lorenz_Solver$set_target(times, target, obs_indices)}
+    \if{html}{\out{</div>}}
+  }
+  \subsection{Arguments}{
+    \if{html}{\out{<div class="arguments">}}
+    \describe{
+      \item{\code{times}}{Numeric vector of requested output times.}
+      \item{\code{target}}{Numeric matrix of observed states, one row per entry of
+`obs_indices` and one column per state variable.}
+      \item{\code{obs_indices}}{Integer indices (1-based) into `times` at which each
+row of `target` was observed.}
+    }
+    \if{html}{\out{</div>}}
+  }
+  \subsection{Details}{
+    `times` is the schedule `$fit()` replays: normally a reference
+  run's `$times()`, so each fit takes the same steps and the loss is a
+  smooth function of the inputs.
+  }
+}
+
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-Lorenz_Solver-fit"></a>}}
+\if{latex}{\out{\hypertarget{method-Lorenz_Solver-fit}{}}}
+\subsection{\code{Lorenz_Solver$fit()}}{
+  Least-squares loss against the target, and its exact
+  gradient by reverse-mode automatic differentiation.
+  \subsection{Usage}{
+    \if{html}{\out{<div class="r">}}
+    \preformatted{Lorenz_Solver$fit(ic = NULL, params = NULL)}
+    \if{html}{\out{</div>}}
+  }
+  \subsection{Arguments}{
+    \if{html}{\out{<div class="arguments">}}
+    \describe{
+      \item{\code{ic}}{Initial state to fit from, or `NULL` to keep the system's.}
+      \item{\code{params}}{Parameters to fit at, or `NULL` to keep the system's.}
+    }
+    \if{html}{\out{</div>}}
+  }
+  \subsection{Returns}{
+    A list with `loss` (sum of squared differences) and `gradient`:
+  d(loss)/d(params), then d(loss)/d(ic), for whichever were given.
   }
 }
 

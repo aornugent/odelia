@@ -188,6 +188,17 @@ Rcpp::List Solver_get_history(SEXP solver_xp) {
   );
 }
 
+// Least-squares loss against observed states and its gradient by reverse mode;
+// Solver_fit_impl says what is replayed and in what order the gradient comes.
+// [[Rcpp::export]]
+Rcpp::List Solver_fit(SEXP solver_xp, Rcpp::NumericVector times,
+                      Rcpp::NumericMatrix target, Rcpp::IntegerVector obs_indices,
+                      Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
+                      Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
+  return odelia::solver::Solver_fit_impl<SystemType>(solver_xp, times, target,
+                                                     obs_indices, ic, params);
+}
+
 //-------------------------------------------------------------------------
 // Comparison function for deSolve
 

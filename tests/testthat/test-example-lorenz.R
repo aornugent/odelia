@@ -102,3 +102,52 @@ testthat::test_that("lorenz system runs and produces expected results", {
   expect_false(all(out[,-1] == out2[,-1]))
 
 })
+
+# $fit() against a reference run observed at eleven output times: the reverse sweep
+# is taken one interval between observations at a time, so several observations
+# are what exercise it. Refereed against a central difference of the loss.
+lorenz_fit_setup <- function() {
+  lz <- LorenzSystem$new(10, 28, 8 / 3)
+  lz$set_initial_state(c(1, 1, 1), 0)
+  ctrl <- odelia:::OdeControl$new()
+  runner <- Lorenz_Solver$new(lz$ptr, ctrl$ptr)
+  runner$advance_adaptive(seq(0, 1, by = 0.1))
+  times <- runner$times()
+  hist <- runner$history()
+  fitter <- Lorenz_Solver$new(lz$ptr, ctrl$ptr)
+  fitter$set_target(times, as.matrix(hist[, c("x", "y", "z")]),
+                    match(hist$time, times))
+  fitter
+}
+
+lorenz_central_difference <- function(f, x) {
+  vapply(seq_along(x), function(i) {
+    h <- 1e-6 * max(1, abs(x[[i]]))
+    up <- x; dn <- x
+    up[[i]] <- up[[i]] + h
+    dn[[i]] <- dn[[i]] - h
+    (f(up) - f(dn)) / (2 * h)
+  }, numeric(1))
+}
+
+testthat::test_that("lorenz fit's initial-state gradient matches a central difference", {
+  fitter <- lorenz_fit_setup()
+  ic <- c(1.1, 0.9, 1.05)
+  res <- fitter$fit(ic = ic)
+  expect_length(res$gradient, 3)
+  fd <- lorenz_central_difference(function(y) fitter$fit(ic = y)$loss, ic)
+  expect_equal(res$gradient, fd, tolerance = 1e-6)
+  expect_equal(fitter$fit(ic = c(1, 1, 1))$loss, 0, tolerance = 1e-20)
+})
+
+testthat::test_that("lorenz fit's parameter gradient matches a central difference", {
+  fitter <- lorenz_fit_setup()
+  p <- c(11, 27, 2.5)
+  res <- fitter$fit(params = p)
+  expect_length(res$gradient, 3)
+  fd <- lorenz_central_difference(function(q) fitter$fit(params = q)$loss, p)
+  expect_equal(res$gradient, fd, tolerance = 1e-6)
+  # Both at once: parameters first, then the initial state.
+  both <- fitter$fit(ic = c(1.1, 0.9, 1.05), params = p)
+  expect_length(both$gradient, 6)
+})

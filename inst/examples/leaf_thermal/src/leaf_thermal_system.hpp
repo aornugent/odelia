@@ -75,6 +75,12 @@ public:
     return it;
   }
 
+  // Stand on a state a run recorded, for a reverse sweep: the drivers are read
+  // at the recorded time. The width never changes, so this is set_ode_state.
+  void set_recorded_state(const std::vector<T>& y, double time_) {
+    set_ode_state(y.begin(), time_);
+  }
+
   // Set the initial state (reset point) - no tape registration
   template <typename Iterator>
   Iterator set_initial_state(Iterator it, double t0_ = 0.0) {
@@ -95,6 +101,21 @@ public:
 
   // The parameters a pass can seed active, in the order it indexes them.
   std::vector<T*> ad_parameters() { return {&k_H, &g_tr_max, &m_tr, &T_tr_mid}; }
+
+  // Every member carrying the scalar, for a reverse sweep. ⚠️ A member left out
+  // here silently contributes nothing to the gradient; T_air is a driver value
+  // and stays double. Both overloads, because visit_active passes over a const
+  // object whose walk is non-const without saying so.
+  template <class F>
+  void for_each_active(F&& f) {
+    f(k_H); f(g_tr_max); f(m_tr); f(T_tr_mid);
+    f(T_LC_init); f(T_LC); f(dT_LC); f(S_tr);
+  }
+  template <class F>
+  void for_each_active(F&& f) const {
+    f(k_H); f(g_tr_max); f(m_tr); f(T_tr_mid);
+    f(T_LC_init); f(T_LC); f(dT_LC); f(S_tr);
+  }
 
 void set_drivers() {
     T_air = temperature_fn->evaluate(time);

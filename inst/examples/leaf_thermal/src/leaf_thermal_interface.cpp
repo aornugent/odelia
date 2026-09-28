@@ -226,3 +226,14 @@ Rcpp::DataFrame LeafSolver_get_history_step(SEXP solver_xp, std::size_t i) {
 Rcpp::List LeafSolver_get_history(SEXP solver_xp) {
   return odelia::solver::Solver_get_history_impl<SystemType>(solver_xp);
 }
+
+// Least-squares loss against observed states and its gradient by reverse mode,
+// through the time-varying drivers; Solver_fit_impl says what is replayed.
+// [[Rcpp::export]]
+Rcpp::List LeafSolver_fit(SEXP solver_xp, Rcpp::NumericVector times,
+                          Rcpp::NumericMatrix target, Rcpp::IntegerVector obs_indices,
+                          Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
+                          Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
+  return odelia::solver::Solver_fit_impl<SystemType>(solver_xp, times, target,
+                                                     obs_indices, ic, params);
+}

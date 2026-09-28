@@ -70,6 +70,12 @@ public:
     return it;
   }
 
+  // Stand on a state a run recorded, for a reverse sweep. The width never
+  // changes, so this is set_ode_state.
+  void set_recorded_state(const std::vector<T>& y, double time_) {
+    set_ode_state(y.begin(), time_);
+  }
+
   void compute_rates() {
     dy0dt = sigma * (y1 - y0);
     dy1dt = R * y0 - y1 - y0 * y2;

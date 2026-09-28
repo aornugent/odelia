@@ -45,9 +45,9 @@ record is never handed vocabulary for one. `tangent.hpp` rejects a forward scala
 nested above a reverse one at compile time: three kernels costing 31 statements flat
 cost 566 nested.
 
-`ode_fit.hpp` is removed; `compute_gradient` has no drop-in, and `vector_jacobian_product` plus `sweep.hpp` replace it, with the loss and the optimiser loop becoming the caller's. R loses `Solver_fit()`, `Solver_set_target()` and the `active` argument on the `Solver_*` bindings. The System contract becomes C++20 concepts (`HasOdeTime`, `SolvesForValues`, `ChecksState`, `Rebindable`), and `rebind()` becomes `rebind_from()`.
+`ode_fit.hpp` is removed; `compute_gradient` has no drop-in, and `vector_jacobian_product` plus `sweep.hpp` replace it in C++. The R fitting interface is kept on the new machinery: `$set_target(times, target, obs_indices)` and `$fit(ic, params)` return the same least-squares loss and gradient as before, now by one reverse sweep over a replay of `times`, for both the Lorenz and the leaf thermal examples. What goes is the `active` argument on the `Solver_*` bindings and the separate AD solver it made, since every solver can now fit. A System needs `set_recorded_state()` and `for_each_active()` to be swept. The System contract becomes C++20 concepts (`HasOdeTime`, `SolvesForValues`, `ChecksState`, `Rebindable`), and `rebind()` becomes `rebind_from()`.
 
-A **minor** bump, and a breaking one for a System written against 0.5.0's traits or for a caller of the removed fitting API.
+A **minor** bump, and a breaking one for a System written against 0.5.0's traits or for a caller that passed `active = TRUE`.
 
 ## odelia 0.5.0
 
