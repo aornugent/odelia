@@ -77,3 +77,14 @@ testthat::test_that("fit refuses a call it cannot answer", {
   expect_error(s$fitter$fit(), "at least one of 'ic' or 'params'")
   expect_error(s$fitter$fit(params = c(1, 2)), "one entry per parameter")
 })
+
+testthat::test_that("a fit does not read the freed R system it was built from", {
+  # leaf_fit_setup() drops its R-side systems on return, so the solver's own copy
+  # must not point into them; if it does, a collection frees what it reads.
+  s <- leaf_fit_setup()
+  p <- unname(s$guess)
+  before <- s$fitter$fit(ic = 25.0, params = p)
+  invisible(gc(full = TRUE))
+  invisible(gc(full = TRUE))
+  expect_identical(s$fitter$fit(ic = 25.0, params = p), before)
+})

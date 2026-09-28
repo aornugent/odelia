@@ -4,6 +4,7 @@
 #include <odelia/ode_solver.hpp>
 #include <odelia/drivers.hpp>
 #include <XAD/XAD.hpp>
+#include <memory>
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -48,15 +49,15 @@ public:
   LeafThermalSystem<S2> rebind_from() const {
     const LeafThermalPars p{xad::value(k_H), xad::value(g_tr_max),
                             xad::value(m_tr), xad::value(T_tr_mid)};
-    LeafThermalSystem<S2> out(p, drivers);
+    LeafThermalSystem<S2> out(p, *drivers);
     const double ic = xad::value(T_LC_init);
     out.set_initial_state(&ic, t0);
     return out;
   }
 
   void initialize_drivers(const drivers::Drivers &drv) {
-    drivers = drv;
-    temperature_fn = drivers.get_function_ptr("temperature");
+    drivers = std::make_shared<const drivers::Drivers>(drv);
+    temperature_fn = drivers->get_function_ptr("temperature");
     if (!temperature_fn)
       throw std::runtime_error("Missing driver 'temperature' for LeafThermalSystem");
   }
@@ -202,8 +203,15 @@ private:
 
   // Time and drivers (always double)
   double time;
-  drivers::Drivers drivers;
-  const drivers::Function *temperature_fn;
+  // ⚠️ SHARED, not copied, because temperature_fn points into it. A System copied
+  // with its own Drivers kept a pointer into the source's, which die with the
+  // source -- and R frees the system a solver was built from as soon as nothing
+  // holds it, after which every read was of freed memory. Shared, every copy's
+  // pointer is into one Drivers that lives as long as any copy does. Re-deriving
+  // the pointer after each copy instead measured 2x slower: the solver copies the
+  // System often.
+  std::shared_ptr<const drivers::Drivers> drivers;
+  const drivers::Function *temperature_fn = nullptr;
 
   // Auxiliary
   double T_air;
