@@ -100,8 +100,13 @@ compile_implicit_value_interface <- function() {
       tape.newRecording();
 
       adouble y;
+      // A named container, not a braced list: std::span has no initializer_list
+      // constructor before C++26, so `{{u, du}, {v, dv}}` compiles only on
+      // libstdc++ (which ships that constructor early) and not on libc++.
+      const std::vector<odelia::input_and_derivative<adouble>> rows{{u, du},
+                                                                    {v, dv}};
       const odelia::record_report report =
-          odelia::record_with_derivatives<adouble>(value, {{u, du}, {v, dv}}, y);
+          odelia::record_with_derivatives<adouble>(value, rows, y);
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
       tape.computeAdjoints();
@@ -148,8 +153,10 @@ compile_implicit_value_interface <- function() {
         on_root = odelia::record_report{false, 0, e.what()};
       }
       adouble y;
+      const std::vector<odelia::input_and_derivative<adouble>> on_root_rows{
+          {root, dy_dp}};
       const odelia::record_report on_y =
-          odelia::record_with_derivatives<adouble>(7.5, {{root, dy_dp}}, y);
+          odelia::record_with_derivatives<adouble>(7.5, on_root_rows, y);
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
       tape.computeAdjoints();
