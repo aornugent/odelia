@@ -26,7 +26,7 @@ compile_interpolator_interface <- function() {
 
     using tape_type = xad::Tape<double>;
     using adouble = tape_type::active_type;
-    using odelia::interpolator::hermite_interpolator;
+    using odelia::interpolator::hermite_spline;
 
     // A vertical field sampled at knots, with the slope from the same expression the
     // value comes from -- the pair a crown integral reads.
@@ -58,7 +58,7 @@ compile_interpolator_interface <- function() {
 
     // [[Rcpp::export]]
     Rcpp::List hermite_value_and_slope(std::vector<double> z, std::vector<double> u) {
-      hermite_interpolator<double> interp;
+      hermite_spline<double> interp;
       interp.set_nodes(z);
       interp.set_data(field_values(z), field_slopes(z));
       std::vector<double> value(u.size()), slope(u.size()),
@@ -83,7 +83,7 @@ compile_interpolator_interface <- function() {
       std::vector<double> y2(y.size()), m2(m.size());
       for (std::size_t i = 0; i < y.size(); ++i) { y2[i] = scale * y[i]; m2[i] = scale * m[i]; }
 
-      hermite_interpolator<double> split, whole;
+      hermite_spline<double> split, whole;
       split.set_nodes(z);
 
       std::vector<int> same(2 * u.size());
@@ -112,7 +112,7 @@ compile_interpolator_interface <- function() {
                                                         std::vector<double> u) {
       const std::vector<double> yd = field_values(z), md = field_slopes(z);
       const std::vector<adouble> y(yd.begin(), yd.end()), m(md.begin(), md.end());
-      hermite_interpolator<adouble> interp;
+      hermite_spline<adouble> interp;
       interp.set_nodes(z);
       interp.set_data(y, m);
 
@@ -133,20 +133,20 @@ compile_interpolator_interface <- function() {
 
     // [[Rcpp::export]]
     double hermite_eval_before_data(std::vector<double> z) {
-      hermite_interpolator<double> interp;
+      hermite_spline<double> interp;
       interp.set_nodes(z);
       return interp.eval(z.front());
     }
 
     // [[Rcpp::export]]
     void hermite_data_before_nodes(std::vector<double> z) {
-      hermite_interpolator<double> interp;
+      hermite_spline<double> interp;
       interp.set_data(field_values(z), field_slopes(z));
     }
 
     // [[Rcpp::export]]
     void hermite_set_nodes_descending(std::vector<double> z) {
-      hermite_interpolator<double> interp;
+      hermite_spline<double> interp;
       interp.set_nodes(z);
     }
 
@@ -159,7 +159,7 @@ compile_interpolator_interface <- function() {
       auto df = [](double t) { return 1.3 - 0.8 * t + 0.33 * t * t; };
       std::vector<double> y(z.size()), m(z.size());
       for (std::size_t i = 0; i < z.size(); ++i) { y[i] = f(z[i]); m[i] = df(z[i]); }
-      hermite_interpolator<double> interp;
+      hermite_spline<double> interp;
       interp.init(z, y, m);
       std::vector<double> out(u.size());
       for (std::size_t i = 0; i < u.size(); ++i) out[i] = interp.eval(u[i]) - f(u[i]);
@@ -176,7 +176,7 @@ compile_interpolator_interface <- function() {
       tape.registerInputs(y);
       tape.registerInputs(m);
       tape.newRecording();
-      hermite_interpolator<adouble> interp;
+      hermite_spline<adouble> interp;
       interp.init(z, y, m);
       adouble out = interp.eval(u);
       tape.registerOutput(out);
@@ -201,7 +201,7 @@ compile_interpolator_interface <- function() {
     std::vector<double> interpolator_monotone_read(std::vector<double> x,
                                                    std::vector<double> y,
                                                    std::vector<double> u) {
-      hermite_interpolator<double> interp;
+      hermite_spline<double> interp;
       interp.init(x, y, odelia::interpolator::monotone_slopes(x, y));
       std::vector<double> out(u.size());
       for (std::size_t i = 0; i < u.size(); ++i) out[i] = interp.eval(u[i]);
@@ -215,7 +215,7 @@ compile_interpolator_interface <- function() {
           [](double z) { return std::pair<double, double>(field.value(z),
                                                           field.slope(z)); },
           a, b, tol);
-      hermite_interpolator<double> interp;
+      hermite_spline<double> interp;
       interp.init(chosen.x, chosen.y, chosen.m);
       double worst = 0.0;
       for (std::size_t k = 0; k + 1 < chosen.x.size(); ++k) {
@@ -232,9 +232,9 @@ compile_interpolator_interface <- function() {
     // two cannot, and set_data has a signature for each.
     // [[Rcpp::export]]
     Rcpp::List hermite_orders(std::vector<double> z, std::vector<double> u) {
-      hermite_interpolator<double> cubic;
+      hermite_spline<double> cubic;
       cubic.init(z, field_values(z), field_slopes(z));
-      hermite_interpolator<double, 5> quintic;
+      hermite_spline<double, 5> quintic;
       quintic.init(z, field_values(z), field_slopes(z), field_curvatures(z));
       double worst3 = 0.0, worst5 = 0.0, at_knots = 0.0, slope_at_knots = 0.0;
       for (std::size_t i = 0; i < u.size(); ++i) {

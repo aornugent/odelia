@@ -22,7 +22,6 @@
 ^vignettes/articles$
 ^tools$
 ^tests/standalone$
-^notes$
 ^AGENTS\.md$
 ^ARCHITECTURE\.md$
 ^CLA\.md$

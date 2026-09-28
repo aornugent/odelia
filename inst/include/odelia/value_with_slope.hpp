@@ -1,6 +1,6 @@
 // -*-c++-*-
-#ifndef ODELIA_WITH_SLOPE_HPP_
-#define ODELIA_WITH_SLOPE_HPP_
+#ifndef ODELIA_VALUE_WITH_SLOPE_HPP_
+#define ODELIA_VALUE_WITH_SLOPE_HPP_
 
 namespace odelia {
 

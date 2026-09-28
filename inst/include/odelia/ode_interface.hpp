@@ -71,11 +71,9 @@ using adjoint_tape = typename active_scalar<T>::tape_type;
 // active_system::release, which counts the slots the walk did not reach.
 //
 // This does not open an aggregate of two scalars, so a type standing in for a
-// std::pair on a recorded path declares for_each_active -- hermite_interpolator
-// and with_slope both do, which is why with_slope lives here rather than in a
+// std::pair on a recorded path declares for_each_active -- hermite_spline
+// and value_with_slope both do, which is why value_with_slope lives here rather than in a
 // model: the obligation is this library's.
-// notes/probes/probe_visit_active.cpp reads out which shapes reach the
-// visitor.
 template <class F, class T>
 void visit_active(F& f, T& x) {
   // ⚠️ A TYPE THAT DECLARES for_each_active AND CANNOT BE WALKED CONST IS A
@@ -83,7 +81,7 @@ void visit_active(F& f, T& x) {
   // matching. The rewinding forms in implicit_node.hpp hand their inputs over
   // const, so such a type reaches one of them and contributes no rows at all.
   // Refused here instead: give the type a const overload beside its non-const
-  // one, as with_slope and hermite_interpolator do.
+  // one, as value_with_slope and hermite_spline do.
   static_assert(
       !(std::is_const_v<T> &&
         requires(std::remove_const_t<T>& mutable_x) { mutable_x.for_each_active(f); } &&

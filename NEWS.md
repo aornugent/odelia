@@ -1,4 +1,4 @@
-## odelia 0.5.0
+## odelia 0.6.0
 
 **A recorded run can now be differentiated in reverse mode, so one solve yields the
 derivative with respect to every parameter at once.** Forward mode answers for one
@@ -45,34 +45,19 @@ record is never handed vocabulary for one. `tangent.hpp` rejects a forward scala
 nested above a reverse one at compile time: three kernels costing 31 statements flat
 cost 566 nested.
 
-**The spline becomes an interpolator that reads a slope alongside each knot value,
-and every value between knots moves.** `basic_spline` was a global natural cubic, C2,
-with quadratic extrapolation; `hermite_interpolator` is local Hermite, C1, with
-linear end extension. Knots are hit exactly and everything between and beyond
-differs. On the curve this library tabulates the global fit converged at `h^2`
-against `h^3.7` for the same knots read as a Hermite — a global solve spreads a local
-defect — and it made every knot influence every span, which turns an O(1) adjoint
-into an O(K) one. Nothing read a second derivative. A caller with only values gets
-Fritsch-Carlson limited slopes from `monotone_slopes(x, y)`.
+`ode_fit.hpp` is removed; `compute_gradient` has no drop-in, and `vector_jacobian_product` plus `sweep.hpp` replace it, with the loss and the optimiser loop becoming the caller's. R loses `Solver_fit()`, `Solver_set_target()` and the `active` argument on the `Solver_*` bindings. The System contract becomes C++20 concepts (`HasOdeTime`, `SolvesForValues`, `ChecksState`, `Rebindable`), and `rebind()` becomes `rebind_from()`.
 
-**⚠️ This retracts 0.2.2.** That entry promised that an out-of-domain interpolator
-read is refused with a message naming the point, how far out it lies and what the
-domain was. It is no longer true and there is no switch that restores it:
-`hermite_interpolator` extends linearly from the end knot in `eval`, `value_at` and
-`slope` alike, so a read past the last knot is answered rather than refused. The
-`set_extrapolate` that used to gate it is gone rather than kept as a no-op. **A
-consumer that relied on the refusal must bound its own reads** — clamp the argument,
-cap the value, or check the domain and raise — as `phylloptim` now does at each of
-its three curves.
+A **minor** bump, and a breaking one for a System written against 0.5.0's traits or for a caller of the removed fitting API.
 
-`spline.hpp` and `ode_fit.hpp` are removed. Nothing in `phylloptim` or `plant`
-included either. For an outside consumer, `basic_spline::set_points/operator()/deriv`
-becomes `hermite_interpolator::init(x, y, m)` with `eval` and `slope`;
-`compute_gradient` has no drop-in, and `vector_jacobian_product` plus `sweep.hpp`
-replace it, with the loss and the optimiser loop becoming the caller's.
+## odelia 0.5.0
 
-A **minor** bump, and a breaking one for any consumer of the interpolator or of the
-two removed headers.
+**The spline's backend becomes a cubic Hermite that can take a slope at each knot; the front end does not change, and neither do its numbers.** A model that integrates over crowns knows the derivative at each knot as well as the value, and the global natural spline had no way to accept it. `spline.hpp` now holds `hermite_spline<S>`, a local cubic Hermite built from a value and a slope per knot. `interpolator.hpp` keeps every call the family makes — `init(x, y)`, `eval` with its out-of-domain refusal, `deriv`, `min`/`max`, `set_extrapolate`, `r_eval` — on `hermite_interpolator<S>` (was `basic_interpolator<S>`), which derives from the backend so a caller that has slopes reaches `init(x, y, m)`, `value_and_slope`, `set_nodes`/`set_data` and `refine`.
+
+A caller with values alone gets the natural cubic spline's own knot slopes (`natural_slopes`), and a Hermite read through those slopes is the natural spline on every span, so `init(x, y)` reads the curve it read before: `test-drivers.R` and `test-spline.R` are unchanged, and phylloptim 0.8.1 compiled against this release makes the same number of solver evaluations at the same speed (82.3 per solve, 3.0–3.1 µs, interleaved against 0.4.0), with outputs equal to rounding (worst 2e-10 absolute on its golden grid, from evaluating the same cubic in a different order). With supplied slopes the Hermite reproduces a cubic exactly and a read reaches four knots rather than all of them, which is what keeps an adjoint through it O(1). `monotone_slopes` (Fritsch–Carlson) is there for a caller that needs an interpolant that never leaves its data's range.
+
+`value_with_slope<T>` pairs a value with its slope so the two cannot be handed over separately and paired wrongly; `util::to_passive` strips every derivative layer from a scalar.
+
+A **minor** bump: breaking only for a consumer that named `basic_interpolator<S>` or `spline::basic_spline<S>` directly. Split out of the reverse-mode change (#59).
 
 ## odelia 0.4.0
 
