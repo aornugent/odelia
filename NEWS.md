@@ -48,6 +48,11 @@ cost 566 nested.
 `ode_fit.hpp` is removed; `compute_gradient` has no drop-in, and `vector_jacobian_product` plus `sweep.hpp` replace it in C++. The R fitting interface is kept on the new machinery: `$set_target(times, target, obs_indices)` and `$fit(ic, params)` return the same least-squares loss and gradient as before, now by one reverse sweep over a replay of `times`, for both the Lorenz and the leaf thermal examples. What goes is the `active` argument on the `Solver_*` bindings and the separate AD solver it made, since every solver can now fit. A System needs `set_recorded_state()` and `for_each_active()` to be swept. The System contract becomes C++20 concepts (`HasOdeTime`, `SolvesForValues`, `ChecksState`, `Rebindable`), and `rebind()` becomes `rebind_from()`.
 
 A **minor** bump, and a breaking one for a System written against 0.5.0's traits or for a caller that passed `active = TRUE`.
+## odelia 0.5.1
+
+**The spline reads as fast as 0.4.0's again, with the same numbers.** On a graded knot grid, 0.5.0 found a query's span by binary search, where 0.4.0 guessed from the mean spacing and stepped from there (#21). plant's adaptive light field is graded and read in height order, so the search made its FF16 runs 17% slower than on 0.4.0. `hermite_spline` now uses the guess-and-step lookup again, which returns exactly the span the search did: 2.55 million reads on random graded grids, knots and their neighbouring doubles included, are bit-identical. The front end's unchecked `operator()` also skips the initialisation check, as 0.4.0's did.
+
+Against plant on 0.4.0, interleaved: FF16 full lifetime 0.106 to 0.102 s, K93 0.036 to 0.035 s, and TF24 6 years 2.35 to 2.31 s.
 
 ## odelia 0.5.0
 
