@@ -70,14 +70,15 @@ non-obvious choice — and nothing else. The bar the AD surface is held to:
   the file — the physics is the point. Give an example a real applied domain, not an
   abstract stand-in.
 
-The contract a System implements to be differentiable is stated as concepts in
-`inst/include/odelia/ode_interface.hpp` -- `Rebindable`, `HasOdeTime`,
-`SolvesForValues` -- so a System that does not satisfy it fails to compile naming
-the requirement it missed. Read those rather than any prose account: a prose copy
-of a compiler-checked contract drifts, and the one this repository used to carry
-listed a member that had been removed. `ARCHITECTURE.md` covers the XAD `Tape`
-link. Don't hand-edit generated files (`R/RcppExports.R`,
-`src/RcppExports.cpp`, `NAMESPACE`, `man/`).
+The contract a System implements to be differentiable is stated in
+`inst/include/odelia/ode_interface.hpp` -- the concepts `Rebindable` and
+`HasOdeTime`, and `solved_values`, whose declaration obliges `store_solved`,
+`load_solved` and `end_solved` -- so a System that does not satisfy it fails to
+compile naming the requirement it missed. Read those rather than any prose
+account: a prose copy of a compiler-checked contract drifts, and the one this
+repository used to carry listed a member that had been removed.
+`ARCHITECTURE.md` covers the XAD `Tape` link. Don't hand-edit generated files
+(`R/RcppExports.R`, `src/RcppExports.cpp`, `NAMESPACE`, `man/`).
 
 ## Plant family
 

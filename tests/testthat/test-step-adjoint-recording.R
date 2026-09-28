@@ -63,11 +63,6 @@ lv_system <- '
       compute_rates();
       return it;
     }
-    // This width never moves, so being the shape a recorded time implies is
-    // nothing, and the load is the ordinary one.
-    void set_recorded_state(const std::vector<T>& y, double time_) {
-      set_ode_state(y.begin(), time_);
-    }
     void compute_rates() {
       ++rate_calls;
       const T flux = b * n * p;
@@ -152,7 +147,9 @@ compile_recording_interface <- function() {
       odelia::ode::adjoint_rows rows(1, adj.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::active_system<LotkaVolterra<double>> active{adj, step_tape};
-      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, seeds, swept, rows);
+      stepper.step_adjoint(active, odelia::ode::no_solved_values{}, time,
+                           std::as_const(solved), time, step_size, y, seeds,
+                           swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
       const std::vector<double> parameter_adjoint = rows.to_rows()[0];
 

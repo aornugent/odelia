@@ -184,7 +184,7 @@ struct solved_values<System> {
 template <class System>
 using solved_values_t = typename solved_values<System>::type;
 
-// A System whose rate evaluation solves for something its state does not
+// A System that declares `solved_values` solves for something its state does not
 // determine: the branch of an inner root-find, an early exit, the point an
 // optimisation landed on. A pass re-running the model in order to tape it has to
 // take the RUN'S result rather than solve again -- re-solving risks landing the
@@ -192,21 +192,40 @@ using solved_values_t = typename solved_values<System>::type;
 // computed, with every number finite.
 //
 // So every forward pass STORES what it solved for, and only the sweep LOADS it.
-// Which of the two is happening is not a flag anyone keeps: it is the constness
-// of the values a walk hands over. A walk over a recording hands each evaluation
-// a copy of the recorded values to store into, so a System can read them first.
+// Which of the two is happening is the constness of the values a walk hands over.
+// A walk over a recording hands each evaluation a copy of the recorded values to
+// store into, so a System can read them first.
 //
-// The extent is one rate evaluation, which is what `derivs` is. A walk that hands
-// over nothing opens no extent, so a reload out of band cannot read a record and a
-// record cannot complete a state it was not taken at.
-template <typename System>
-concept SolvesForValues =
-  requires(System s, solved_values_t<System>& into,
-           const solved_values_t<System>& from) {
-    s.store_solved(into);
-    s.load_solved(from);
-    s.end_solved();
-  };
+// Declaring the type is the opt-in: such a System defines store_solved,
+// load_solved and end_solved, and one that does not fails to compile.
+template <class System>
+void store_solved(System& system, solved_values_t<System>& into) {
+  if constexpr (!std::same_as<solved_values_t<System>, no_solved_values>) {
+    system.store_solved(into);
+  }
+}
+template <class System>
+void load_solved(System& system, const solved_values_t<System>& from) {
+  if constexpr (!std::same_as<solved_values_t<System>, no_solved_values>) {
+    system.load_solved(from);
+  }
+}
+template <class System>
+void end_solved(System& system) {
+  if constexpr (!std::same_as<solved_values_t<System>, no_solved_values>) {
+    system.end_solved();
+  }
+}
+
+// What a row's rate evaluations solved for. A step fills all six: its five
+// stages, then the evaluation at the state it ends at, which first-same-as-last
+// hands the next step as its first rates. Any other row fills `at_state` alone:
+// the rates after an insertion, or the rates a run starts with.
+template <class Values>
+struct solved_row {
+  std::array<Values, 5> stages{};
+  Values at_state{};
+};
 
 // One instruction of a program: what carries the state from one boundary to the
 // next. A step reaches `time`, by `step_size` where a run pinned it and by whatever
@@ -246,11 +265,9 @@ template <typename System>
 struct step_record : instruction {
   state_type<System> state;
 
-  // What this step's six rate evaluations solved for, in order: its five stages,
-  // then the evaluation at the state it ends at, which first-same-as-last hands
-  // the next step as its own first rates. A sweep loads the first five and
-  // re-derives the sixth; a walk over the recording starts all six from here.
-  std::array<solved_values_t<System>, 6> solved;
+  // What this row's rate evaluations solved for. A walk over the recording starts
+  // each evaluation's own slot as a copy of these, and a sweep loads them.
+  solved_row<solved_values_t<System>> solved;
 
   // Which component set this step's size -- the one attaining the largest
   // weighted error ratio -- and that ratio. OdeControl::no_component where the
@@ -259,25 +276,18 @@ struct step_record : instruction {
   double error_ratio = 0.0;
 };
 
-// A System whose state vector gains entries during a run does not declare a
-// concept for it. Two members carry the whole of it, and they are as mandatory as
-// ode_size() for a System a sweep is asked to walk, so they are called directly
-// like it:
+// A System whose state vector gains entries during a run declares two members,
+// which a walk and a sweep call where the width changes:
 //
-//   set_recorded_state(y, time)  -- be the shape this recorded time implies, then
-//                                   take these values. A run loads into the shape
-//                                   it already built; a replay does not know it,
-//                                   and derives it from the schedule the run was
-//                                   driven by.
-//   apply_insertion(time, x, y)  -- the insertion as a map, the state below it in
-//                                   and the whole wider state out, so it runs at
-//                                   any scalar and the sweep can transpose it. It
-//                                   leaves the System holding that wider state.
+//   reshape_to(time)       -- be the shape a recorded time implies, before any
+//                             insertion at that time. A walk that jumps into a
+//                             recording derives it from the schedule the run was
+//                             driven by.
+//   apply_insertion(time)  -- the insertion at `time`, applied to the state held.
+//                             It runs at any scalar, so the sweep transposes it
+//                             after evaluating the state below it.
 //
-// For a width that never moves, the first is a System's ordinary load. The second
-// is asked for only where the width changed, so a System that never widens is
-// never asked for it -- ode::apply_insertion above is what a walk calls, and
-// passing the state through is what an insertion is for such a System.
+// A System whose width never moves declares neither, and both are nothing for it.
 //
 // An insertion whose TIME depends on the parameters is a different map: its
 // adjoint carries a term through that time which nothing here computes. A System
@@ -440,12 +450,12 @@ template <class System, class Values>
 struct solved_scope {
   solved_scope(System& system, Values& values) : system_(system) {
     if constexpr (std::is_const_v<Values>) {
-      system_.load_solved(values);
+      load_solved(system_, values);
     } else {
-      system_.store_solved(values);
+      store_solved(system_, values);
     }
   }
-  ~solved_scope() { system_.end_solved(); }
+  ~solved_scope() { end_solved(system_); }
   solved_scope(const solved_scope&) = delete;
   solved_scope& operator=(const solved_scope&) = delete;
 
@@ -454,11 +464,9 @@ private:
 };
 
 // One rate evaluation, handed what its inner solves are to write into, or what an
-// earlier pass wrote for it. The two differ only in constness; a System that
-// solves for nothing is never handed either.
+// earlier pass wrote for it. The two differ only in constness.
 template <typename T, typename StateType, typename Values>
-  requires SolvesForValues<T> &&
-           std::same_as<std::remove_const_t<Values>, solved_values_t<T>>
+  requires std::same_as<std::remove_const_t<Values>, solved_values_t<T>>
 void derivs(T& obj, const StateType& y, StateType& dydt, const double time,
             Values& solved) {
   const solved_scope<T, Values> extent{obj, solved};
@@ -511,24 +519,45 @@ std::vector<double> r_ode_rates(T& obj) {
   return dydt;
 }
 
-// Put the System on the state the run recorded at `step`. The System reconciles
-// itself to that time -- which insertions had happened by then is derived from the
-// schedule it was driven by, not handed to it -- and the width it arrives at is
-// checked against the width recorded there.
-//
-// Idempotent, and that is the whole reason it is a load: the System reconciles to
-// the step rather than stepping toward it, so arriving twice is arriving once and
-// a walk can be run again over the recording it has already walked.
+// A widening System's two members, where it declares them; nothing otherwise.
 template <class System>
-void be_at_step(System& system, std::span<const step_record<System>> rec,
-                std::size_t step) {
+void reshape_to(System& system, double time) {
+  if constexpr (requires { system.reshape_to(time); }) {
+    system.reshape_to(time);
+  }
+}
+template <class System>
+void apply_insertion(System& system, double time) {
+  if constexpr (requires { system.apply_insertion(time); }) {
+    system.apply_insertion(time);
+  }
+}
+
+// When the evaluation at row k's state ran: a step's end at the row below's time
+// plus the step, which differs by a rounding from a clamped step's recorded end.
+template <class Rows>
+double at_state_time(const Rows& rec, std::size_t k) {
+  const auto& row = rec[k];
+  return (k == 0 || row.insertion) ? row.time : rec[k - 1].time + row.step_size;
+}
+
+// Put the System on the state the run recorded at `step`, and repeat the
+// evaluation the run made there. The System reconciles its shape to that time --
+// which insertions had happened by then is derived from the schedule it was driven
+// by -- and the width it arrives at is checked against the width recorded there.
+//
+// Idempotent: arriving twice is arriving once, so a walk can be run again over the
+// recording it has already walked. An insertion row's state is wider than the
+// shape its time implies, so it is reached through the row below it instead.
+template <class System, class Rows>
+void be_at_step(System& system, const Rows& rec, std::size_t step) {
     if (step >= rec.size()) {
         util::stop("be_at_step: step " +
                    util::to_string(static_cast<int>(step)) +
                    " is outside a recording of " +
                    util::to_string(static_cast<int>(rec.size())) + " steps");
     }
-    system.set_recorded_state(rec[step].state, rec[step].time);
+    reshape_to(system, rec[step].time);
     // Named, because a bare length mismatch reads as a caller's error one call
     // away and says nothing about which walk or which step refused.
     if (system.ode_size() != rec[step].state.size()) {
@@ -539,32 +568,9 @@ void be_at_step(System& system, std::span<const step_record<System>> rec,
                    util::to_string(static_cast<int>(rec[step].state.size())) +
                    " recorded there");
     }
-}
-
-// Apply the insertion the run took at `time`, from the state below it, and read
-// back the state it produced: the insertion as a map, so it runs at any scalar
-// and a sweep can transpose it.
-//
-// ⚠️ THE SYSTEM IS LEFT HOLDING THAT WIDER STATE, and no version of this leaves a
-// widening System where it was: pushing the nodes is how the state is computed. So
-// a walk rebinds again below this rather than sweeping the width below on what this
-// ran on.
-//
-// A System whose width never changes inserts nothing, so the state passes
-// through. That is not a fallback for a System that forgot to declare one -- it
-// is what an insertion is for a width that does not move, and it is what lets a
-// recording of such a System be walked without it implementing a map it is never
-// asked for.
-template <class System, class It>
-void apply_insertion(System& system, double time, It x,
-                     state_type<System>& out) {
-  if constexpr (requires { system.apply_insertion(time, x, out); }) {
-    system.apply_insertion(time, x, out);
-  } else {
-    for (std::size_t i = 0; i < out.size(); ++i) {
-      out[i] = *x++;
-    }
-  }
+    state_type<System> dydt(rec[step].state.size());
+    derivs(system, rec[step].state, dydt, at_state_time(rec, step),
+           std::as_const(rec[step].solved.at_state));
 }
 
 template <typename T>

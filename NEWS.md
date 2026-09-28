@@ -17,16 +17,22 @@ the answer. What *selects* rather than *moves* (a step size, a knot position, an
 arm) stays a plain `double` and is replayed, because differentiating a selector
 manufactures a discontinuity the model does not have.
 
-**A forward pass can walk a recording as well as a program.** `advance_recorded()`
-gains an overload taking a **recording**, which pairs each step with its own row so
-the two cannot be crossed.
-- *Each step takes the size that run took.* Its own row starts as a copy of the
-  recorded one, and its stages store into it. So a System can read what the
-  recorded run left there before storing what it solves for itself.
-- *Only the sweep loads a row.* `Step::step` takes a mutable row and `step_adjoint`
-  a const one.
-- *A walk of either kind records the insertions it applies,* so its recording has
-  the rows of the run it follows, and can itself be swept.
+**A forward pass walks rows, and every evaluation at a recorded state repeats the one
+its row recorded.**
+- *One walk.* `advance_recorded(rows)` takes a program's rows or a recording's,
+  of the System or of the same System at another scalar. A step row is taken at
+  the size it records, or to its time where it records none. An insertion row
+  applies the System's `apply_insertion(time)` to the state held, or a map the
+  caller passes, and is recorded as the run it follows recorded it.
+- *A recording seeds.* Each evaluation's own slot starts as a copy of its row's,
+  so a System reads what the recorded run left there before storing what it
+  solves for itself.
+- *Only the sweep loads, and it loads every slot*, a step's first rates included,
+  which it takes from the row below.
+- *`set_state_from_system` is a full evaluation* addressed to the last row, which
+  is the start or an insertion. After an insertion it keeps the recorded time.
+- *`be_at_step` reshapes the System* with `reshape_to(time)` and repeats the
+  evaluation at that row's state.
 - `method='rodas'` refuses a recording, because the Rosenbrock stepper keeps no
   per-stage row.
 
@@ -34,12 +40,18 @@ The first consumer is plant's invasion run. There an invader's rates are evaluat
 in a field recorded by another run, whose derivative with respect to the invader is
 zero, and the invader solves for its own leaf operating points.
 
-**⚠️ The recorded row is six long, not five, and that changes `step_record`.** Five
-of the six are a step's stages. The sixth is the evaluation at the state the step
-ends at, which first-same-as-last hands the next step as its first rates. A sweep
-re-derives that one at the state it was handed and reads only the first five. A
-walk over a recording needs all six, because the sixth is where the next step's
-first rates were evaluated.
+**⚠️ `step_record::solved` is a `solved_row {stages[5], at_state}`.** `at_state` is
+the evaluation at the row's state: a step's end, which first-same-as-last hands the
+next step as its first rates; the rates after an insertion; or the rates a run
+starts with. A step's `at_state` ran at the row below's time plus the step
+(`at_state_time`), which can differ by a rounding from a clamped step's recorded end.
+
+**⚠️ Removed: `SolvesForValues`, `program_from`, `state_at_range`, `sweep.hpp`, and
+the widening members `set_recorded_state(y, time)` and `apply_insertion(time, x, y)`.**
+A System opts into the record by declaring `solved_values`, and must then define
+`store_solved`, `load_solved` and `end_solved`. A widening System declares
+`reshape_to(time)` and `apply_insertion(time)`. `step_adjoint` takes the row below's
+`at_state` and the time it ran at.
 
 The forward-mode scalar lives in `tangent.hpp`, apart from the reverse-mode
 machinery in `adjoint.hpp`, so a consumer wanting a directional derivative and no

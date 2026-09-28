@@ -71,10 +71,11 @@ public:
   // with the same integration settings.
 
   // Synchronize internal ODE buffers from the current system state without
-  // resetting solver history/step-size state.
-  void set_state_from_system()
+  // resetting solver history/step-size state. `seed` is what the evaluation there
+  // starts from, where a recording is walked.
+  void set_state_from_system(const solved_values_t<System>* seed = nullptr)
   {
-    solver.set_state_from_system(system);
+    solver.set_state_from_system(system, seed);
   }
 
   // Record the wider state an insertion just reached, on the row it followed.
@@ -144,58 +145,84 @@ public:
     }
   }
 
-  // Step over a schedule, landing on each of its times: at the recorded size
-  // where one is known, and to the time itself where it is not. Not by
-  // differencing the times, because a size differenced back out of two recorded
-  // times is not the size that was taken; and not by adding sizes, which arrives
-  // a rounding short of where the run landed.
+  // Walk rows: a program's, or a recording's, of this System or of the same System
+  // at another scalar. A step row is taken at the size the row records, and to its
+  // time where it records none; an insertion row applies `insert` to the state
+  // held and records the insertion as the run it follows did.
   //
-  // A row marked an insertion is followed by the System's own state map, applied
-  // here. A schedule that says where its insertions are is one a walk can execute
-  // without a range loop wrapped around it -- and it is the same map the sweep
-  // transposes, so a tangent replayed through here traverses exactly the function
-  // under test rather than a second spelling of it. The walk records each
-  // insertion as a row, as the run it follows did.
-  void advance_recorded(const std::vector<ode::instruction>& program)
+  // The step sizes are replayed rather than the times: a size differenced back out
+  // of two recorded times is not the size that was taken, since fl(fl(t + h) - t)
+  // is not h, and a walk that chose its own would be differentiating a controller
+  // the model does not contain.
+  //
+  // A recording's rows travel WITH the steps: each evaluation's own slot starts as
+  // a copy of the row's, so a System reads what the recorded run left there and
+  // stores what it solves for itself.
+  //
+  // ⚠️ `rows[k].solved` is what the step that REACHED `rows[k].time` solved, which
+  // is the pairing `solve_adjoint` walks. Off by one here and every evaluation
+  // reads its neighbour's row, finitely.
+  template <class Rows, class Insert>
+  void advance_recorded(const Rows& rows, Insert&& insert)
   {
-    if (program.empty())
+    if (rows.size() == 0)
     {
-      util::stop("'program' must hold at least the entry it starts from");
+      util::stop("'rows' must hold at least the row the walk starts from");
     }
-    if (program.front().insertion || !std::isnan(program.front().step_size))
+    // The first row is where the caller put the System: a run's start, or an
+    // insertion already applied. A step there would be skipped.
+    if (!rows[0].insertion && !std::isnan(rows[0].step_size))
     {
-      util::stop("A program's first entry is where it starts, which no "
-                 "instruction reached, so it must be a step of NaN size");
+      util::stop("A walk's first row is where it starts, so it must be a run's "
+                 "start or an insertion, not a step of size " +
+                 util::format_double(rows[0].step_size));
     }
-
-    // Held across the walk rather than made per insertion. `widened` is written
-    // and not read: what the map leaves on the System is what this wants.
-    std::vector<value_type> before;
-    std::vector<value_type> widened;
+    // The start's own evaluation, seeded where the rows carry one.
+    if constexpr (requires { rows[0].solved; })
+    {
+      set_state_from_system(&rows[0].solved.at_state);
+    }
 
     if (collect)
     {
       history.push_back(system);
     }
 
-    for (std::size_t k = 1; k < program.size(); ++k)
+    for (std::size_t k = 1; k < rows.size(); ++k)
     {
-      if (program[k].insertion)
+      const auto& row = rows[k];
+      if (row.insertion)
       {
-        before.assign(system.ode_size(), value_type(0.0));
-        system.ode_state(before.begin());
-        ode::apply_insertion(system, program[k].time, before.begin(), widened);
-        set_state_from_system();
+        insert(system, row.time);
         push_insertion();
+        if constexpr (requires { row.solved; })
+        {
+          set_state_from_system(&row.solved.at_state);
+        }
+        else
+        {
+          set_state_from_system();
+        }
         continue;
       }
-      if (std::isnan(program[k].step_size))
+      if constexpr (requires { row.solved; })
       {
-        solver.step_to(system, program[k].time);
+        // A recorded step was taken, so it has a size; stepping to its time
+        // instead would leave the row unread.
+        if (std::isnan(row.step_size))
+        {
+          util::stop("A recorded step carries the size it took; row " +
+                     util::to_string(k) + " has none");
+        }
+        solver.step_by(system, row.step_size, row.time, &row.solved);
+      }
+      else if (std::isnan(row.step_size))
+      {
+        solver.step_to(system, row.time);
       }
       else
       {
-        solver.step_by(system, program[k].step_size, program[k].time);
+        solver.step_by(system, row.step_size, row.time);
       }
       if (collect)
       {
@@ -204,64 +231,13 @@ public:
     }
   }
 
-  // The same walk over a RECORDING rather than a program, which is a recording
-  // minus its rows. Each step is taken at the size that run took, and its own row
-  // starts as a copy of the recorded one: a System reads what the recorded run
-  // left there and stores what it solves for itself.
-  //
-  // The row travels WITH the step, because `step_record` is the instruction plus
-  // what the step left: a program and a row-vector side by side can be paired
-  // across different runs, and one object cannot.
-  //
-  // ⚠️ `rec[k].solved` is what the stages of the step that REACHED `rec[k].time`
-  // solved, which is the same pairing `solve_adjoint` walks. Off by one here and
-  // every stage reads its neighbour's row, finitely.
-  void advance_recorded(std::span<const ode::step_record<System>> rec)
+  // The same walk, with each insertion the System's own.
+  template <class Rows>
+  void advance_recorded(const Rows& rows)
   {
-    if (rec.empty())
-    {
-      util::stop("'rec' must hold at least the entry it starts from");
-    }
-    if (rec.front().insertion || !std::isnan(rec.front().step_size))
-    {
-      util::stop("A recording's first entry is where it starts, which no "
-                 "instruction reached, so it must be a step of NaN size");
-    }
-
-    std::vector<value_type> before;
-    std::vector<value_type> widened;
-
-    if (collect)
-    {
-      history.push_back(system);
-    }
-
-    for (std::size_t k = 1; k < rec.size(); ++k)
-    {
-      if (rec[k].insertion)
-      {
-        before.assign(system.ode_size(), value_type(0.0));
-        system.ode_state(before.begin());
-        ode::apply_insertion(system, rec[k].time, before.begin(), widened);
-        set_state_from_system();
-        push_insertion();
-        continue;
-      }
-      if (std::isnan(rec[k].step_size))
-      {
-        // A recording's steps are steps that were taken, so every one of them
-        // has a size. A NaN here is a grid someone built by hand and called a
-        // recording, and stepping TO the time would leave the rows unread.
-        util::stop("A recorded step carries the size it took; entry " +
-                   util::to_string(k) + " has none, so it is a grid rather "
-                   "than a recording and cannot supply what its stages solved");
-      }
-      solver.step_by(system, rec[k].step_size, rec[k].time, &rec[k].solved);
-      if (collect)
-      {
-        history.push_back(system);
-      }
-    }
+    advance_recorded(rows, [](System& sys, double time) {
+      ode::apply_insertion(sys, time);
+    });
   }
 
   // Take a series of plain forward-Euler steps over the supplied grid. One
@@ -431,17 +407,27 @@ public:
         continue;
       }
       // The map that widened `at`, transposed at the width below it -- which is
-      // the width the range below runs at, and the width the row below holds.
+      // the width the range below runs at, and the width the row below holds. The
+      // run applied it after the evaluation the row below recorded, so that is
+      // repeated first.
       //
       // Its active System is its own and dies with it, because applying the map is
       // what widens the System: what this records on cannot be swept at the width
       // it started from.
       ode::be_at_step(system, rec, at - 1);
       const double when = rec[at].time;
+      const double below_time = ode::at_state_time(rec, at - 1);
       auto insert = [&](auto& sys,
                         typename std::vector<scalar>::const_iterator x,
                         std::vector<scalar>& y) -> void {
-        ode::apply_insertion(sys, when, x, y);
+        const std::vector<scalar> below(
+            x, x + static_cast<std::ptrdiff_t>(sys.ode_size()));
+        std::vector<scalar> rates(below.size());
+        ode::derivs(sys, below, rates, below_time,
+                    std::as_const(rec[at - 1].solved.at_state));
+        ode::apply_insertion(sys, when);
+        y.assign(sys.ode_size(), scalar(0.0));
+        sys.ode_state(y.begin());
       };
       ode::active_system<System> widened{system, tape};
       ode::adjoint_rows narrowed;
@@ -526,8 +512,9 @@ private:
       // step's landing or an insertion's output.
       const state_type<System>& from = rec[k - 1].state;
       util::check_length(from.size(), active.system.ode_size());
-      solver.step_adjoint(active, rec[k].solved, rec[k - 1].time,
-                          rec[k].step_size, from,
+      solver.step_adjoint(active, rec[k - 1].solved.at_state,
+                          ode::at_state_time(rec, k - 1), rec[k].solved,
+                          rec[k - 1].time, rec[k].step_size, from,
                           lambda, lambda_in, parameter_adjoint);
       // Swapped rather than moved from: a move leaves the buffer this step wrote
       // into empty, so the next step allocates one the same size again. Swapping

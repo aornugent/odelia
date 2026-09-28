@@ -56,7 +56,9 @@ public:
   SolverInternal(System &system, OdeControl control_,
                  Method method_ = Method::rkck);
   void reset(System& system);
-  void set_state_from_system(System& system);
+  // `seed`, where a recording is walked, is what the evaluation's slot starts as.
+  void set_state_from_system(System& system,
+                             const solved_values_t<System>* seed = nullptr);
 
   state_type get_state() const {return y;}
   double get_time() const {return time;}
@@ -73,6 +75,7 @@ public:
   // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
   // counterpart.
   void step_adjoint(active_system<System>& active,
+                    const solved_values_t<System>& first, double first_time,
                     const typename Step<System>::solved_row& solved, double time,
                     double step_size, const state_type& y,
                     const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
@@ -85,7 +88,7 @@ public:
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
     resize(lambda_out.width());
-    stepper.step_adjoint(active, solved, time, step_size, y,
+    stepper.step_adjoint(active, first, first_time, solved, time, step_size, y,
                          lambda_out, lambda_in, parameter_adjoint);
   }
 
@@ -162,7 +165,7 @@ private:
   void resize(size_t size_);
   void setup_dydt_in(System& system);
   void save_dydt_out_as_in();
-  void set_time(double t);
+  void open_at(double t);
 
   // Stepper dispatch: SolverInternal holds both steppers and forwards to the one
   // selected at construction. The adaptive controller (see step()) is otherwise
@@ -200,11 +203,7 @@ private:
       // and only the one that is accepted is committed -- which is what makes
       // "a rejected attempt writes the same slot as its retry" nothing anyone has
       // to arrange.
-      if (seed != nullptr) {
-        solved_scratch_ = *seed;
-      } else {
-        for (solved_values_t<System>& row : solved_scratch_) { row = {}; }
-      }
+      solved_scratch_ = seed != nullptr ? *seed : typename Step<System>::solved_row{};
       stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
                    dydt_in_, dydt_out_);
     }
@@ -281,25 +280,27 @@ void SolverInternal<System>::reset(System& system) {
   set_state_from_system(system);
 }
 
-// Seed y and dydt_in from whatever state the system currently holds. The system
-// is mutable because `ode_rates` is allowed to compute: a system that reaches a
-// state by a route of its own (widening it, reloading it) can then hand back the
-// derivative *of that state* rather than a cached one belonging to an earlier
-// one. Marking dydt_in clean here is only sound because of that -- with a const
-// system the rates were whatever the system last happened to store, and under
-// first-same-as-last they became k1 of the next step.
+// Seed y and dydt_in from whatever state the system currently holds, by one full
+// evaluation there: the rates the next step takes as its k1, addressed to the last
+// row's `at_state`. That row is the start, which this opens at the System's time,
+// or an insertion, which keeps the time the recording gives it.
 template <class System>
-void SolverInternal<System>::set_state_from_system(System& system) {
-  set_time(ode::ode_time(system));
+void SolverInternal<System>::set_state_from_system(
+    System& system, const solved_values_t<System>* seed) {
+  open_at(ode::ode_time(system));
   resize(system.ode_size());
   system.ode_state(y.begin());
-  system.ode_rates(dydt_in.begin());
+  solved_values_t<System> at_state = seed != nullptr ? *seed : solved_values_t<System>{};
+  ode::derivs(system, y, dydt_in, time, at_state);
   dydt_in_is_clean = true;
-  // The state the run starts from, into the record set_time just opened. Kept
-  // here rather than by the caller because this is the one place that knows the
-  // System has been read.
-  if (keep_states_ && prev_steps.size() == 1 && prev_steps.back().state.empty()) {
-    prev_steps.back().state.assign(y.begin(), y.end());
+  if (keep_states_) {
+    step_record<System>& row = prev_steps.back();
+    // The start's state, which no step recorded. An insertion's was recorded as
+    // it was pushed.
+    if (row.state.empty()) {
+      row.state.assign(y.begin(), y.end());
+    }
+    row.solved.at_state = std::move(at_state);
   }
 }
 
@@ -765,8 +766,11 @@ void SolverInternal<System>::save_dydt_out_as_in() {
   }
 }
 
+// Open the record at the System's time `t`, or, once it is open, check `t`
+// against its last row: a System whose clock moved between legs needs a reset. The
+// solver keeps its own time, which a step's end differs from by a rounding.
 template <typename System>
-void SolverInternal<System>::set_time(double t) {
+void SolverInternal<System>::open_at(double t) {
   const int ulp = 2; // units in the last place (accuracy)
   if (prev_steps.size() > 0 &&
       !util::almost_equal(prev_steps.back().time, t, ulp))
@@ -775,8 +779,8 @@ void SolverInternal<System>::set_time(double t) {
                util::format_double(prev_steps.back().time - t) +
                "). Reset solver first.");
   }
-  time = t;
-  if (prev_steps.empty()) { // only if first time (avoids duplicate times)
+  if (prev_steps.empty()) {
+    time = t;
     // No step reached the initial time, so it records no size. The state is
     // recorded by set_state_from_system, which calls this and then holds it.
     prev_steps.push_back(

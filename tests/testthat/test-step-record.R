@@ -162,17 +162,7 @@ compile_widening_interface <- function() {
       void load_solved(const solved_values&) {}
       void end_solved() { slot = nullptr; }
 
-      template <class It>
-      void apply_insertion(double t, It x, std::vector<double>& out) {
-        for (double& v : y) v = *x++;
-        time = t;
-        y.push_back(1.0);
-        out = y;
-      }
-      void set_recorded_state(const std::vector<double>& s, double t) {
-        y = s;
-        time = t;
-      }
+      void apply_insertion(double) { y.push_back(1.0); }
 
       std::vector<double> y{1.0};
       double time = 0.0;
@@ -198,10 +188,12 @@ compile_widening_interface <- function() {
         time.push_back(row.time);
         size.push_back(row.step_size);
         width.push_back(static_cast<int>(row.state.size()));
-        for (const Widening::solved_values& v : row.solved) {
+        for (const Widening::solved_values& v : row.solved.stages) {
           seeded.push_back(v.seeded);
           found.push_back(v.found);
         }
+        seeded.push_back(row.solved.at_state.seeded);
+        found.push_back(row.solved.at_state.found);
       }
       return Rcpp::List::create(
         Rcpp::Named("insertion") = insertion, Rcpp::Named("time") = time,
@@ -217,20 +209,18 @@ compile_widening_interface <- function() {
     Rcpp::List widening_walk() {
       ode::Solver<Widening> run = kept_solver();
       run.advance_adaptive({0.0, 0.5});
-      Widening& sys = run.get_system_ref();
-      std::vector<double> before(sys.ode_size()), widened;
-      sys.ode_state(before.begin());
-      ode::apply_insertion(sys, 0.5, before.begin(), widened);
-      run.set_state_from_system();
+      ode::apply_insertion(run.get_system_ref(), 0.5);
       run.push_insertion();
+      run.set_state_from_system();
       run.advance_adaptive({0.5, 1.0});
 
       std::vector<Record> marked(run.recording().begin(), run.recording().end());
       for (Record& row : marked) {
-        for (Widening::solved_values& v : row.solved) v.found = -1.0;
+        for (Widening::solved_values& v : row.solved.stages) v.found = -1.0;
+        row.solved.at_state.found = -1.0;
       }
       ode::Solver<Widening> walk = kept_solver();
-      walk.advance_recorded(std::span<const Record>(marked));
+      walk.advance_recorded(marked);
 
       return Rcpp::List::create(Rcpp::Named("run") = describe(run.recording()),
                                 Rcpp::Named("walk") = describe(walk.recording()));
@@ -252,10 +242,120 @@ test_that("a walk over a recording stores its own rows", {
   expect_identical(walk$width, run$width)
   expect_identical(bits(walk$state_end), bits(run$state_end))
 
-  # Each step's slots start as the recorded ones, marked -1, and end holding
-  # what the walk's own evaluations stored: the times they ran at.
-  step <- rep(!is.nan(run$size), each = 6)
-  expect_true(all(walk$seeded[step] == -1))
-  expect_identical(bits(walk$found[step]), bits(run$found[step]))
-  expect_true(all(is.finite(run$found[step])))
+  # Every row's evaluation at its own state is in the recording: each step's six,
+  # and one each for the start and the insertion.
+  evaluated <- !is.nan(run$found)
+  expect_identical(sum(evaluated), 6L * sum(!is.nan(run$size)) + 2L)
+
+  # Each evaluated slot starts as the recorded one, marked -1, and ends holding
+  # what the walk's own evaluation stored: the time it ran at.
+  expect_true(all(walk$seeded[evaluated] == -1))
+  expect_identical(bits(walk$found), bits(run$found))
+})
+
+# A decay at a rate the evaluation chooses, and which a sweep takes as the run
+# chose it. `loads` counts the evaluations that took a recorded choice.
+compile_choosing_decay <- function() {
+  source_odelia_cpp('
+    // [[Rcpp::plugins(cpp20)]]
+    #include <Rcpp.h>
+    #include <limits>
+    #include <vector>
+    #include <odelia/ode_solver.hpp>
+
+    using namespace odelia;
+
+    static int loads = 0;
+
+    // A choice carries no scalar, so the double System and the active one record
+    // the same type.
+    struct decay_choice {
+      double rate = std::numeric_limits<double>::quiet_NaN();
+    };
+
+    template <typename T>
+    class ChoosingDecay {
+    public:
+      using value_type = T;
+      using solved_values = decay_choice;
+      explicit ChoosingDecay(T k_ = T(0.7)) : k(k_) {}
+
+      template <typename> friend class ChoosingDecay;
+      template <class S2>
+      ChoosingDecay<S2> rebind_from() const {
+        ChoosingDecay<S2> out(S2(odelia::util::to_passive(k)));
+        out.y = S2(odelia::util::to_passive(y));
+        out.time = time;
+        return out;
+      }
+      std::vector<T*> ad_parameters() { return {&k}; }
+      template <class F> void for_each_active(F&& f) { f(k); f(y); f(dydt); }
+
+      size_t ode_size() const { return 1; }
+      double ode_time() const { return time; }
+      void reset() { y = 1.0; time = 0.0; }
+      template <typename It> It set_ode_state(It it, double t) {
+        y = *it++;
+        time = t;
+        return it;
+      }
+      template <typename It> It ode_state(It it) const { *it++ = y; return it; }
+      template <typename It> It ode_rates(It it) {
+        const double rate = loading != nullptr ? loading->rate : 1.0 + time;
+        if (storing != nullptr) storing->rate = rate;
+        dydt = -k * rate * y;
+        *it++ = dydt;
+        return it;
+      }
+
+      void store_solved(decay_choice& into) { storing = &into; }
+      void load_solved(const decay_choice& from) { loading = &from; ++loads; }
+      void end_solved() { storing = nullptr; loading = nullptr; }
+
+    private:
+      T k;
+      T y = 1.0, dydt = 0.0;
+      double time = 0.0;
+      decay_choice* storing = nullptr;
+      const decay_choice* loading = nullptr;
+    };
+
+    // The recorded run, its sweep, and how many evaluations the sweep loaded.
+    // [[Rcpp::export]]
+    Rcpp::List choosing_decay_sweep(double t_end) {
+      ode::Solver<ChoosingDecay<double>> solver{ChoosingDecay<double>{},
+                                                ode::OdeControl{}};
+      solver.set_collect(false);
+      solver.set_keep_states(true);
+      solver.reset();
+      solver.advance_adaptive({0.0, t_end});
+      const auto rec = solver.recording();
+
+      loads = 0;
+      ode::adjoint_rows lambda = ode::adjoint_rows::one_row({1.0});
+      ode::adjoint_rows rows(1, 1);
+      solver.solve_adjoint(lambda, rows);
+      return Rcpp::List::create(
+        Rcpp::Named("steps") = static_cast<int>(rec.size()) - 1,
+        Rcpp::Named("loads") = loads,
+        Rcpp::Named("dy_dy0") = lambda.to_rows()[0][0],
+        Rcpp::Named("y_end") = rec.back().state[0]);
+    }
+  ')
+}
+
+test_that("a sweep loads every evaluation it repeats, each step's first rates included", {
+  compile_choosing_decay()
+  res <- choosing_decay_sweep(1.0)
+
+  # Six a step -- the five stages and the first rates, which are the row below's
+  # evaluation at its state -- and one each where the System is put on a row: the
+  # top of the range and the state it is left on.
+  expect_gt(res$steps, 2L)
+  expect_identical(res$loads, 6L * res$steps + 2L)
+
+  # The rate chosen is 1 + t, so the run is y0 * exp(-0.7 * (t + t^2 / 2)), and its
+  # derivative in y0 is that with y0 = 1.
+  expect_equal(res$dy_dy0, exp(-0.7 * 1.5), tolerance = 1e-5)
+  expect_equal(res$dy_dy0, res$y_end, tolerance = 1e-12)
 })

@@ -18,10 +18,8 @@ public:
   using value_type = typename System::value_type;
   using state_type = std::vector<value_type>;
   
-  // What one step's six rate evaluations solve for: the five stages, then the
-  // evaluation at the state the step ends at, which first-same-as-last hands the
-  // next step as its first rates. A sweep reads only the first five.
-  using solved_row = std::array<solved_values_t<System>, 6>;
+  using solved_values = solved_values_t<System>;
+  using solved_row = ode::solved_row<solved_values>;
 
   void resize(size_t size_);
   size_t order() const;
@@ -40,7 +38,11 @@ public:
   // one; there is no separate entry point for that, because a second signature
   // over the same recording is a second place for the seam between the state and
   // the parameter halves to be got wrong.
+  //
+  // `first` is what the evaluation at the step's start state solved for, and
+  // `first_time` when it ran: the row below's `at_state`.
   void step_adjoint(active_system<System>& active,
+                    const solved_values& first, double first_time,
                     const solved_row& solved,
                     double time, double step_size,
                     const state_type &y, const adjoint_rows& lambda_out,
@@ -124,32 +126,16 @@ void Step<System>::step(System& system,
   const double h = step_size;
 
   // First-same-as-last: k1 is the previous step's dydt_out, so the step costs five
-  // rate evaluations and one more to hand the next step its own k1 -- which is why
-  // that last one is addressed as the next step's stage 0.
-  // A stage's rates, handed the slot it stores what it solves for into. A System
-  // that solves for nothing is handed nothing and the branch compiles away.
-  auto rates_at = [&](int i, const state_type& at, state_type& into) -> void {
-    if constexpr (SolvesForValues<System>) {
-      ode::derivs(system, at, into, stage_time(i, time, h), solved[i - 1]);
-    } else {
-      ode::derivs(system, at, into, stage_time(i, time, h));
-    }
-  };
-
+  // rate evaluations and one more at the state it ends at, which hands the next
+  // step its own k1.
   std::copy(dydt_in.begin(), dydt_in.end(), k[0].begin());
   for (int i = 1; i < 6; ++i) {
     stage_state(i, y, k, h, ytmp);
-    rates_at(i, ytmp, k[i]);
+    ode::derivs(system, ytmp, k[i], stage_time(i, time, h), solved.stages[i - 1]);
   }
 
   step_end(y, k, h, y);
-  // The sixth evaluation, at the state the step ends at, which first-same-as-last
-  // hands the next step as its own first rates; see `solved_row`.
-  if constexpr (SolvesForValues<System>) {
-    ode::derivs(system, y, dydt_out, time + h, solved[5]);
-  } else {
-    ode::derivs(system, y, dydt_out, time + h);
-  }
+  ode::derivs(system, y, dydt_out, time + h, solved.at_state);
 
   // Difference between 4th and 5th order, for error calculations
   for (size_t q = 0; q < size; ++q) {
@@ -237,6 +223,7 @@ void Step<System>::step_end(const std::vector<S>& y,
 // so a stage the parameters reach carries their rows too.
 template <class System>
 void Step<System>::step_adjoint(active_system<System>& active,
+                                const solved_values& first, double first_time,
                                 const solved_row& solved,
                                 double time, double step_size,
                                 const state_type &y, const adjoint_rows& lambda_out,
@@ -258,20 +245,12 @@ void Step<System>::step_adjoint(active_system<System>& active,
     const std::vector<scalar> y0(x, x + static_cast<std::ptrdiff_t>(size));
     std::vector<std::vector<scalar>> rate(6, std::vector<scalar>(size));
     std::vector<scalar> stage(size);
-    // k1 is re-derived at this step's own start state, and unaddressed on purpose:
-    // the run took its first rates either at the end of the step before this one or,
-    // where it widened in between, at a state no record holds. A descent that starts
-    // at an arbitrary step cannot tell those apart, so it asks for neither.
-    ode::derivs(sys, y0, rate[0], time);
+    // k1 repeats the evaluation the row below recorded at this state.
+    ode::derivs(sys, y0, rate[0], first_time, first);
     ++recorded_rates;
     for (int i = 1; i < 6; ++i) {
       stage_state(i, y0, rate, h, stage);
-      if constexpr (SolvesForValues<System>) {
-        ode::derivs(sys, stage, rate[i], stage_time(i, time, h),
-                    std::as_const(solved[i - 1]));
-      } else {
-        ode::derivs(sys, stage, rate[i], stage_time(i, time, h));
-      }
+      ode::derivs(sys, stage, rate[i], stage_time(i, time, h), solved.stages[i - 1]);
       ++recorded_rates;
     }
     step_end(y0, rate, h, y_end);

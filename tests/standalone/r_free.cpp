@@ -28,7 +28,6 @@
 #include <odelia/ode_step_rodas.hpp>
 #include <odelia/ode_solver_internal.hpp>
 #include <odelia/ode_solver.hpp>
-#include <odelia/sweep.hpp>
 #include <odelia/implicit_node.hpp>
 #include <odelia/tangent.hpp>
 #include <examples/lorenz_system.hpp>
