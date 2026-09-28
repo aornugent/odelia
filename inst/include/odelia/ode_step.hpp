@@ -89,6 +89,14 @@ private:
                 double h, std::vector<S>& out) const;
   double stage_time(int i, double time, double h) const;
   const double* stage_row(int i) const;
+  // stage_state for a stage count known at compile time: the same sums in the
+  // same order, with the earlier-stage count a constant so the inner loop
+  // unrolls, and the data pointers held rather than re-read through the nested
+  // vectors after every store. stage_state dispatches here for stages 1..5.
+  template <int I, class S>
+  void stage_state_fixed(const std::vector<S>& y,
+                         const std::vector<std::vector<S>>& k, double h,
+                         std::vector<S>& out) const;
 
   size_t size;
   std::vector<state_type> k{6};
@@ -151,10 +159,15 @@ void Step<System>::step(System& system,
   };
 
   std::copy(dydt_in.begin(), dydt_in.end(), k[0].begin());
-  for (int i = 1; i < 6; ++i) {
-    stage_state(i, y, k, h, ytmp);
-    rates_at(i, ytmp, k[i]);
-  }
+  // The stages written out, each at a compile-time stage count, so the kernel
+  // inlines into this function: a run-time stage index kept it out of line, a
+  // call per stage. The same kernels stage_state dispatches to, so the sweep
+  // still reverses exactly this arithmetic.
+  stage_state_fixed<1>(y, k, h, ytmp); rates_at(1, ytmp, k[1]);
+  stage_state_fixed<2>(y, k, h, ytmp); rates_at(2, ytmp, k[2]);
+  stage_state_fixed<3>(y, k, h, ytmp); rates_at(3, ytmp, k[3]);
+  stage_state_fixed<4>(y, k, h, ytmp); rates_at(4, ytmp, k[4]);
+  stage_state_fixed<5>(y, k, h, ytmp); rates_at(5, ytmp, k[5]);
 
   step_end(y, k, h, y);
   // The sixth evaluation, at the state the step ends at, which first-same-as-last
@@ -167,9 +180,14 @@ void Step<System>::step(System& system,
   }
 
   // Difference between 4th and 5th order, for error calculations
+  const value_type* const k0 = k[0].data();
+  const value_type* const k2 = k[2].data();
+  const value_type* const k3 = k[3].data();
+  const value_type* const k4 = k[4].data();
+  const value_type* const k5 = k[5].data();
   for (size_t q = 0; q < size; ++q) {
-    yerr[q] = h * (ec[1] * k[0][q] + ec[3] * k[2][q] + ec[4] * k[3][q] +
-                   ec[5] * k[4][q] + ec[6] * k[5][q]);
+    yerr[q] = h * (ec[1] * k0[q] + ec[3] * k2[q] + ec[4] * k3[q] +
+                   ec[5] * k4[q] + ec[6] * k5[q]);
   }
 }
 
@@ -203,24 +221,45 @@ void Step<System>::stage_state(int i, const std::vector<S>& y,
     std::copy(y.begin(), y.end(), out.begin());
     return;
   }
+  switch (i) {
+    case 1: return stage_state_fixed<1>(y, k, h, out);
+    case 2: return stage_state_fixed<2>(y, k, h, out);
+    case 3: return stage_state_fixed<3>(y, k, h, out);
+    case 4: return stage_state_fixed<4>(y, k, h, out);
+    default: return stage_state_fixed<5>(y, k, h, out);
+  }
+}
+
+template <class System>
+template <int I, class S>
+void Step<System>::stage_state_fixed(const std::vector<S>& y,
+                                     const std::vector<std::vector<S>>& k,
+                                     double h, std::vector<S>& out) const {
   // Stage 1 keeps its single term grouped as b21 * h * k1: h * (b21 * k1)
   // rounds differently, and the reference numbers were blessed on this one.
-  if (i == 1) {
+  if constexpr (I == 1) {
+    const S* const k0 = k[0].data();
+    const S* const yp = y.data();
+    S* const op = out.data();
     for (size_t q = 0; q < size; ++q) {
-      out[q] = y[q] + b21 * h * k[0][q];
+      op[q] = yp[q] + b21 * h * k0[q];
     }
     return;
   }
-  const double* const b = stage_row(i);
+  const double* const b = stage_row(I);
+  const S* kp[I];
+  for (int m = 0; m < I; ++m) kp[m] = k[m].data();
+  const S* const yp = y.data();
+  S* const op = out.data();
   for (size_t q = 0; q < size; ++q) {
     // Summed in ascending stage, then one h. Cash-Karp's rows are dense, so
     // this is a sum over every earlier stage rather than a term for the
     // immediate predecessor.
-    S combination = b[0] * k[0][q];
-    for (int m = 1; m < i; ++m) {
-      combination += b[m] * k[m][q];
+    S combination = b[0] * kp[0][q];
+    for (int m = 1; m < I; ++m) {
+      combination += b[m] * kp[m][q];
     }
-    out[q] = y[q] + h * combination;
+    op[q] = yp[q] + h * combination;
   }
 }
 
@@ -229,10 +268,15 @@ template <class S>
 void Step<System>::step_end(const std::vector<S>& y,
                             const std::vector<std::vector<S>>& k, double h,
                             std::vector<S>& out) const {
+  const S* const k0 = k[0].data();
+  const S* const k2 = k[2].data();
+  const S* const k3 = k[3].data();
+  const S* const k5 = k[5].data();
+  const S* const yp = y.data();
+  S* const op = out.data();
   for (size_t q = 0; q < size; ++q) {
-    const S combination =
-      c1 * k[0][q] + c3 * k[2][q] + c4 * k[3][q] + c6 * k[5][q];
-    out[q] = y[q] + h * combination;
+    const S combination = c1 * k0[q] + c3 * k2[q] + c4 * k3[q] + c6 * k5[q];
+    op[q] = yp[q] + h * combination;
   }
 }
 

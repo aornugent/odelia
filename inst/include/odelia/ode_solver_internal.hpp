@@ -94,6 +94,10 @@ public:
                  "there is no record to sweep -- set_keep_states(true) before "
                  "the run");
     }
+    if (prev_steps.size() != prev_schedule.size()) {
+      util::stop("recording(): keep_states changed during this run, so the "
+                 "record does not cover every step -- set it before the run");
+    }
     return {prev_steps.data(), prev_steps.size()};
   }
 
@@ -109,8 +113,8 @@ public:
   // this list split in two rather than two more walks that could disagree.
   std::vector<instruction> schedule() const {
     std::vector<instruction> ret;
-    ret.reserve(prev_steps.size());
-    for (const step_record<System>& s : prev_steps) {
+    ret.reserve(prev_schedule.size());
+    for (const instruction& s : prev_schedule) {
       if (!s.insertion) {
         ret.push_back(s);
       }
@@ -224,6 +228,13 @@ private:
   // had to be emptied as it was read, and every consumer after the first repeated
   // the whole run to refill it.
   std::vector<step_record<System>> prev_steps;
+  // What every run keeps, recording or not: the time each step reached, the
+  // size that reached it, and where the state widened. Separate from the
+  // records so a run that is only integrating stores 24 bytes a step rather
+  // than a record with a state and a row of solved values -- measured at 0.9.0,
+  // growing the full record on every step cost ~5% of a Lorenz solve. The two
+  // are written together, row for row, and recording() refuses if they differ.
+  std::vector<instruction> prev_schedule;
   // Whether to keep the states. The caller's: a run whose gradient will be taken
   // needs them and a run that is only integrating does not. The same flag decides
   // whether what a step solves for is kept, because those are one recording.
@@ -254,6 +265,7 @@ SolverInternal<System>::SolverInternal(System &system, OdeControl control_,
 template <class System>
 void SolverInternal<System>::reset(System& system) {
   prev_steps.clear();
+  prev_schedule.clear();
   step_size_last = control.step_size_initial;
   time_max = std::numeric_limits<double>::infinity();
   set_state_from_system(system);
@@ -287,13 +299,14 @@ void SolverInternal<System>::set_state_from_system(System& system) {
 template <class System>
 void SolverInternal<System>::push_step(System& system, double time_,
                                        double step_size) {
-  step_record<System> record{{time_, step_size}, state_type()};
+  prev_schedule.push_back({time_, step_size});
   if (keep_states_) {
+    step_record<System> record{{time_, step_size}, state_type()};
     record.state.resize(system.ode_size());
     system.ode_state(record.state.begin());
     record.solved = std::move(solved_scratch_);
+    prev_steps.push_back(std::move(record));
   }
-  prev_steps.push_back(std::move(record));
 }
 
 // The row goes in on every run, because where a run widened is what it decided;
@@ -301,17 +314,18 @@ void SolverInternal<System>::push_step(System& system, double time_,
 // reads one.
 template <class System>
 void SolverInternal<System>::push_insertion(System& system) {
-  if (prev_steps.empty()) {
+  if (prev_schedule.empty()) {
     util::stop("push_insertion: no recorded step for an insertion to follow");
   }
-  step_record<System> record{{prev_steps.back().time,
-                              std::numeric_limits<double>::quiet_NaN(), true},
-                             state_type()};
+  const instruction row{prev_schedule.back().time,
+                        std::numeric_limits<double>::quiet_NaN(), true};
+  prev_schedule.push_back(row);
   if (keep_states_) {
+    step_record<System> record{row, state_type()};
     record.state.resize(system.ode_size());
     system.ode_state(record.state.begin());
+    prev_steps.push_back(std::move(record));
   }
-  prev_steps.push_back(std::move(record));
 }
 
 template <class System>
@@ -733,20 +747,22 @@ void SolverInternal<System>::save_dydt_out_as_in() {
 template <typename System>
 void SolverInternal<System>::set_time(double t) {
   const int ulp = 2; // units in the last place (accuracy)
-  if (prev_steps.size() > 0 &&
-      !util::almost_equal(prev_steps.back().time, t, ulp))
+  if (prev_schedule.size() > 0 &&
+      !util::almost_equal(prev_schedule.back().time, t, ulp))
   {
     util::stop("Time does not match previous (delta = " +
-               util::format_double(prev_steps.back().time - t) +
+               util::format_double(prev_schedule.back().time - t) +
                "). Reset solver first.");
   }
   time = t;
-  if (prev_steps.empty()) { // only if first time (avoids duplicate times)
+  if (prev_schedule.empty()) { // only if first time (avoids duplicate times)
     // No step reached the initial time, so it records no size. The state is
     // recorded by set_state_from_system, which calls this and then holds it.
-    prev_steps.push_back(
-      step_record<System>{{time, std::numeric_limits<double>::quiet_NaN()},
-                          state_type()});
+    const instruction row{time, std::numeric_limits<double>::quiet_NaN()};
+    prev_schedule.push_back(row);
+    if (keep_states_) {
+      prev_steps.push_back(step_record<System>{row, state_type()});
+    }
   }
 }
 
