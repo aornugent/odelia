@@ -85,6 +85,27 @@ void test_interpolator() {
   check(threw, "interpolator rejects a knot set with no span");
 }
 
+// A driver given as values alone: natural by default, monotone on request. An
+// intermittent non-negative series is the case the choice exists for -- a single
+// wet day between dry ones pulls a natural spline below zero beside it.
+void test_driver_slopes() {
+  const std::vector<double> x{0, 1, 2, 3, 4, 5, 6};
+  const std::vector<double> y{0, 0, 0, 8, 0, 0, 0};
+  odelia::drivers::Drivers d;
+  d.set_variable("natural", x, y);
+  d.set_variable("monotone", x, y, odelia::drivers::Slopes::monotone);
+  double lo_nat = 0.0, lo_mono = 0.0, hi_mono = 0.0;
+  for (double u = 0.0; u <= 6.0; u += 0.01) {
+    lo_nat = std::min(lo_nat, d.evaluate("natural", u));
+    lo_mono = std::min(lo_mono, d.evaluate("monotone", u));
+    hi_mono = std::max(hi_mono, d.evaluate("monotone", u));
+  }
+  check(lo_nat < 0.0, "a natural driver dips below an intermittent series");
+  check(lo_mono >= 0.0 && hi_mono <= 8.0,
+        "a monotone driver stays inside the values bracketing each span");
+  check(d.evaluate("monotone", 3.0) == 8.0, "and still hits its knots");
+}
+
 // Integrating a real system with no R session anywhere is the whole point.
 // Tolerance-free check: tightening the controller must not move the answer.
 void test_solver_runs() {
@@ -856,6 +877,7 @@ int main() {
   std::printf("odelia solver core, standalone (no R, no Rcpp)\n");
   test_stop_throws();
   test_interpolator();
+  test_driver_slopes();
   test_solver_runs();
   test_control_rejects_nonfinite_error();
   test_solver_refuses_nonfinite_state();
