@@ -259,6 +259,47 @@ void test_control_names_the_binding_component() {
   check(unmeasured, "a pinned step forms no error estimate and names nothing");
 }
 
+// A factor multiplies its component's error level: factors of one change no
+// decision, and a factor on one component moves which component binds.
+void test_control_scales_each_tolerance() {
+  const std::vector<double> y{0.2, 0.2, 0.2};
+  const std::vector<double> dydt{0.0, 0.0, 0.0};
+  const std::vector<double> yerr{1e-6, 4e-6, 1e-9};
+  const double h = 1e-3;
+  auto control = [] {
+    return odelia::ode::OdeControl(1e-4, 1e-4, 1.0, 0.0, 1e-6, 5.0, 1e-6);
+  };
+
+  odelia::ode::OdeControl plain = control();
+  odelia::ode::OdeControl ones = control();
+  const std::vector<double> one{1.0, 1.0, 1.0};
+  const double next_plain = plain.adjust_step_size(3, 5, h, y, yerr, dydt);
+  const double next_ones = ones.adjust_step_size(3, 5, h, y, yerr, dydt, &one);
+  check(next_ones == next_plain && ones.error_index == plain.error_index &&
+            ones.error_ratio == plain.error_ratio,
+        "factors of one change no decision");
+
+  odelia::ode::OdeControl scaled = control();
+  const std::vector<double> f{1.0, 8.0, 1.0};
+  scaled.adjust_step_size(3, 5, h, y, yerr, dydt, &f);
+  check(plain.error_index == 1 && scaled.error_index == 0,
+        "a factor moves which component binds");
+  check(scaled.error_ratio == 1e-6 / scaled.errlevel(y[0], dydt[0], h),
+        "and a component scaled by one keeps its ratio");
+
+  const auto refused = [&](const std::vector<double>& bad) {
+    odelia::ode::OdeControl c = control();
+    try {
+      c.adjust_step_size(3, 5, h, y, yerr, dydt, &bad);
+    } catch (const std::runtime_error&) {
+      return true;
+    }
+    return false;
+  };
+  check(refused({1.0, 1.0}), "factors are refused unless one per component");
+  check(refused({1.0, 0.0, 1.0}), "and unless each is positive");
+}
+
 // End to end: a system whose derivatives go non-finite outside a bounded range
 // must fail loudly rather than integrate on with a poisoned state.
 namespace {
@@ -970,6 +1011,7 @@ int main() {
   test_solver_runs();
   test_control_rejects_nonfinite_error();
   test_control_names_the_binding_component();
+  test_control_scales_each_tolerance();
   test_solver_refuses_nonfinite_state();
   test_predicate_rejects_out_of_domain_step();
   test_domain_error_becomes_a_rejection();

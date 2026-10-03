@@ -68,20 +68,34 @@ struct OdeControl {
   void set_step_size_initial(double value) { step_size_initial = value; }
   double get_step_size_initial() const { return step_size_initial; }
 
+  // `factors`, where given, multiply each component's error level: one per
+  // component, each positive. Without them the level is errlevel()'s.
   double adjust_step_size(size_t dim, size_t ord,
                           double step_size,
                           const state_type &y,
                           const state_type &yerr,
-                          const state_type &dydt)
+                          const state_type &dydt,
+                          const state_type *factors = nullptr)
   {
     double rmax = std::numeric_limits<double>::min();
     const double S = 0.9;
     bool nonfinite = false;
     forget_error_component();
+    if (factors != nullptr) {
+      util::check_length(factors->size(), dim);
+      for (const double f : *factors) {
+        if (!(f > 0.0)) {
+          util::stop("adjust_step_size: every factor must be positive");
+        }
+      }
+    }
 
     for (size_t i = 0; i < dim; i++)
     {
-      const double D0 = errlevel(y[i], dydt[i], step_size);
+      double D0 = errlevel(y[i], dydt[i], step_size);
+      if (factors != nullptr) {
+        D0 *= (*factors)[i];
+      }
       using std::abs;
       const double r = abs(yerr[i]) / abs(D0);
       // A non-finite ratio means the step left the model's valid domain: yerr

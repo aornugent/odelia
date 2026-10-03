@@ -320,6 +320,14 @@ bool state_valid(const System& system, const StateType& y) {
   }
 }
 
+// A System that scales each component's error level on a step starting at
+// `time`: it fills `f` with one positive factor per component.
+template <typename System>
+concept ScalesStateTolerances = requires(const System& s, double time,
+                                    std::vector<double>& f) {
+  { s.state_tolerance_factors(time, f) } -> std::same_as<void>;
+};
+
 // The recursive interface. Each helper walks a container of elements, threading
 // one iterator through them, and is constrained on the one member it calls with
 // the iterator it was handed. Constraining the call rather than the element is
