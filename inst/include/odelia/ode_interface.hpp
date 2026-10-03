@@ -320,6 +320,14 @@ bool state_valid(const System& system, const StateType& y) {
   }
 }
 
+// A System that weighs each component's error level on a step starting at
+// `time`: it fills `w` with one positive weight per component.
+template <typename System>
+concept WeighsErrors = requires(const System& s, double time,
+                                std::vector<double>& w) {
+  { s.error_weights(time, w) } -> std::same_as<void>;
+};
+
 // The recursive interface. Each helper walks a container of elements, threading
 // one iterator through them, and is constrained on the one member it calls with
 // the iterator it was handed. Constraining the call rather than the element is

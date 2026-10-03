@@ -476,6 +476,13 @@ void SolverInternal<System>::step(System& system) {
   // Compute the derivatives at the beginning.
   setup_dydt_in(system);
 
+  // The System's weight on each component's error level, read at the step's
+  // start and held across its retries; none where it declares none.
+  std::vector<double> weights;
+  if constexpr (WeighsErrors<System>) {
+    system.error_weights(time_orig, weights);
+  }
+
   while (true) {
     // Does this appear to be the last step before reaching `time_max`?
     const bool final_step = step_size > time_remaining;
@@ -514,7 +521,8 @@ void SolverInternal<System>::step(System& system) {
     } else {
       step_size_next =
         control.adjust_step_size(size, stepper_order(), step_size,
-			         y, yerr, dydt_out);
+			         y, yerr, dydt_out,
+                                 WeighsErrors<System> ? &weights : nullptr);
       if (!state_valid(system, y)) {
         invalid = true;
         invalid_reason = "ode_state_valid() refused the state after the step";

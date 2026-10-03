@@ -259,6 +259,47 @@ void test_control_names_the_binding_component() {
   check(unmeasured, "a pinned step forms no error estimate and names nothing");
 }
 
+// A weight multiplies its component's error level: weights of one change no
+// decision, and a weight on one component moves which component binds.
+void test_control_weighs_each_component() {
+  const std::vector<double> y{0.2, 0.2, 0.2};
+  const std::vector<double> dydt{0.0, 0.0, 0.0};
+  const std::vector<double> yerr{1e-6, 4e-6, 1e-9};
+  const double h = 1e-3;
+  auto control = [] {
+    return odelia::ode::OdeControl(1e-4, 1e-4, 1.0, 0.0, 1e-6, 5.0, 1e-6);
+  };
+
+  odelia::ode::OdeControl plain = control();
+  odelia::ode::OdeControl ones = control();
+  const std::vector<double> one{1.0, 1.0, 1.0};
+  const double next_plain = plain.adjust_step_size(3, 5, h, y, yerr, dydt);
+  const double next_ones = ones.adjust_step_size(3, 5, h, y, yerr, dydt, &one);
+  check(next_ones == next_plain && ones.error_index == plain.error_index &&
+            ones.error_ratio == plain.error_ratio,
+        "weights of one change no decision");
+
+  odelia::ode::OdeControl weighted = control();
+  const std::vector<double> w{1.0, 8.0, 1.0};
+  weighted.adjust_step_size(3, 5, h, y, yerr, dydt, &w);
+  check(plain.error_index == 1 && weighted.error_index == 0,
+        "a weight moves which component binds");
+  check(weighted.error_ratio == 1e-6 / weighted.errlevel(y[0], dydt[0], h),
+        "and a component weighted one keeps its ratio");
+
+  const auto refused = [&](const std::vector<double>& bad) {
+    odelia::ode::OdeControl c = control();
+    try {
+      c.adjust_step_size(3, 5, h, y, yerr, dydt, &bad);
+    } catch (const std::runtime_error&) {
+      return true;
+    }
+    return false;
+  };
+  check(refused({1.0, 1.0}), "weights are refused unless one per component");
+  check(refused({1.0, 0.0, 1.0}), "and unless each is positive");
+}
+
 // End to end: a system whose derivatives go non-finite outside a bounded range
 // must fail loudly rather than integrate on with a poisoned state.
 namespace {
@@ -970,6 +1011,7 @@ int main() {
   test_solver_runs();
   test_control_rejects_nonfinite_error();
   test_control_names_the_binding_component();
+  test_control_weighs_each_component();
   test_solver_refuses_nonfinite_state();
   test_predicate_rejects_out_of_domain_step();
   test_domain_error_becomes_a_rejection();
