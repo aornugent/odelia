@@ -11,6 +11,7 @@
 #include <vector>
 #include <XAD/XAD.hpp>
 #include <odelia/ode_interface.hpp>
+#include <odelia/ode_linalg.hpp>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
@@ -197,6 +198,58 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
   }
 }
 
+
+// The vector form of implicit_value: the n values y* with F(y*) = 0, carrying
+// dy*/dp = -(dF/dy)^-1 dF/dp. `dFdy` is row-major at y*; F is evaluated once, at S.
+template <class S, class Residual>
+std::vector<S> implicit_values(const std::vector<double>& y_star,
+                               std::vector<double> dFdy, Residual&& F) {
+  std::vector<S> out(y_star.begin(), y_star.end());
+  if constexpr (!std::is_same_v<S, double>) {
+    static_assert(
+        std::is_same_v<std::invoke_result_t<Residual&, const std::vector<S>&>,
+                       std::vector<S>>,
+        "implicit_values: the residual must return a vector of its own scalar");
+    const std::size_t n = y_star.size();
+    util::check_length(dFdy.size(), n * n);
+    for (const double x : dFdy) {
+      if (!util::is_finite(x)) {
+        util::stop("implicit_values: dF/dy is not finite at the operating "
+                   "point, so the implicit function theorem does not apply");
+      }
+    }
+    // Stops where dF/dy is singular, which is the vector form of a fold.
+    std::vector<std::size_t> pivots;
+    ode::linalg::lu_decompose(dFdy, n, pivots);
+    std::vector<double> inverse(n * n), unit(n, 0.0), column;
+    for (std::size_t r = 0; r < n; ++r) {
+      unit[r] = 1.0;
+      ode::linalg::lu_solve(dFdy, n, pivots, unit, column);
+      unit[r] = 0.0;
+      for (std::size_t q = 0; q < n; ++q) {
+        inverse[q * n + r] = column[q];
+      }
+    }
+    // The residual's value is ~0 at the root and its derivative is dF/dp, so each
+    // y*_q against it with the row -inverse(q, .) is the theorem's own quotient.
+    const std::vector<S> residual = F(out);
+    util::check_length(residual.size(), n);
+    std::vector<input_and_derivative<S>> rows;
+    rows.reserve(n);
+    for (std::size_t q = 0; q < n; ++q) {
+      rows.clear();
+      for (std::size_t r = 0; r < n; ++r) {
+        rows.push_back({residual[r], -inverse[q * n + r]});
+      }
+      const record_report report =
+          record_with_derivatives<S>(y_star[q], rows, out[q]);
+      if (!report.whole) {
+        util::stop("implicit_values: " + report.why);
+      }
+    }
+  }
+  return out;
+}
 
 // The same value, with the residual's own statements taken OFF the caller's tape.
 //

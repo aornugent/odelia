@@ -328,6 +328,26 @@ concept WeighsErrors = requires(const System& s, double time,
   { s.error_weights(time, w) } -> std::same_as<void>;
 };
 
+// A System part of whose state an implicit stepper solves for.
+template <typename System>
+concept HasStiffBlock = requires(const System& s, double time,
+                                 const std::vector<double>& y,
+                                 const std::vector<typename System::value_type>& ys,
+                                 std::vector<double>& out,
+                                 std::vector<typename System::value_type>& outs) {
+  // The block: [first, first + size) of the state.
+  { s.stiff_block() } -> std::same_as<std::pair<std::size_t, std::size_t>>;
+  // The rates the stepper solves the block for, at a block state, in double and
+  // at the System's scalar; and their Jacobian, row-major, in double.
+  s.stiff_rates(time, y, out);
+  s.stiff_rates(time, ys, outs);
+  s.stiff_jacobian(time, y, out);
+  // What the rest of the state handed the block at the last evaluation, and the
+  // block's rates with inputs `u` in its place: the block alone.
+  s.stiff_inputs(out);
+  s.stiff_alone(time, y, y, out);
+};
+
 // The recursive interface. Each helper walks a container of elements, threading
 // one iterator through them, and is constrained on the one member it calls with
 // the iterator it was handed. Constraining the call rather than the element is

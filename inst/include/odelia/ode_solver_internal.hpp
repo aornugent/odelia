@@ -6,6 +6,7 @@
 #include <odelia/ode_interface.hpp>
 #include <odelia/ode_control.hpp>
 #include <odelia/ode_step.hpp>
+#include <odelia/ode_step_ark.hpp>
 #include <odelia/ode_step_rodas.hpp>
 
 #include <cmath>
@@ -19,9 +20,9 @@
 namespace odelia {
 namespace ode {
 
-// Integration method: the explicit Cash-Karp RKCK 4(5) stepper (default) or the
-// implicit RODAS4(3) Rosenbrock stepper for stiff systems.
-enum class Method { rkck, rodas };
+// Integration method: Cash-Karp RKCK 4(5) (default); Rosenbrock RODAS4(3), for stiff
+// systems; or ARK4(3)6L[2]SA, which steps a System's stiff block implicitly.
+enum class Method { rkck, rodas, ark };
 
 // How each attempt at an error-controlled step ended, since the last reset. The
 // pinned paths (step_to, step_by, step_euler) form no error estimate and count
@@ -72,7 +73,7 @@ public:
   void step(System& system);
 
   // The adjoint of one step, from the state that step started at, for several
-  // seeds at once. RKCK only: the Rosenbrock stepper carries no reverse
+  // seeds at once. RKCK and ARK: the Rosenbrock stepper carries no reverse
   // counterpart.
   void step_adjoint(active_system<System>& active,
                     const solved_values_t<System>& first, double first_time,
@@ -88,6 +89,14 @@ public:
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
     resize(lambda_out.width());
+    if (method == Method::ark) {
+      if constexpr (ArkStep<System>::supported) {
+        ark_stepper.step_adjoint(active, first, first_time, solved, time,
+                                 step_size, y, lambda_out, lambda_in,
+                                 parameter_adjoint);
+      }
+      return;
+    }
     stepper.step_adjoint(active, first, first_time, solved, time, step_size, y,
                          lambda_out, lambda_in, parameter_adjoint);
   }
@@ -95,8 +104,13 @@ public:
   // The tape a sweep's recordings are taken on.
 
   // Rate evaluations recorded since the count was last cleared.
-  std::size_t recorded_rates() const { return stepper.recorded_rates; }
-  void clear_recorded_rates() { stepper.recorded_rates = 0; }
+  std::size_t recorded_rates() const {
+    return stepper.recorded_rates + ark_stepper.recorded_rates;
+  }
+  void clear_recorded_rates() {
+    stepper.recorded_rates = 0;
+    ark_stepper.recorded_rates = 0;
+  }
 
   // How the attempts this run has made ended. accepted + accepted_at_minimum is
   // the number of rows step() added to the record.
@@ -167,7 +181,7 @@ private:
   void save_dydt_out_as_in();
   void open_at(double t);
 
-  // Stepper dispatch: SolverInternal holds both steppers and forwards to the one
+  // Stepper dispatch: SolverInternal holds every stepper and forwards to the one
   // selected at construction. The adaptive controller (see step()) is otherwise
   // stepper-agnostic.
   // The step index the stages are addressed by is this object's own count of
@@ -204,26 +218,44 @@ private:
       // "a rejected attempt writes the same slot as its retry" nothing anyone has
       // to arrange.
       solved_scratch_ = seed != nullptr ? *seed : typename Step<System>::solved_row{};
-      stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
-                   dydt_in_, dydt_out_);
+      if (method == Method::ark) {
+        if constexpr (ArkStep<System>::supported) {
+          ark_stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
+                           dydt_in_, dydt_out_);
+        }
+      } else {
+        stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
+                     dydt_in_, dydt_out_);
+      }
     }
   }
   size_t stepper_order() const {
-    return method == Method::rodas ? rodas_stepper.order() : stepper.order();
+    switch (method) {
+    case Method::rodas: return rodas_stepper.order();
+    case Method::ark: return ark_stepper.order();
+    default: return stepper.order();
+    }
   }
   bool stepper_can_use_dydt_in() const {
-    return method == Method::rodas ? RodasStep<System>::can_use_dydt_in
-                                   : Step<System>::can_use_dydt_in;
+    switch (method) {
+    case Method::rodas: return RodasStep<System>::can_use_dydt_in;
+    case Method::ark: return ArkStep<System>::can_use_dydt_in;
+    default: return Step<System>::can_use_dydt_in;
+    }
   }
   bool stepper_first_same_as_last() const {
-    return method == Method::rodas ? RodasStep<System>::first_same_as_last
-                                   : Step<System>::first_same_as_last;
+    switch (method) {
+    case Method::rodas: return RodasStep<System>::first_same_as_last;
+    case Method::ark: return ArkStep<System>::first_same_as_last;
+    default: return Step<System>::first_same_as_last;
+    }
   }
 
   OdeControl control;
   Method method;
   Step<System> stepper;
   RodasStep<System> rodas_stepper;
+  ArkStep<System> ark_stepper;
 
   double step_size_last; // Size of last successful step (or suggestion)
 
@@ -267,6 +299,11 @@ template <class System>
 SolverInternal<System>::SolverInternal(System &system, OdeControl control_,
                                        Method method_)
   : control(control_), method(method_) {
+  // Refused here, so no step has to ask again.
+  if (method == Method::ark && !ArkStep<System>::supported) {
+    util::stop("method='ark' needs a System that names a stiff block; use "
+               "method='rkck'.");
+  }
   reset(system);
 }
 
@@ -482,6 +519,13 @@ void SolverInternal<System>::step(System& system) {
   if constexpr (WeighsErrors<System>) {
     system.error_weights(time_orig, weights);
   }
+  // What the rest of the state hands the stiff block at the step's start, from
+  // the evaluation there, before any attempt moves the System off it.
+  if constexpr (ArkStep<System>::supported) {
+    if (method == Method::ark) {
+      ark_stepper.start_inputs(system);
+    }
+  }
 
   while (true) {
     // Does this appear to be the last step before reaching `time_max`?
@@ -507,6 +551,12 @@ void SolverInternal<System>::step(System& system) {
     std::string invalid_reason;
     try {
       stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
+      // Only an error-controlled step estimates the block's error this way.
+      if constexpr (ArkStep<System>::supported) {
+        if (method == Method::ark) {
+          ark_stepper.block_error(system, time, step_size, y_orig, y, yerr);
+        }
+      }
     } catch (const util::DomainError& e) {
       invalid = true;
       invalid_reason = e.what();
@@ -739,7 +789,7 @@ void SolverInternal<System>::resize(size_t size_) {
   dydt_in.resize(size_);
   dydt_out.resize(size_);
   // Only the stepper that will run. `method` is fixed at construction and there
-  // is no setter, so the other one's scratch is never read.
+  // is no setter, so the others' scratch is never read.
   //
   // ⚠️ THE ROSENBROCK SCRATCH IS TWO size x size MATRICES. At a stand's width
   // that is tens of megabytes zeroed per call, and a sweep calls this once per
@@ -747,6 +797,8 @@ void SolverInternal<System>::resize(size_t size_) {
   // single fill in the gradient's profile.
   if (method == Method::rodas) {
     rodas_stepper.resize(size_);
+  } else if (method == Method::ark) {
+    ark_stepper.resize(size_);
   } else {
     stepper.resize(size_);
   }

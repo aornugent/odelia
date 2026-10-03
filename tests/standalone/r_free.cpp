@@ -25,6 +25,7 @@
 #include <odelia/ode_control.hpp>
 #include <odelia/ode_interface.hpp>
 #include <odelia/ode_step.hpp>
+#include <odelia/ode_step_ark.hpp>
 #include <odelia/ode_step_rodas.hpp>
 #include <odelia/ode_solver_internal.hpp>
 #include <odelia/ode_solver.hpp>
