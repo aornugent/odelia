@@ -68,23 +68,25 @@ compile_split_interface <- function() {
       return ret;
     }
 
-    // Three parts of one component, x_p rising at max(g_p(z), 0), then z rising
-    // at one, which no part holds, so z = t. g_0 changes sign at z = 0.3; g_1 is
-    // below zero on (0.55, 0.65) alone, where the stage at 0.6 falls; g_2 on
-    // (0.06, 0.14) alone, before the first stage. Only Kinked<true> names its
-    // parts.
+    // Four parts of one component, x_p rising at max(g_p, 0), then z = t and
+    // w = t^2 + 2t, which no part holds. g_0 = z - 0.3; g_1 is below zero on
+    // (0.55, 0.65), where the stage at 0.6 falls, and g_2 on (0.06, 0.14), before
+    // the first stage. g_3 is below zero for w in (0.3, 0.42), t in (0.140, 0.192),
+    // so at w = 0.4 in the first stage, but not at w(0.2) = 0.44 on the dense
+    // output. Only Kinked<true> names its parts.
     template <bool Parts>
     struct Kinked {
       using value_type = double;
-      static double gate(std::size_t p, double z) {
+      static double gate(std::size_t p, double z, double w) {
         return p == 0   ? z - 0.3
                : p == 1 ? (z - 0.6) * (z - 0.6) - 0.0025
-                        : (z - 0.1) * (z - 0.1) - 0.0016;
+               : p == 2 ? (z - 0.1) * (z - 0.1) - 0.0016
+                        : (w - 0.3) * (w - 0.42);
       }
-      size_t ode_size() const { return 4; }
+      size_t ode_size() const { return 6; }
       double ode_time() const { return time; }
       void reset() {
-        y.assign(4, 0.0);
+        y.assign(6, 0.0);
         time = 0.0;
       }
       template <typename It> It set_ode_state(It it, double t) {
@@ -97,11 +99,12 @@ compile_split_interface <- function() {
         return it;
       }
       template <typename It> It ode_rates(It it) {
-        for (std::size_t p = 0; p < 3; ++p) {
-          g[p] = gate(p, y[3]);
+        for (std::size_t p = 0; p < 4; ++p) {
+          g[p] = gate(p, y[4], y[5]);
           *it++ = std::max(g[p], 0.0);
         }
         *it++ = 1.0;
+        *it++ = 2.0 * (y[4] + 1.0);
         return it;
       }
       void sign_values(std::vector<double>& out) const requires Parts {
@@ -114,14 +117,14 @@ compile_split_interface <- function() {
       std::size_t part_width() const requires Parts { return 1; }
       double part_rates(std::size_t p, const std::vector<double>& state, double,
                         std::vector<double>& out) requires Parts {
-        const double v = gate(p, state[3]);
+        const double v = gate(p, state[4], state[5]);
         out[0] = std::max(v, 0.0);
         return v;
       }
 
       bool splits = true;
-      std::vector<double> y{0.0, 0.0, 0.0, 0.0};
-      std::vector<double> g{0.0, 0.0, 0.0};
+      std::vector<double> y{0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      std::vector<double> g{0.0, 0.0, 0.0, 0.0};
       double time = 0.0;
     };
 
@@ -217,26 +220,31 @@ test_that("one step is integrated in pieces at a sign change and at a dip", {
   compile_split_interface()
   # x_0 = (1 - 0.3)^2 / 2; x_1 is g_1's integral less its part inside the dip,
   # 0.28 / 3 - 0.0025 + 4 * 0.05^3 / 3, and x_2 likewise, 0.730256 / 3 - 0.0016.
-  # Each piece is a polynomial the stepper integrates exactly.
-  exact <- c(0.245, 0.091, 0.730256 / 3 - 0.0016, 1)
+  # With s = 1 + t, g_3 = (s^2 - 1.3)(s^2 - 1.42), whose integral is F. Each piece
+  # is a polynomial the stepper integrates exactly.
+  F <- function(s) s^5 / 5 - 2.72 * s^3 / 3 + 1.846 * s
+  x3 <- F(2) - F(1) - (F(sqrt(1.42)) - F(sqrt(1.3)))
+  exact <- c(0.245, 0.091, 0.730256 / 3 - 0.0016, x3, 1, 3)
   split <- kinked_one_step(TRUE)
   plain <- kinked_one_step(FALSE)
   expect_equal(split$state, exact, tolerance = 1e-13)
-  expect_equal(split$splits$total, 3L)
+  expect_equal(split$splits$total, 4L)
   expect_gt(abs(plain$state[1] - exact[1]), 1e-2)
   expect_gt(abs(plain$state[2] - exact[2]), 1e-4)
   expect_gt(abs(plain$state[3] - exact[3]), 1e-5)
+  expect_gt(abs(plain$state[4] - exact[4]), 1e-6)
   expect_equal(plain$splits$total, 0L)
 })
 
 test_that("a dip no stage holds is found beside the reading nearest zero", {
   compile_split_interface()
   # g_2 reads 0.0084 at the step's start and at the first stage, within 2% of its
-  # readings' spread of 0.8, and is below zero only between them. g_1's dip holds
-  # the stage at 0.6, so it is cut without a search.
+  # readings' spread of 0.8, and is below zero only between them. g_3's first
+  # stage reads -0.002, which the dense output does not hold, so its gaps are
+  # searched. g_1's dip holds the stage at 0.6, so it is cut without a search.
   r <- kinked_one_step(TRUE)$splits
-  expect_equal(r$split, c(1L, 1L, 1L))
-  expect_equal(r$searched, c(0L, 0L, 1L))
+  expect_equal(r$split, c(1L, 1L, 1L, 1L))
+  expect_equal(r$searched, c(0L, 0L, 1L, 1L))
   # The slowest crossings are g_2's, at 0.06 and 0.14 with |dg_2/dz| = 0.08, read
   # from a difference over at least 1e-6 of the step, so to about 1e-4.
   expect_equal(r$least_rate, 0.08, tolerance = 1e-3)

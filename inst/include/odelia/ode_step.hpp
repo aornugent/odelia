@@ -438,9 +438,10 @@ void Step<System>::split(System& system, solved_values& at_state, double time,
           cuts[n_cuts++] = locate(p, 0.0, v0, um, vm);
           cuts[n_cuts++] = locate(p, um, vm, 1.0, v1);
         }
-      } else {
-        // No reading holds the other sign. A pair may sit beside the one nearest
-        // zero if it is within near_zero of their spread, so its gaps are searched.
+      }
+      if (n_cuts == 0) {
+        // No stage holds the other sign on the dense output. If the reading nearest
+        // zero is within near_zero of their spread, a pair may sit beside it.
         const double at[6] = {0.0, ah[0], ah[1], ah[2], ah[4], 1.0};
         const double read[6] = {v0, sign_values[0][p], sign_values[1][p],
                                 sign_values[2][p], sign_values[4][p], v1};
