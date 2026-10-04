@@ -300,6 +300,72 @@ void test_control_weighs_each_component() {
   check(refused({1.0, 0.0, 1.0}), "and unless each is positive");
 }
 
+// Two parts of one component, x_p rising at max(g_p(z), 0), then z = t, which no
+// part holds: g_0 changes sign at 0.3 and g_1 is negative on (0.55, 0.65) alone.
+namespace {
+struct KinkedSystem {
+  using value_type = double;
+  bool splits = true;
+  std::vector<double> y{0.0, 0.0, 0.0}, g{0.0, 0.0};
+  double time = 0.0;
+
+  static double gate(std::size_t p, double z) {
+    return p == 0 ? z - 0.3 : (z - 0.6) * (z - 0.6) - 0.0025;
+  }
+  size_t ode_size() const { return 3; }
+  double ode_time() const { return time; }
+  template <typename Iterator> Iterator set_ode_state(Iterator it, double t) {
+    for (double& v : y) v = *it++;
+    time = t;
+    return it;
+  }
+  template <typename Iterator> Iterator ode_state(Iterator it) const {
+    for (double v : y) *it++ = v;
+    return it;
+  }
+  template <typename Iterator> Iterator ode_rates(Iterator it) {
+    for (std::size_t p = 0; p < 2; ++p) {
+      g[p] = gate(p, y[2]);
+      *it++ = std::max(g[p], 0.0);
+    }
+    *it++ = 1.0;
+    return it;
+  }
+  void sign_values(std::vector<double>& out) const {
+    out.assign(splits ? g.size() : 0, 0.0);
+    std::copy(g.begin(), g.begin() + static_cast<std::ptrdiff_t>(out.size()),
+              out.begin());
+  }
+  std::size_t part_width() const { return 1; }
+  double part_rates(std::size_t p, const std::vector<double>& state, double,
+                    std::vector<double>& out) {
+    out[0] = std::max(gate(p, state[2]), 0.0);
+    return gate(p, state[2]);
+  }
+};
+} // namespace
+
+// One step over [0, 1] is integrated in pieces between each part's sign changes,
+// once across g_0's and twice around g_1's dip; every piece is a polynomial the
+// tableau integrates exactly.
+void test_split_integrates_pieces() {
+  static_assert(odelia::ode::SplitsSignChanges<KinkedSystem>);
+  auto one_step = [](bool splits) {
+    KinkedSystem sys;
+    sys.splits = splits;
+    odelia::ode::Solver<KinkedSystem> solver(sys, odelia::ode::OdeControl());
+    solver.advance_fixed({0.0, 1.0});
+    return std::make_pair(solver.state(), solver.parts_split());
+  };
+  const auto [split, n_split] = one_step(true);
+  const auto [plain, n_plain] = one_step(false);
+  check(std::abs(split[0] - 0.245) < 1e-13 && std::abs(split[1] - 0.091) < 1e-13,
+        "a split step integrates each piece exactly");
+  check(n_split == 2 && n_plain == 0, "and counts the parts it split");
+  check(std::abs(plain[0] - 0.245) > 1e-2 && std::abs(plain[1] - 0.091) > 1e-4,
+        "a System naming no parts takes the step whole");
+}
+
 // End to end: a system whose derivatives go non-finite outside a bounded range
 // must fail loudly rather than integrate on with a poisoned state.
 namespace {
@@ -1012,6 +1078,7 @@ int main() {
   test_control_rejects_nonfinite_error();
   test_control_names_the_binding_component();
   test_control_weighs_each_component();
+  test_split_integrates_pieces();
   test_solver_refuses_nonfinite_state();
   test_predicate_rejects_out_of_domain_step();
   test_domain_error_becomes_a_rejection();

@@ -328,6 +328,21 @@ concept WeighsErrors = requires(const System& s, double time,
   { s.error_weights(time, w) } -> std::same_as<void>;
 };
 
+// A System whose state opens with parts of part_width() components each, and
+// whose rates change form where a part's sign value changes sign. Split at double
+// only: a System lifted to an active scalar steps unsplit.
+template <typename System>
+concept SplitsSignChanges =
+  std::same_as<typename System::value_type, double> &&
+  requires(System& s, const System& cs, std::size_t part,
+           const std::vector<double>& y, double time, std::vector<double>& out) {
+  // One value per part after any evaluation; none where nothing is split.
+  { cs.sign_values(out) } -> std::same_as<void>;
+  { cs.part_width() } -> std::same_as<std::size_t>;
+  // The part's rates alone at the state `y`, into `out`; returns its sign value.
+  { s.part_rates(part, y, time, out) } -> std::same_as<double>;
+};
+
 // The recursive interface. Each helper walks a container of elements, threading
 // one iterator through them, and is constrained on the one member it calls with
 // the iterator it was handed. Constraining the call rather than the element is

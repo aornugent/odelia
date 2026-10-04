@@ -457,6 +457,8 @@ public:
   // How the attempts at each error-controlled step ended; step_outcomes says
   // what each count covers.
   const ode::step_outcomes& outcomes() const { return solver.outcomes(); }
+  // Parts split at sign changes since the last reset.
+  std::size_t parts_split() const { return solver.parts_split(); }
 
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?

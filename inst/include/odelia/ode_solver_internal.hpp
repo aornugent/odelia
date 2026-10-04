@@ -101,6 +101,8 @@ public:
   // How the attempts this run has made ended. accepted + accepted_at_minimum is
   // the number of rows step() added to the record.
   const ode::step_outcomes& outcomes() const { return outcomes_; }
+  // Parts split at sign changes since the last reset.
+  std::size_t parts_split() const { return stepper.parts_split; }
 
 
   // Keep the state at each accepted step as well as the time and the size. The
@@ -208,6 +210,16 @@ private:
                    dydt_in_, dydt_out_);
     }
   }
+  // The step just taken, split where a part's sign value changes sign; nothing
+  // for a System that names no parts, or on the Rosenbrock stepper.
+  void split(System& system, double time_, double step_size) {
+    if constexpr (SplitsSignChanges<System>) {
+      if (method == Method::rkck) {
+        stepper.split(system, solved_scratch_.at_state, time_, step_size,
+                      sign_values_in, y, dydt_out);
+      }
+    }
+  }
   size_t stepper_order() const {
     return method == Method::rodas ? rodas_stepper.order() : stepper.order();
   }
@@ -257,6 +269,8 @@ private:
   state_type yerr;     // Vector of error estimates
   state_type dydt_in;  // Vector of dydt at beginning of step
   state_type dydt_out; // Vector of dydt during step
+  // Each part's sign value where dydt_in was taken.
+  std::vector<double> sign_values_in;
 
   bool dydt_in_is_clean;
 };
@@ -275,6 +289,7 @@ template <class System>
 void SolverInternal<System>::reset(System& system) {
   prev_steps.clear();
   outcomes_ = ode::step_outcomes();
+  stepper.parts_split = 0;
   step_size_last = control.step_size_initial;
   time_max = std::numeric_limits<double>::infinity();
   set_state_from_system(system);
@@ -292,6 +307,9 @@ void SolverInternal<System>::set_state_from_system(
   system.ode_state(y.begin());
   solved_values_t<System> at_state = seed != nullptr ? *seed : solved_values_t<System>{};
   ode::derivs(system, y, dydt_in, time, at_state);
+  if constexpr (SplitsSignChanges<System>) {
+    system.sign_values(sign_values_in);
+  }
   dydt_in_is_clean = true;
   if (keep_states_) {
     step_record<System>& row = prev_steps.back();
@@ -513,29 +531,39 @@ void SolverInternal<System>::step(System& system) {
     }
 
     double step_size_next;
-    if (invalid) {
-      // yerr and dydt_out were never completed, so there is no error estimate to
-      // form: reject on the strength of the throw alone.
-      step_size_next = control.reject_step(step_size);
-      ++outcomes_.rejected_thrown;
-    } else {
+    if (!invalid) {
       step_size_next =
         control.adjust_step_size(size, stepper_order(), step_size,
 			         y, yerr, dydt_out,
                                  WeighsErrors<System> ? &weights : nullptr);
-      if (!state_valid(system, y)) {
-        invalid = true;
-        invalid_reason = "ode_state_valid() refused the state after the step";
-        // Overrides whatever the error estimate concluded, including "accept".
-        step_size_next = control.reject_step(step_size);
-        ++outcomes_.rejected_refused;
-      } else if (control.step_size_shrank()) {
-        ++outcomes_.rejected_inaccurate;
-      } else if (control.error_over_tolerance()) {
-        ++outcomes_.accepted_at_minimum;
-      } else {
-        ++outcomes_.accepted;
+      // Only a step the error estimate keeps is split, and the split's own
+      // stages can throw as the step's can.
+      if (!control.step_size_shrank()) {
+        try {
+          split(system, time, step_size);
+        } catch (const util::DomainError& e) {
+          invalid = true;
+          invalid_reason = e.what();
+        }
       }
+    }
+    if (invalid) {
+      // A stage threw, the step's or its split's: reject on the strength of the
+      // throw alone.
+      step_size_next = control.reject_step(step_size);
+      ++outcomes_.rejected_thrown;
+    } else if (!state_valid(system, y)) {
+      invalid = true;
+      invalid_reason = "ode_state_valid() refused the state after the step";
+      // Overrides whatever the error estimate concluded, including "accept".
+      step_size_next = control.reject_step(step_size);
+      ++outcomes_.rejected_refused;
+    } else if (control.step_size_shrank()) {
+      ++outcomes_.rejected_inaccurate;
+    } else if (control.error_over_tolerance()) {
+      ++outcomes_.accepted_at_minimum;
+    } else {
+      ++outcomes_.accepted;
     }
 
     if (control.step_size_shrank()) {
@@ -655,6 +683,7 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
     try {
       // dydt_in is read, not written, so only y needs saving to retry.
       stepper_step(system, time, time_next - time, y, yerr, dydt_in, dydt_out);
+      split(system, time, time_next - time);
     } catch (const util::DomainError& e) {
       invalid = true;
       invalid_reason = e.what();
@@ -721,6 +750,7 @@ void SolverInternal<System>::step_by(System& system, double step_size,
   control.forget_error_component();
   setup_dydt_in(system);
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, seed);
+  split(system, time, step_size);
   save_dydt_out_as_in();
 
   // The time the run reached, where a recording says what it was, rather than
@@ -760,6 +790,9 @@ void SolverInternal<System>::setup_dydt_in(System& system) {
     // one the system currently holds, so the state has to be re-established
     // before the rates mean anything.
     ode::derivs(system, y, dydt_in, time);
+    if constexpr (SplitsSignChanges<System>) {
+      system.sign_values(sign_values_in);
+    }
     dydt_in_is_clean = true;
   }
 }
@@ -768,6 +801,9 @@ template <class System>
 void SolverInternal<System>::save_dydt_out_as_in() {
   if (stepper_first_same_as_last()) {
     dydt_in = dydt_out;
+    if constexpr (SplitsSignChanges<System>) {
+      sign_values_in = stepper.end_sign_values();
+    }
     dydt_in_is_clean = true;
   } else {
     dydt_in_is_clean = false;
