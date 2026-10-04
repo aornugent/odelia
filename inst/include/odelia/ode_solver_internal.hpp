@@ -101,8 +101,8 @@ public:
   // How the attempts this run has made ended. accepted + accepted_at_minimum is
   // the number of rows step() added to the record.
   const ode::step_outcomes& outcomes() const { return outcomes_; }
-  // Parts split at sign changes since the last reset.
-  std::size_t parts_split() const { return stepper.parts_split; }
+  // What the splits at sign changes did since the last reset.
+  const ode::split_record& splits() const { return stepper.splits; }
 
 
   // Keep the state at each accepted step as well as the time and the size. The
@@ -289,7 +289,7 @@ template <class System>
 void SolverInternal<System>::reset(System& system) {
   prev_steps.clear();
   outcomes_ = ode::step_outcomes();
-  stepper.parts_split = 0;
+  stepper.splits = ode::split_record();
   step_size_last = control.step_size_initial;
   time_max = std::numeric_limits<double>::infinity();
   set_state_from_system(system);

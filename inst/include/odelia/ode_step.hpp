@@ -2,9 +2,12 @@
 #ifndef ODELIA_ODE_STEP_HPP_
 #define ODELIA_ODE_STEP_HPP_
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numeric>
+#include <utility>
 #include <vector>
 #include <cstddef>
 #include <XAD/XAD.hpp>
@@ -13,6 +16,20 @@
 
 namespace odelia {
 namespace ode {
+
+// By part, over the steps kept since the last reset: the steps split and the steps
+// searched beside a reading near zero; then the slowest crossing at a cut.
+struct split_record {
+  std::vector<std::size_t> split;
+  std::vector<std::size_t> searched;
+  // |d(sign value)/dt| at that cut, when it fell and in which part.
+  double least_rate = std::numeric_limits<double>::infinity();
+  double least_rate_time = std::numeric_limits<double>::quiet_NaN();
+  std::size_t least_rate_part = 0;
+  std::size_t total() const {
+    return std::accumulate(split.begin(), split.end(), std::size_t{0});
+  }
+};
 
 template <class System>
 class Step {
@@ -73,8 +90,9 @@ public:
   // divides this by six, and no gradient check can see that, because a tangent and
   // a sweep apply the same multiplier.
   std::size_t recorded_rates = 0;
-  // Parts split on the steps kept since the solver's last reset, pinned or not.
-  std::size_t parts_split = 0;
+  // What the splits did on the steps kept since the solver's last reset, pinned
+  // or not.
+  split_record splits;
 
   static const bool can_use_dydt_in = true;
   static const bool first_same_as_last = true;
@@ -261,8 +279,8 @@ void Step<System>::dense_state(double u, double step_size,
   }
 }
 
-// Split once where the ends' sign values differ, and twice where a stage strictly
-// inside holds the other sign and the dense output agrees there.
+// Split once where the ends' sign values differ, and twice where a stage inside,
+// or a search beside a reading near zero, finds the other sign on the dense output.
 template <class System>
 void Step<System>::split(System& system, solved_values& at_state, double time,
                          double step_size,
@@ -276,6 +294,10 @@ void Step<System>::split(System& system, solved_values& at_state, double time,
   for (const std::vector<double>& values : sign_values) {
     util::check_length(values.size(), parts);
   }
+  if (splits.split.size() < parts) {
+    splits.split.resize(parts);
+    splits.searched.resize(parts);
+  }
   const std::size_t width = system.part_width();
   if (parts * width > size) {
     util::stop("split: " + util::to_string(static_cast<int>(parts)) +
@@ -284,6 +306,9 @@ void Step<System>::split(System& system, solved_values& at_state, double time,
                util::to_string(static_cast<int>(size)));
   }
   const double h = step_size;
+  // A reading this near zero, as a share of the readings' spread over the step,
+  // has the gaps beside it searched for a pair.
+  const double near_zero = 0.02;
   // Each part rating moves the System off the step's end, so the end is rated
   // again whenever one ran, whether or not a part was split.
   bool rated = false;
@@ -306,14 +331,34 @@ void Step<System>::split(System& system, solved_values& at_state, double time,
                     double vb) -> double {
     const double settled = 1e-10;  // in fractions of the step
     double u = std::numeric_limits<double>::quiet_NaN();
+    std::array<double, 65> taken_u, taken_v;
+    taken_u[0] = b;
+    taken_v[0] = vb;
+    int taken = 1;
     int side = 0;
     for (int iteration = 0; iteration < 64; ++iteration) {
       const double next = (a * vb - b * va) / (vb - va);
       const double v = rate(p, next, nullptr, rates);
       if (v == 0.0 || std::abs(next - u) < settled) {
+        // The slope there, against the latest value at least 1e-6 of the step
+        // away: nearer, the difference is roundoff.
+        int far = taken - 1;
+        while (far > 0 && std::abs(taken_u[far] - next) < 1e-6) {
+          --far;
+        }
+        const double crossing =
+          std::abs((v - taken_v[far]) / (next - taken_u[far])) / h;
+        if (crossing < splits.least_rate) {
+          splits.least_rate = crossing;
+          splits.least_rate_time = time + next * h;
+          splits.least_rate_part = p;
+        }
         return next;
       }
       u = next;
+      taken_u[taken] = next;
+      taken_v[taken] = v;
+      ++taken;
       if ((v < 0.0) == (vb < 0.0)) {
         b = u;
         vb = v;
@@ -331,6 +376,39 @@ void Step<System>::split(System& system, solved_values& at_state, double time,
       }
     }
     return u;
+  };
+
+  // Where on (a, b) the sign value leans furthest to the other sign: a golden
+  // section of at most four dense-output values, which stops at the first such.
+  auto search = [&](std::size_t p, double a, double b,
+                    bool negative) -> std::pair<double, double> {
+    const double lean = negative ? -1.0 : 1.0;
+    const double g = 0.5 * (3.0 - std::sqrt(5.0));
+    double x1 = a + g * (b - a), x2 = b - g * (b - a);
+    double f1 = lean * rate(p, x1, nullptr, rates);
+    if (f1 < 0.0) {
+      return {x1, lean * f1};
+    }
+    double f2 = lean * rate(p, x2, nullptr, rates);
+    for (int more = 0; more < 2 && f2 >= 0.0; ++more) {
+      if (f1 < f2) {
+        b = x2;
+        x2 = x1;
+        f2 = f1;
+        x1 = a + g * (b - a);
+        f1 = lean * rate(p, x1, nullptr, rates);
+        if (f1 < 0.0) {
+          return {x1, lean * f1};
+        }
+      } else {
+        a = x1;
+        x1 = x2;
+        f1 = f2;
+        x2 = b - g * (b - a);
+        f2 = lean * rate(p, x2, nullptr, rates);
+      }
+    }
+    return f1 < f2 ? std::pair{x1, lean * f1} : std::pair{x2, lean * f2};
   };
 
   std::vector<std::vector<double>> piece_rates(6, std::vector<double>(width));
@@ -360,12 +438,41 @@ void Step<System>::split(System& system, solved_values& at_state, double time,
           cuts[n_cuts++] = locate(p, 0.0, v0, um, vm);
           cuts[n_cuts++] = locate(p, um, vm, 1.0, v1);
         }
+      } else {
+        // No reading holds the other sign. A pair may sit beside the one nearest
+        // zero if it is within near_zero of their spread, so its gaps are searched.
+        const double at[6] = {0.0, ah[0], ah[1], ah[2], ah[4], 1.0};
+        const double read[6] = {v0, sign_values[0][p], sign_values[1][p],
+                                sign_values[2][p], sign_values[4][p], v1};
+        int nearest = 0;
+        double low = v0, high = v0;
+        for (int k = 1; k < 6; ++k) {
+          if (std::abs(read[k]) < std::abs(read[nearest])) {
+            nearest = k;
+          }
+          low = std::min(low, read[k]);
+          high = std::max(high, read[k]);
+        }
+        if (std::abs(read[nearest]) <= near_zero * (high - low)) {
+          ++splits.searched[p];
+          for (int k : {nearest - 1, nearest + 1}) {
+            if (k < 0 || k > 5 || n_cuts > 0) {
+              continue;
+            }
+            const auto [um, vm] = search(p, std::min(at[k], at[nearest]),
+                                         std::max(at[k], at[nearest]), negative);
+            if ((vm < 0.0) != negative) {
+              cuts[n_cuts++] = locate(p, 0.0, v0, um, vm);
+              cuts[n_cuts++] = locate(p, um, vm, 1.0, v1);
+            }
+          }
+        }
       }
     }
     if (n_cuts == 0) {
       continue;
     }
-    ++parts_split;
+    ++splits.split[p];
 
     std::copy(y_start.begin() + first,
               y_start.begin() + first + static_cast<std::ptrdiff_t>(width),

@@ -1,7 +1,8 @@
 # Tests that the stepper's dense output is fourth order and ends on the step's
 # solution, that a part is integrated in pieces between its sign changes, once
 # where its sign value changes sign across a step and twice where it dips inside
-# one, and that a System naming no parts runs bit for bit as one without them.
+# one, a stage holding the other sign or not, that the record says what each part
+# did, and that a System naming no parts runs bit for bit as one without them.
 
 compile_split_interface <- function() {
   ensure_ode_interface_loaded()
@@ -67,19 +68,23 @@ compile_split_interface <- function() {
       return ret;
     }
 
-    // Two parts of one component, x_p rising at max(g_p(z), 0), then z rising at
-    // one, which no part holds, so z = t. g_0 changes sign at z = 0.3; g_1 is
-    // below zero on (0.55, 0.65) alone. Only Kinked<true> names its parts.
+    // Three parts of one component, x_p rising at max(g_p(z), 0), then z rising
+    // at one, which no part holds, so z = t. g_0 changes sign at z = 0.3; g_1 is
+    // below zero on (0.55, 0.65) alone, where the stage at 0.6 falls; g_2 on
+    // (0.06, 0.14) alone, before the first stage. Only Kinked<true> names its
+    // parts.
     template <bool Parts>
     struct Kinked {
       using value_type = double;
       static double gate(std::size_t p, double z) {
-        return p == 0 ? z - 0.3 : (z - 0.6) * (z - 0.6) - 0.0025;
+        return p == 0   ? z - 0.3
+               : p == 1 ? (z - 0.6) * (z - 0.6) - 0.0025
+                        : (z - 0.1) * (z - 0.1) - 0.0016;
       }
-      size_t ode_size() const { return 3; }
+      size_t ode_size() const { return 4; }
       double ode_time() const { return time; }
       void reset() {
-        y.assign(3, 0.0);
+        y.assign(4, 0.0);
         time = 0.0;
       }
       template <typename It> It set_ode_state(It it, double t) {
@@ -92,8 +97,8 @@ compile_split_interface <- function() {
         return it;
       }
       template <typename It> It ode_rates(It it) {
-        for (std::size_t p = 0; p < 2; ++p) {
-          g[p] = gate(p, y[2]);
+        for (std::size_t p = 0; p < 3; ++p) {
+          g[p] = gate(p, y[3]);
           *it++ = std::max(g[p], 0.0);
         }
         *it++ = 1.0;
@@ -109,16 +114,27 @@ compile_split_interface <- function() {
       std::size_t part_width() const requires Parts { return 1; }
       double part_rates(std::size_t p, const std::vector<double>& state, double,
                         std::vector<double>& out) requires Parts {
-        const double v = gate(p, state[2]);
+        const double v = gate(p, state[3]);
         out[0] = std::max(v, 0.0);
         return v;
       }
 
       bool splits = true;
-      std::vector<double> y{0.0, 0.0, 0.0};
-      std::vector<double> g{0.0, 0.0};
+      std::vector<double> y{0.0, 0.0, 0.0, 0.0};
+      std::vector<double> g{0.0, 0.0, 0.0};
       double time = 0.0;
     };
+
+    static Rcpp::List record(const ode::split_record& r) {
+      return Rcpp::List::create(
+        Rcpp::Named("total") = static_cast<int>(r.total()),
+        Rcpp::Named("split") = std::vector<int>(r.split.begin(), r.split.end()),
+        Rcpp::Named("searched") =
+          std::vector<int>(r.searched.begin(), r.searched.end()),
+        Rcpp::Named("least_rate") = r.least_rate,
+        Rcpp::Named("least_rate_time") = r.least_rate_time,
+        Rcpp::Named("least_rate_part") = static_cast<int>(r.least_rate_part));
+    }
 
     template <bool Parts>
     static ode::Solver<Kinked<Parts>> kinked_solver(bool splits, bool keep) {
@@ -136,9 +152,8 @@ compile_split_interface <- function() {
     Rcpp::List kinked_one_step(bool splits) {
       auto solver = kinked_solver<true>(splits, false);
       solver.advance_fixed({0.0, 1.0});
-      return Rcpp::List::create(
-        Rcpp::Named("state") = solver.state(),
-        Rcpp::Named("parts_split") = static_cast<int>(solver.parts_split()));
+      return Rcpp::List::create(Rcpp::Named("state") = solver.state(),
+                                Rcpp::Named("splits") = record(solver.splits()));
     }
 
     // An adaptive run over [0, 2]: with the parts named, unnamed, or with no
@@ -169,7 +184,7 @@ compile_split_interface <- function() {
           Rcpp::Named("times") = s.times(),
           Rcpp::Named("step_sizes") = s.step_sizes(),
           Rcpp::Named("state") = s.state(),
-          Rcpp::Named("parts_split") = static_cast<int>(s.parts_split()));
+          Rcpp::Named("splits") = record(s.splits()));
       };
       return Rcpp::List::create(Rcpp::Named("split") = run(split),
                                 Rcpp::Named("unnamed") = run(unnamed),
@@ -201,16 +216,32 @@ test_that("the dense output is fourth order and ends on the step's solution", {
 test_that("one step is integrated in pieces at a sign change and at a dip", {
   compile_split_interface()
   # x_0 = (1 - 0.3)^2 / 2; x_1 is g_1's integral less its part inside the dip,
-  # 0.28 / 3 - 0.0025 + 4 * 0.05^3 / 3. Each piece is a polynomial the stepper
-  # integrates exactly.
-  exact <- c(0.245, 0.091, 1)
+  # 0.28 / 3 - 0.0025 + 4 * 0.05^3 / 3, and x_2 likewise, 0.730256 / 3 - 0.0016.
+  # Each piece is a polynomial the stepper integrates exactly.
+  exact <- c(0.245, 0.091, 0.730256 / 3 - 0.0016, 1)
   split <- kinked_one_step(TRUE)
   plain <- kinked_one_step(FALSE)
   expect_equal(split$state, exact, tolerance = 1e-13)
-  expect_equal(split$parts_split, 2L)
+  expect_equal(split$splits$total, 3L)
   expect_gt(abs(plain$state[1] - exact[1]), 1e-2)
   expect_gt(abs(plain$state[2] - exact[2]), 1e-4)
-  expect_equal(plain$parts_split, 0L)
+  expect_gt(abs(plain$state[3] - exact[3]), 1e-5)
+  expect_equal(plain$splits$total, 0L)
+})
+
+test_that("a dip no stage holds is found beside the reading nearest zero", {
+  compile_split_interface()
+  # g_2 reads 0.0084 at the step's start and at the first stage, within 2% of its
+  # readings' spread of 0.8, and is below zero only between them. g_1's dip holds
+  # the stage at 0.6, so it is cut without a search.
+  r <- kinked_one_step(TRUE)$splits
+  expect_equal(r$split, c(1L, 1L, 1L))
+  expect_equal(r$searched, c(0L, 0L, 1L))
+  # The slowest crossings are g_2's, at 0.06 and 0.14 with |dg_2/dz| = 0.08, read
+  # from a difference over at least 1e-6 of the step, so to about 1e-4.
+  expect_equal(r$least_rate, 0.08, tolerance = 1e-3)
+  expect_lt(min(abs(r$least_rate_time - c(0.06, 0.14))), 1e-9)
+  expect_equal(r$least_rate_part, 2L)
 })
 
 test_that("a System naming no parts runs bit for bit as one without them", {
@@ -222,14 +253,14 @@ test_that("a System naming no parts runs bit for bit as one without them", {
   # Splitting moves the run: x_0 reaches (2 - 0.3)^2 / 2 exactly.
   expect_equal(res$split$state[1], 1.445, tolerance = 1e-13)
   expect_false(identical(res$split$state, res$none$state))
-  expect_gt(res$split$parts_split, 0L)
-  expect_equal(res$unnamed$parts_split, 0L)
+  expect_gt(res$split$splits$total, 0L)
+  expect_equal(res$unnamed$splits$total, 0L)
 })
 
 test_that("a walk over a split run's recording splits again, bit for bit", {
   compile_split_interface()
   res <- kinked_runs()
   expect_identical(bits(res$walk_states), bits(res$run_states))
-  # Only the steps a run keeps are split, so the walk counts what the run did.
-  expect_identical(res$walk$parts_split, res$split$parts_split)
+  # Only the steps a run keeps are split, so the walk records what the run did.
+  expect_identical(res$walk$splits, res$split$splits)
 })

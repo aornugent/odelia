@@ -355,7 +355,7 @@ void test_split_integrates_pieces() {
     sys.splits = splits;
     odelia::ode::Solver<KinkedSystem> solver(sys, odelia::ode::OdeControl());
     solver.advance_fixed({0.0, 1.0});
-    return std::make_pair(solver.state(), solver.parts_split());
+    return std::make_pair(solver.state(), solver.splits().total());
   };
   const auto [split, n_split] = one_step(true);
   const auto [plain, n_plain] = one_step(false);
