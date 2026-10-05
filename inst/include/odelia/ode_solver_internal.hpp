@@ -215,7 +215,7 @@ private:
   void split(System& system, double time_, double step_size) {
     if constexpr (SplitsSignChanges<System>) {
       if (method == Method::rkck) {
-        stepper.split(system, solved_scratch_.at_state, time_, step_size,
+        stepper.split(system, solved_scratch_, time_, step_size,
                       sign_values_in, y, dydt_out);
       }
     }

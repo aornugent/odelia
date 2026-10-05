@@ -196,6 +196,138 @@ compile_split_interface <- function() {
                                 Rcpp::Named("run_states") = run_states,
                                 Rcpp::Named("walk_states") = walk_states);
     }
+
+    // Two parts of one component, x_p rising at the smooth positive part of g_p,
+    // then z rising at one, so z = t. g_0 = z - a changes sign once; g_1 =
+    // (z - c)^2 - b dips below zero about c. a, b and c are the parameters, so a
+    // sweep moves the cuts.
+    template <typename T>
+    struct Turning {
+      using value_type = T;
+      Turning(T a_ = T(0.3), T b_ = T(0.0025), T c_ = T(0.6))
+        : a(a_), b(b_), c(c_) {}
+      template <class S2>
+      Turning<S2> rebind_from() const {
+        Turning<S2> out(S2(util::to_passive(a)), S2(util::to_passive(b)),
+                        S2(util::to_passive(c)));
+        for (std::size_t i = 0; i < 3; ++i) {
+          out.y[i] = S2(util::to_passive(y[i]));
+        }
+        out.time = time;
+        return out;
+      }
+      std::vector<T*> ad_parameters() { return {&a, &b, &c}; }
+      template <class F> void for_each_active(F&& f) {
+        f(a); f(b); f(c);
+        for (T& v : y) f(v);
+        for (T& v : g) f(v);
+        for (T& v : dydt) f(v);
+      }
+      T gate(std::size_t p, const T& z) const {
+        if (p == 0) {
+          return T(z - a);
+        }
+        return T((z - c) * (z - c) - b);
+      }
+      static T turn(const T& v) {
+        using std::sqrt;
+        return T(0.5 * (v + sqrt(v * v + 0.0025)));
+      }
+      size_t ode_size() const { return 3; }
+      double ode_time() const { return time; }
+      void reset() {
+        y.assign(3, T(0.0));
+        time = 0.0;
+      }
+      template <typename It> It set_ode_state(It it, double t) {
+        for (T& v : y) v = *it++;
+        time = t;
+        for (std::size_t p = 0; p < 2; ++p) {
+          g[p] = gate(p, y[2]);
+          dydt[p] = turn(g[p]);
+        }
+        dydt[2] = 1.0;
+        return it;
+      }
+      template <typename It> It ode_state(It it) const {
+        for (const T& v : y) *it++ = v;
+        return it;
+      }
+      template <typename It> It ode_rates(It it) const {
+        for (const T& v : dydt) *it++ = v;
+        return it;
+      }
+      void sign_values(std::vector<double>& out) const {
+        out.resize(2);
+        for (std::size_t p = 0; p < 2; ++p) {
+          out[p] = util::to_passive(g[p]);
+        }
+      }
+      std::size_t part_width() const { return 1; }
+      T part_rates(std::size_t p, const std::vector<T>& state, double,
+                   std::vector<T>& out) {
+        const T v = gate(p, state[2]);
+        out[0] = turn(v);
+        return v;
+      }
+
+      T a, b, c;
+      std::vector<T> y{T(0.0), T(0.0), T(0.0)};
+      std::vector<T> g{T(0.0), T(0.0)};
+      std::vector<T> dydt{T(0.0), T(0.0), T(0.0)};
+      double time = 0.0;
+    };
+
+    // The run over `grid` from the origin at `pars`: pinned where `pinned`, else
+    // adaptive to its end. Its end state, its program, the splits it made, and
+    // the sweep of `lambda_end` back over it.
+    // [[Rcpp::export]]
+    Rcpp::List turning_run(std::vector<double> pars, std::vector<double> grid,
+                           bool pinned, std::vector<double> lambda_end) {
+      Turning<double> sys(pars[0], pars[1], pars[2]);
+      ode::Solver<Turning<double>> solver(sys, ode::OdeControl());
+      solver.set_collect(false);
+      solver.set_keep_states(true);
+      solver.set_state({0.0, 0.0, 0.0}, 0.0);
+      if (pinned) {
+        solver.advance_fixed(grid);
+      } else {
+        solver.advance_adaptive(grid);
+      }
+      ode::adjoint_rows lambda = ode::adjoint_rows::one_row(lambda_end);
+      ode::adjoint_rows rows(1, 3);
+      solver.solve_adjoint(lambda, rows);
+      std::vector<double> times, sizes;
+      for (const ode::instruction& row : solver.schedule()) {
+        times.push_back(row.time);
+        sizes.push_back(row.step_size);
+      }
+      return Rcpp::List::create(Rcpp::Named("state") = solver.state(),
+                                Rcpp::Named("times") = times,
+                                Rcpp::Named("sizes") = sizes,
+                                Rcpp::Named("splits") =
+                                  static_cast<int>(solver.splits().total()),
+                                Rcpp::Named("lambda") = lambda.to_rows()[0],
+                                Rcpp::Named("parameters") = rows.to_rows()[0]);
+    }
+
+    // The program of a run, `times` and `sizes`, replayed from `y0` at `pars`.
+    // [[Rcpp::export]]
+    std::vector<double> turning_replay(std::vector<double> pars,
+                                       std::vector<double> times,
+                                       std::vector<double> sizes,
+                                       std::vector<double> y0) {
+      Turning<double> sys(pars[0], pars[1], pars[2]);
+      ode::Solver<Turning<double>> solver(sys, ode::OdeControl());
+      solver.set_collect(false);
+      solver.set_state(y0, 0.0);
+      std::vector<ode::instruction> program;
+      for (std::size_t i = 0; i < times.size(); ++i) {
+        program.push_back({times[i], sizes[i]});
+      }
+      solver.advance_recorded(program);
+      return solver.state();
+    }
   ', verbose = FALSE)
 }
 
@@ -271,4 +403,33 @@ test_that("a walk over a split run's recording splits again, bit for bit", {
   expect_identical(bits(res$walk_states), bits(res$run_states))
   # Only the steps a run keeps are split, so the walk records what the run did.
   expect_identical(res$walk$splits, res$split$splits)
+})
+
+test_that("the sweep through a split step moves each cut with the parameters", {
+  compile_split_interface()
+  pars <- c(0.3, 0.0025, 0.6)
+  # Asymmetric, so a dropped transpose shows.
+  lambda_end <- c(0.7, -1.3, 0.4)
+  for (pinned in c(TRUE, FALSE)) {
+    grid <- if (pinned) c(0, 1) else c(0, 2)
+    run <- turning_run(pars, grid, pinned, lambda_end)
+    expect_gt(run$splits, 0L)
+    end_at <- function(p, y0 = c(0, 0, 0)) turning_replay(p, run$times, run$sizes, y0)
+    expect_identical(bits(end_at(pars)), bits(run$state))
+    # Central differences of the forward on the run's own steps: each cut is
+    # located again at the moved parameters.
+    d <- 1e-5
+    by_parameter <- sapply(seq_along(pars), function(j) {
+      up <- pars; up[j] <- up[j] + d
+      down <- pars; down[j] <- down[j] - d
+      sum(lambda_end * (end_at(up) - end_at(down))) / (2 * d)
+    })
+    expect_equal(run$parameters, by_parameter, tolerance = 1e-6)
+    by_state <- sapply(1:3, function(j) {
+      up <- c(0, 0, 0); up[j] <- d
+      down <- c(0, 0, 0); down[j] <- -d
+      sum(lambda_end * (end_at(pars, up) - end_at(pars, down))) / (2 * d)
+    })
+    expect_equal(run$lambda, by_state, tolerance = 1e-6)
+  }
 })

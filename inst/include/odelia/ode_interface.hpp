@@ -217,6 +217,18 @@ void end_solved(System& system) {
   }
 }
 
+// What a split recorded for one part of one step: where its sign value crossed
+// zero, as fractions of the step, and its rate of change in that fraction there;
+// the rating each crossing was found at; then each rating its pieces made, in order.
+template <class Values>
+struct part_split {
+  std::size_t part = 0;
+  std::vector<double> cuts;
+  std::vector<double> slopes;
+  std::vector<Values> at_cuts;
+  std::vector<Values> ratings;
+};
+
 // What a row's rate evaluations solved for. A step fills all six: its five
 // stages, then the evaluation at the state it ends at, which first-same-as-last
 // hands the next step as its first rates. Any other row fills `at_state` alone:
@@ -225,6 +237,10 @@ template <class Values>
 struct solved_row {
   std::array<Values, 5> stages{};
   Values at_state{};
+  // A step that split a part: the evaluation at the end it reached before the
+  // split, which the dense output reads, and what each split part recorded.
+  Values unsplit_end{};
+  std::vector<part_split<Values>> parts;
 };
 
 // One instruction of a program: what carries the state from one boundary to the
@@ -329,18 +345,25 @@ concept WeighsErrors = requires(const System& s, double time,
 };
 
 // A System whose state opens with parts of part_width() components each, and
-// whose rates change form where a part's sign value changes sign. Split at double
-// only: a System lifted to an active scalar steps unsplit.
+// which rates one part alone at the state `y`, into `out`, returning its sign
+// value. At any scalar: the sweep tapes a split's pieces at the adjoint scalar.
+template <typename System>
+concept RatesParts = requires(System& s, const System& cs, std::size_t part,
+                              const std::vector<typename System::value_type>& y,
+                              double time,
+                              std::vector<typename System::value_type>& out) {
+  { cs.part_width() } -> std::same_as<std::size_t>;
+  { s.part_rates(part, y, time, out) } -> std::same_as<typename System::value_type>;
+};
+
+// A System whose rates change form where a part's sign value changes sign. Split
+// at double only: a System lifted to an active scalar replays the run's splits.
 template <typename System>
 concept SplitsSignChanges =
-  std::same_as<typename System::value_type, double> &&
-  requires(System& s, const System& cs, std::size_t part,
-           const std::vector<double>& y, double time, std::vector<double>& out) {
+  std::same_as<typename System::value_type, double> && RatesParts<System> &&
+  requires(const System& cs, std::vector<double>& out) {
   // One value per part after any evaluation; none where nothing is split.
   { cs.sign_values(out) } -> std::same_as<void>;
-  { cs.part_width() } -> std::same_as<std::size_t>;
-  // The part's rates alone at the state `y`, into `out`; returns its sign value.
-  { s.part_rates(part, y, time, out) } -> std::same_as<double>;
 };
 
 // The recursive interface. Each helper walks a container of elements, threading
