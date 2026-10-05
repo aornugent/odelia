@@ -115,9 +115,15 @@ compile_split_interface <- function() {
         }
       }
       std::size_t part_width() const requires Parts { return 1; }
-      double part_rates(std::size_t p, const std::vector<double>& state, double,
+      // A part reads z and w.
+      void part_reads(const std::vector<double>& state, double,
+                      std::vector<double>& out) const requires Parts {
+        out.assign(state.begin() + 4, state.begin() + 6);
+      }
+      double part_rates(std::size_t p, const std::vector<double>&,
+                        const std::vector<double>& reads, double,
                         std::vector<double>& out) requires Parts {
-        const double v = gate(p, state[4], state[5]);
+        const double v = gate(p, reads[0], reads[1]);
         out[0] = std::max(v, 0.0);
         return v;
       }
@@ -264,9 +270,14 @@ compile_split_interface <- function() {
         }
       }
       std::size_t part_width() const { return 1; }
-      T part_rates(std::size_t p, const std::vector<T>& state, double,
-                   std::vector<T>& out) {
-        const T v = gate(p, state[2]);
+      // A part reads z alone.
+      void part_reads(const std::vector<T>& state, double,
+                      std::vector<T>& out) const {
+        out.assign(1, state[2]);
+      }
+      T part_rates(std::size_t p, const std::vector<T>&,
+                   const std::vector<T>& reads, double, std::vector<T>& out) {
+        const T v = gate(p, reads[0]);
         out[0] = turn(v);
         return v;
       }

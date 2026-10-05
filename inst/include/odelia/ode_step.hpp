@@ -117,20 +117,24 @@ private:
   template <class S, class H>
   void step_end(const std::vector<S>& y, const std::vector<std::vector<S>>& k,
                 const H& h, std::vector<S>& out) const;
-  // The state at fraction u of a step of size h from y0, through its stage rates
-  // k and the end's rate. A split's pieces read it at whatever scalar they run at.
+  // As many components from `first` as `out` holds, of the state at fraction u
+  // of a step from y0, through its stage rates k and the end's rate.
   template <class S, class U>
   void dense_state(const U& u, double h, const std::vector<S>& y0,
                    const std::vector<std::vector<S>>& k,
-                   const std::vector<S>& end_rate, std::vector<S>& out) const;
+                   const std::vector<S>& end_rate, std::size_t first,
+                   std::vector<S>& out) const;
+  // The quartic through what the parts read at each of read_fractions, at u.
+  template <class S, class U>
+  void reads_at(const U& u, const std::array<std::vector<S>, 5>& reads,
+                std::vector<S>& out) const;
   // The part opening at `first`, from where the step started to where it ends,
-  // each piece between the cuts integrated with the tableau and the rest of the
-  // state read from the dense output; `rate(u, state, out)` rates the part.
+  // each piece between the cuts integrated with the tableau; `rate(u, at, out)`
+  // rates the part with its own components at `at`.
   template <class S, class U, class Rate>
   void integrate_pieces(std::size_t first, const std::vector<U>& cuts, double h,
                         const std::vector<S>& y0,
-                        const std::vector<std::vector<S>>& k,
-                        const std::vector<S>& end_rate, Rate&& rate,
+                        const std::vector<std::vector<S>>& k, Rate&& rate,
                         std::vector<S>& own) const;
   // A split step's parts on the tape: the pieces again at the run's ratings, each
   // cut carrying the implicit function theorem's derivative.
@@ -168,6 +172,11 @@ private:
   // The dense output's weight on each rate (k1..k6, then the end's), as the
   // coefficient of u, u^2, u^3 and u^4.
   static const double dense_weights[4][7];
+
+  // Where a split step reads the rest of the state, as fractions of the step.
+  // The dense output is a quartic in u, so five fractions reproduce a state.
+  static constexpr std::array<double, 5> read_fractions{0.0, 0.25, 0.5, 0.75,
+                                                        1.0};
 };
 
 template <class System>
@@ -288,26 +297,53 @@ template <class System>
 void Step<System>::dense_state(double u, double step_size,
                                const state_type& dydt_out,
                                state_type& out) const {
-  dense_state(u, step_size, y_start, k, dydt_out, out);
+  dense_state(u, step_size, y_start, k, dydt_out, 0, out);
 }
 
 template <class System>
 template <class S, class U>
 void Step<System>::dense_state(const U& u, double h, const std::vector<S>& y0,
                                const std::vector<std::vector<S>>& k,
-                               const std::vector<S>& end_rate,
+                               const std::vector<S>& end_rate, std::size_t first,
                                std::vector<S>& out) const {
+  if (first + out.size() > y0.size()) {
+    util::stop("dense_state: components past the state's end");
+  }
   std::array<U, 7> w;
   for (int i = 0; i < 7; ++i) {
     w[i] = (((dense_weights[3][i] * u + dense_weights[2][i]) * u +
              dense_weights[1][i]) * u + dense_weights[0][i]) * u;
   }
   // k2 carries no weight at any u, as it carries none at the end.
-  for (size_t q = 0; q < y0.size(); ++q) {
+  for (size_t q = 0; q < out.size(); ++q) {
+    const size_t i = first + q;
     const S combination =
-      w[0] * k[0][q] + w[2] * k[2][q] + w[3] * k[3][q] + w[4] * k[4][q] +
-      w[5] * k[5][q] + w[6] * end_rate[q];
-    out[q] = y0[q] + h * combination;
+      w[0] * k[0][i] + w[2] * k[2][i] + w[3] * k[3][i] + w[4] * k[4][i] +
+      w[5] * k[5][i] + w[6] * end_rate[i];
+    out[q] = y0[i] + h * combination;
+  }
+}
+
+template <class System>
+template <class S, class U>
+void Step<System>::reads_at(const U& u, const std::array<std::vector<S>, 5>& reads,
+                            std::vector<S>& out) const {
+  std::array<U, 5> w;
+  for (std::size_t m = 0; m < w.size(); ++m) {
+    w[m] = U(1.0);
+    for (std::size_t n = 0; n < w.size(); ++n) {
+      if (n != m) {
+        w[m] *= (u - read_fractions[n]) / (read_fractions[m] - read_fractions[n]);
+      }
+    }
+  }
+  out.resize(reads[0].size());
+  for (const std::vector<S>& at : reads) {
+    util::check_length(at.size(), out.size());
+  }
+  for (std::size_t q = 0; q < out.size(); ++q) {
+    out[q] = w[0] * reads[0][q] + w[1] * reads[1][q] + w[2] * reads[2][q] +
+             w[3] * reads[3][q] + w[4] * reads[4][q];
   }
 }
 
@@ -316,20 +352,12 @@ template <class S, class U, class Rate>
 void Step<System>::integrate_pieces(std::size_t first, const std::vector<U>& cuts,
                                     double h, const std::vector<S>& y0,
                                     const std::vector<std::vector<S>>& k,
-                                    const std::vector<S>& end_rate, Rate&& rate,
-                                    std::vector<S>& own) const {
+                                    Rate&& rate, std::vector<S>& own) const {
   const std::size_t width = own.size();
   const auto at = static_cast<std::ptrdiff_t>(first);
   const auto end = at + static_cast<std::ptrdiff_t>(width);
   std::vector<std::vector<S>> piece_rates(6, std::vector<S>(width));
-  std::vector<S> stage(width), state(y0.size());
-  // The part's rates at fraction u, with its own components `part` in place of
-  // the dense output's.
-  auto rate_at = [&](const U& u, const std::vector<S>& part, std::vector<S>& out) {
-    dense_state(u, h, y0, k, end_rate, state);
-    std::copy(part.begin(), part.end(), state.begin() + at);
-    rate(u, state, out);
-  };
+  std::vector<S> stage(width);
   std::copy(y0.begin() + at, y0.begin() + end, own.begin());
   U from = 0.0;
   for (std::size_t c = 0; c <= cuts.size(); ++c) {
@@ -342,11 +370,11 @@ void Step<System>::integrate_pieces(std::size_t first, const std::vector<U>& cut
     if (util::to_passive(from) == 0.0) {
       std::copy(k[0].begin() + at, k[0].begin() + end, piece_rates[0].begin());
     } else {
-      rate_at(from, own, piece_rates[0]);
+      rate(from, own, piece_rates[0]);
     }
     for (int i = 1; i < 6; ++i) {
       stage_state(i, own, piece_rates, piece, stage);
-      rate_at(from + ah[i - 1] * (to - from), stage, piece_rates[i]);
+      rate(from + ah[i - 1] * (to - from), stage, piece_rates[i]);
     }
     step_end(own, piece_rates, piece, own);
     from = to;
@@ -389,18 +417,30 @@ void Step<System>::split(System& system, solved_row& solved, double time,
   // Each part rating moves the System off the step's end, so the end is rated
   // again whenever one ran, whether or not a part was split.
   bool rated = false;
-  std::vector<double> rates(width);
+  // What the parts read of the rest of the state at each of read_fractions on
+  // the dense output, taken before the step's first part rating.
+  std::array<state_type, 5> reads;
+  bool read = false;
+  std::vector<double> rates(width), own_at(width), reads_u;
   // Part p's sign value at fraction u on the dense output, its rates into `out`;
   // what the rating solved for goes `into` where given.
   auto rate = [&](std::size_t p, double u, std::vector<double>& out,
                   solved_values* into = nullptr) -> double {
-    dense_state(u, h, dydt_out, ytmp);
     rated = true;
+    if (!read) {
+      for (std::size_t m = 0; m < reads.size(); ++m) {
+        dense_state(read_fractions[m], h, dydt_out, ytmp);
+        system.part_reads(ytmp, time + read_fractions[m] * h, reads[m]);
+      }
+      read = true;
+    }
+    dense_state(u, h, y_start, k, dydt_out, p * width, own_at);
+    reads_at(u, reads, reads_u);
     if (into == nullptr) {
-      return system.part_rates(p, ytmp, time + u * h, out);
+      return system.part_rates(p, own_at, reads_u, time + u * h, out);
     }
     const solved_scope<System, solved_values> extent{system, *into};
-    return system.part_rates(p, ytmp, time + u * h, out);
+    return system.part_rates(p, own_at, reads_u, time + u * h, out);
   };
   // The sign change between fractions a and b, where the sign value is va and vb
   // of opposite signs: regula falsi, halving a retained end's value (Illinois).
@@ -553,13 +593,13 @@ void Step<System>::split(System& system, solved_row& solved, double time,
     record.slopes.assign(slopes, slopes + n_cuts);
     record.at_cuts.assign(std::make_move_iterator(at_cuts),
                           std::make_move_iterator(at_cuts + n_cuts));
-    integrate_pieces(p * width, record.cuts, h, y_start, k, dydt_out,
-                     [&](double u, const state_type& state,
+    integrate_pieces(p * width, record.cuts, h, y_start, k,
+                     [&](double u, const std::vector<double>& at,
                          std::vector<double>& out) {
+                       reads_at(u, reads, reads_u);
                        const solved_scope<System, solved_values> extent{
                          system, record.ratings.emplace_back()};
-                       rated = true;
-                       system.part_rates(p, state, time + u * h, out);
+                       system.part_rates(p, at, reads_u, time + u * h, out);
                      },
                      own);
     std::copy(own.begin(), own.end(),
@@ -648,23 +688,30 @@ void Step<System>::taped_split(ActiveSystem& sys, const solved_row& solved,
     std::vector<S> end_rate(y0.size());
     ode::derivs(sys, y_end, end_rate, time + h, solved.unsplit_end);
     ++recorded_rates;
+    std::array<std::vector<S>, 5> reads;
+    std::vector<S> state(y0.size());
+    for (std::size_t m = 0; m < reads.size(); ++m) {
+      dense_state(read_fractions[m], h, y0, k, end_rate, 0, state);
+      sys.part_reads(state, time + read_fractions[m] * h, reads[m]);
+    }
     const std::size_t width = sys.part_width();
-    std::vector<S> state(y0.size()), rates(width), own(width);
+    std::vector<S> own_at(width), rates(width), own(width), reads_u;
     for (const part_split<solved_values>& part : solved.parts) {
       std::vector<S> cuts;
       for (std::size_t c = 0; c < part.cuts.size(); ++c) {
         cuts.push_back(implicit_value<S>(
             part.cuts[c], part.slopes[c], [&](const S& u) -> S {
-              dense_state(u, h, y0, k, end_rate, state);
+              dense_state(u, h, y0, k, end_rate, part.part * width, own_at);
+              reads_at(u, reads, reads_u);
               const solved_scope<ActiveSystem, const solved_values> extent{
                 sys, part.at_cuts[c]};
               ++recorded_rates;
-              return sys.part_rates(part.part, state, time + part.cuts[c] * h,
-                                    rates);
+              return sys.part_rates(part.part, own_at, reads_u,
+                                    time + part.cuts[c] * h, rates);
             }));
       }
       std::size_t next = 0;
-      integrate_pieces(part.part * width, cuts, h, y0, k, end_rate,
+      integrate_pieces(part.part * width, cuts, h, y0, k,
                        [&](const S& u, const std::vector<S>& at,
                            std::vector<S>& out) {
                          // A rating the run did not make is a different map.
@@ -672,6 +719,7 @@ void Step<System>::taped_split(ActiveSystem& sys, const solved_row& solved,
                            util::stop("step_adjoint: the split's pieces asked "
                                       "for more ratings than the run made");
                          }
+                         reads_at(u, reads, reads_u);
                          const solved_scope<ActiveSystem, const solved_values>
                            extent{sys, part.ratings[next++]};
                          ++recorded_rates;
@@ -679,7 +727,7 @@ void Step<System>::taped_split(ActiveSystem& sys, const solved_row& solved,
                          // moves moves its pieces' stage times, so rates that read
                          // the time itself are differentiated as if they did not,
                          // off by their derivative in time times each cut's move.
-                         sys.part_rates(part.part, at,
+                         sys.part_rates(part.part, at, reads_u,
                                         time + util::to_passive(u) * h, out);
                        },
                        own);

@@ -344,16 +344,18 @@ concept WeighsErrors = requires(const System& s, double time,
   { s.error_weights(time, w) } -> std::same_as<void>;
 };
 
-// A System whose state opens with parts of part_width() components each, and
-// which rates one part alone at the state `y`, into `out`, returning its sign
-// value. At any scalar: the sweep tapes a split's pieces at the adjoint scalar.
+// A System whose state opens with parts of part_width() components each, which
+// rates one part from its own components and what part_reads writes of a whole
+// state, returning its sign value. At any scalar: the sweep tapes the pieces.
 template <typename System>
 concept RatesParts = requires(System& s, const System& cs, std::size_t part,
                               const std::vector<typename System::value_type>& y,
                               double time,
                               std::vector<typename System::value_type>& out) {
   { cs.part_width() } -> std::same_as<std::size_t>;
-  { s.part_rates(part, y, time, out) } -> std::same_as<typename System::value_type>;
+  { s.part_reads(y, time, out) } -> std::same_as<void>;
+  { s.part_rates(part, y, y, time, out) } ->
+    std::same_as<typename System::value_type>;
 };
 
 // A System whose rates change form where a part's sign value changes sign. Split

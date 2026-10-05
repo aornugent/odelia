@@ -337,10 +337,16 @@ struct KinkedSystem {
               out.begin());
   }
   std::size_t part_width() const { return 1; }
-  double part_rates(std::size_t p, const std::vector<double>& state, double,
+  // A part reads z alone.
+  void part_reads(const std::vector<double>& state, double,
+                  std::vector<double>& out) const {
+    out.assign(1, state[2]);
+  }
+  double part_rates(std::size_t p, const std::vector<double>&,
+                    const std::vector<double>& reads, double,
                     std::vector<double>& out) {
-    out[0] = std::max(gate(p, state[2]), 0.0);
-    return gate(p, state[2]);
+    out[0] = std::max(gate(p, reads[0]), 0.0);
+    return gate(p, reads[0]);
   }
 };
 } // namespace
