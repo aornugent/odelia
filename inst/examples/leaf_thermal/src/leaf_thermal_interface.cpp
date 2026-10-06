@@ -146,13 +146,16 @@ Rcpp::NumericVector LeafThermalSystem_get_current_drivers(SEXP LeafThermalSystem
 
 // Solver interface (Leaf-specific creation, generic operations)
 
-// Build a double Solver for a LeafThermalSystem.
+// Build a double Solver for a LeafThermalSystem. `method` picks the stepper
+// (rcpp_interface_helpers.hpp: "rkck", "dopri" or "rodas"); the system has a
+// rebind_from() hook, so "rodas" takes its Jacobian by forward-mode AD.
 // [[Rcpp::export]]
-SEXP LeafSolver_new(SEXP system_xp, SEXP control_xp, SEXP drivers_xp) {
+SEXP LeafSolver_new(SEXP system_xp, SEXP control_xp, SEXP drivers_xp,
+                    std::string method = "rkck") {
   Rcpp::XPtr<SystemType> sys(system_xp);
   Rcpp::XPtr<ode::OdeControl> ctrl(control_xp);
   return Rcpp::XPtr<ode::Solver<SystemType>>(
-      new ode::Solver<SystemType>(*sys, *ctrl), true);
+      new ode::Solver<SystemType>(*sys, *ctrl, odelia::parse_method(method)), true);
 }
 
 // All other Solver functions call the generic (double-only) templates.

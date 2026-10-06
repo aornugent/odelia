@@ -90,21 +90,10 @@ Rcpp::NumericVector System_rates(SEXP system_xp) {
 //-------------------------------------------------------------------------
 // Solver interface (Lorenz-specific creation, generic operations)
 
-// Map an R-facing method string to the solver Method enum.
-static ode::Method parse_method(const std::string& method) {
-  if (method == "rodas" || method == "implicit") {
-    return ode::Method::rodas;
-  }
-  if (method == "rkck" || method == "rk45" || method == "explicit") {
-    return ode::Method::rkck;
-  }
-  Rcpp::stop("Unknown method '" + method + "'. Use 'rkck' or 'rodas'.");
-}
-
 // Solver creation - Lorenz-specific (must know LorenzSystem type). R only ever
 // holds the double solver; gradients build the active replay internally. The
-// stiff `rodas` stepper is a double-path option; the active replay stays rkck
-// (the Rosenbrock linear solve is not available for the AD scalar type).
+// stiff `rodas` and dense-output `dopri` steppers are double-path options; the
+// active replay stays rkck, the one stepper that records its stages.
 // [[Rcpp::export]]
 SEXP Solver_new(SEXP system_xp, SEXP control_xp, std::string method = "rkck") {
   Rcpp::XPtr<SystemType> sys(system_xp);

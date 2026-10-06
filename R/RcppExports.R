@@ -145,6 +145,14 @@ OdeControl_set_step_size_initial <- function(control_xp, step_size_initial) {
     invisible(.Call(`_odelia_OdeControl_set_step_size_initial`, control_xp, step_size_initial))
 }
 
+OdeControl_set_controller <- function(control_xp, controller) {
+    invisible(.Call(`_odelia_OdeControl_set_controller`, control_xp, controller))
+}
+
+OdeControl_get_controller <- function(control_xp) {
+    .Call(`_odelia_OdeControl_get_controller`, control_xp)
+}
+
 Drivers_new <- function() {
     .Call(`_odelia_Drivers_new`)
 }
@@ -175,5 +183,61 @@ Drivers_get_names <- function(drivers_xp) {
 
 Drivers_clear <- function(drivers_xp) {
     invisible(.Call(`_odelia_Drivers_clear`, drivers_xp))
+}
+
+RSolver_new <- function(rhs, jac, state_valid, parms, y0, t0, control_xp, method, autonomous, jac_fd_step, jac_fd_floor) {
+    .Call(`_odelia_RSolver_new`, rhs, jac, state_valid, parms, y0, t0, control_xp, method, autonomous, jac_fd_step, jac_fd_floor)
+}
+
+RSolver_step <- function(solver_xp, time_max) {
+    invisible(.Call(`_odelia_RSolver_step`, solver_xp, time_max))
+}
+
+RSolver_advance_adaptive <- function(solver_xp, times) {
+    invisible(.Call(`_odelia_RSolver_advance_adaptive`, solver_xp, times))
+}
+
+RSolver_advance_collect <- function(solver_xp, times, dense) {
+    .Call(`_odelia_RSolver_advance_collect`, solver_xp, times, dense)
+}
+
+RSolver_time <- function(solver_xp) {
+    .Call(`_odelia_RSolver_time`, solver_xp)
+}
+
+RSolver_state <- function(solver_xp) {
+    .Call(`_odelia_RSolver_state`, solver_xp)
+}
+
+RSolver_rates <- function(solver_xp) {
+    .Call(`_odelia_RSolver_rates`, solver_xp)
+}
+
+RSolver_times <- function(solver_xp) {
+    .Call(`_odelia_RSolver_times`, solver_xp)
+}
+
+RSolver_set_state <- function(solver_xp, y, time) {
+    invisible(.Call(`_odelia_RSolver_set_state`, solver_xp, y, time))
+}
+
+RSolver_mid_step <- function(solver_xp) {
+    .Call(`_odelia_RSolver_mid_step`, solver_xp)
+}
+
+RSolver_step_size <- function(solver_xp) {
+    .Call(`_odelia_RSolver_step_size`, solver_xp)
+}
+
+RSolver_set_step_size <- function(solver_xp, h) {
+    invisible(.Call(`_odelia_RSolver_set_step_size`, solver_xp, h))
+}
+
+odelia_return_from <- function(env, value) {
+    .Call(`_odelia_odelia_return_from`, env, value)
+}
+
+RSolver_counts <- function(solver_xp) {
+    .Call(`_odelia_RSolver_counts`, solver_xp)
 }
 
