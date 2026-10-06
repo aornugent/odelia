@@ -299,11 +299,12 @@ S implicit_value(double y_star, double dFdy, Residual&& F, const First& first,
     // Read and cleared through the TAPE, by slot, so an input can arrive const --
     // which is how every caller already holds the things a residual reads.
     for (std::size_t i = 0; i < held.size(); ++i) {
+      // The slot was zeroed before the residual's sweep, so what it holds now is
+      // what the residual deposited and nothing else. The caller's own adjoint
+      // goes back, because this node had no business taking it.
       const double adj = tape->derivative(slots[i]);
-      // The caller's own adjoint goes back, because this node had no business
-      // taking it: what the residual deposited is adj - held[i].
       tape->derivative(slots[i]) = held[i];
-      const double row = -(adj - held[i]);
+      const double row = -adj;
       if (row == 0.0) {
         continue;
       }

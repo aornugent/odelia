@@ -130,7 +130,9 @@ public:
 
   // One accepted step, into the record: the time it reached, the size that
   // reached it, and the state there where the run was asked to keep states.
-  void push_step(System& system, double time_, double step_size);
+  // `subdivided` marks a pinned interval crossed in more than one sub-step.
+  void push_step(System& system, double time_, double step_size,
+                 bool subdivided = false);
   // The insertion the caller just applied, as a row of its own: it holds the state
   // the map produced, at the time the row below it holds. Only schedule() has to
   // know that two rows share a time, and it drops these.
@@ -369,13 +371,14 @@ void SolverInternal<System>::set_state_from_system(System& system) {
 // state it holds.
 template <class System>
 void SolverInternal<System>::push_step(System& system, double time_,
-                                       double step_size) {
+                                       double step_size, bool subdivided) {
   prev_schedule.push_back({time_, step_size});
   if (keep_states_) {
     step_record<System> record{{time_, step_size}, state_type()};
     record.state.resize(system.ode_size());
     system.ode_state(record.state.begin());
     record.solved = std::move(solved_scratch_);
+    record.subdivided = subdivided;
     prev_steps.push_back(std::move(record));
   }
 }
@@ -711,6 +714,8 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
   double sub_step_size = time_max - time;
   // Held across iterations so a retry reuses the buffer rather than allocating.
   state_type y_orig;
+  // Sub-steps accepted; more than one marks the row (step_record::subdivided).
+  size_t sub_steps = 0;
 
   while (true) {
     // Take the endpoint from time_max rather than accumulating sub_step_size,
@@ -742,6 +747,7 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
     if (!invalid) {
       save_dydt_out_as_in();
       time = time_next;
+      ++sub_steps;
       if (final_sub_step) {
         break;
       }
@@ -774,7 +780,7 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
   }
 
   time = time_max;
-  push_step(system, time, step_size);
+  push_step(system, time, step_size, sub_steps > 1);
   in_step = false;
 }
 

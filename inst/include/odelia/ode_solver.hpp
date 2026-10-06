@@ -256,6 +256,13 @@ public:
                    util::to_string(k) + " has none, so it is a grid rather "
                    "than a recording and cannot supply what its stages solved");
       }
+      if (rec[k].subdivided)
+      {
+        util::stop("A recorded step that was subdivided cannot be replayed: "
+                   "entry " + util::to_string(k) + " reached t=" +
+                   util::format_double(rec[k].time) + " in several sub-steps "
+                   "and holds only the last one's solved values");
+      }
       solver.step_by(system, rec[k].step_size, rec[k].time, &rec[k].solved);
       if (collect)
       {
@@ -428,6 +435,11 @@ public:
                             const std::vector<size_t>& extra_stops = {})
   {
     using scalar = ode::active_scalar<double>;
+    if (&lambda == &parameter_adjoint) {
+      util::stop("solve_adjoint: the state adjoints are replaced and the "
+                 "parameter adjoints accumulated, so they cannot be the same "
+                 "batch");
+    }
     const std::span<const ode::step_record<System>> rec = recording();
     if (rec.size() < 2) {
       util::stop("solve_adjoint: no recorded steps to sweep; run the adaptive "
@@ -599,6 +611,13 @@ private:
       // step's landing or an insertion's output.
       const state_type<System>& from = rec[k - 1].state;
       util::check_length(from.size(), active.system.ode_size());
+      if (rec[k].subdivided) {
+        util::stop("solve_adjoint: recorded step " + util::to_string(k) +
+                   " reached t=" + util::format_double(rec[k].time) +
+                   " in several sub-steps, and one step of its interval is "
+                   "not the step the run took; record the run adaptively, or "
+                   "pin it finely enough that nothing is refused");
+      }
       solver.step_adjoint(active, rec[k].solved, rec[k - 1].time,
                           rec[k].step_size, from,
                           lambda, lambda_in, parameter_adjoint);

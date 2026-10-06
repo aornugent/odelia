@@ -253,6 +253,14 @@ struct step_record : instruction {
   // reads all six, because re-deriving is the thing it is replaying to avoid and
   // a step whose k1 was re-derived is wrong at first order in h.
   std::array<solved_values_t<System>, 6> solved;
+
+  // A pinned step that was refused and crossed its interval in several sub-steps.
+  // The row still holds the interval, which is what a replay of the caller's times
+  // needs, but its six solved values are the LAST sub-step's and one Runge-Kutta
+  // step of the interval is not the step the run took. A sweep or a replay of
+  // such a row would be wrong at every entry with every number finite, so both
+  // refuse it.
+  bool subdivided = false;
 };
 
 // A System whose state vector gains entries during a run does not declare a
