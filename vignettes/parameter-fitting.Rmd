@@ -68,8 +68,14 @@ ad_runner$set_target(times, target_vals, obs_index)
 ```
 
 The `$fit()` method solves the system for a given parameter vector and returns
-both the loss and its exact gradient, computed by one reverse-mode sweep over
-the recorded run:
+both the loss and its exact gradient. Underneath, it replays the schedule in
+`times` step for step while keeping one record per step, seeds the adjoint at
+each observed index with the residual against the target, and sweeps the
+recording backwards once, which yields the derivative with respect to every
+parameter (and, when asked, every initial condition) from that single pass. The
+`times` must therefore be a step schedule rather than an output grid, which is
+why `obs_index` picks the observations out of it. The article
+[Reverse mode](articles/reverse-mode.html) describes the machinery.
 
 ```{r fit-once}
 res0 <- ad_runner$fit(params = initial_guess)

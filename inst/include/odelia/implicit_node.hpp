@@ -45,6 +45,16 @@ struct record_report {
 template <class S>
 concept CarriesAdjoint = xad::ExprTraits<S>::isReverse;
 
+// Cost, in tape statements walked per solve of a submodel of T statements with
+// m outputs, read by a consumer sweeping k seeds:
+//
+//   recorded inline on the consumer's tape   T + kT
+//   supplied here, nothing recorded          m + km
+//
+// The second carries no T, so what a supplied row costs does not depend on how
+// long the submodel is. Recording the submodel on a tape of its own and sweeping
+// it m times to extract a dense block pays only when the submodel has fewer
+// outputs than the consumer has seeds.
 // `into` receives `value` carrying the derivatives supplied against it: the
 // number is `value` itself, and its derivative with respect to each input is the
 // one supplied.

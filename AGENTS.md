@@ -1,36 +1,55 @@
 # `odelia` — developer guide for agents
 
 `odelia` is an **ODE solver with automatic differentiation, implemented in C++ header
-files**, with an R interface via Rcpp. It uses an adaptive-step Runge–Kutta 4–5 integrator
-that runs entirely in compiled code, and templates ODE systems on their scalar type so
-solutions can be differentiated w.r.t. parameters and initial conditions (forward-mode AD
-via the vendored [XAD](https://github.com/auto-differentiation/xad) library). It also
-supports time-varying external drivers (cubic-spline interpolated).
+files**, with an R interface via Rcpp. Three adaptive steppers (Cash–Karp RK4(5),
+Dormand–Prince 5(4), RODAS4(3) for stiff systems) run entirely in compiled code. ODE
+systems are templated on their scalar type, so a recorded run can be differentiated in
+**reverse mode** (one sweep gives the derivative with respect to every parameter and
+initial condition) and the implicit stepper's Jacobian is taken in forward mode, both
+through the vendored [XAD](https://github.com/auto-differentiation/xad) library. Time-varying
+external drivers are interpolated with a cubic Hermite spline. A right-hand side written
+in R can be solved by the same steppers.
 
 The solver core was first written by Rich FitzJohn inside [`plant`](https://github.com/traitecoevo/plant);
-`odelia` spins it out as a reusable, header-only library that other Rcpp packages can link
-against. The next-generation `plant` core links against it.
+`odelia` spins it out as a reusable library (header-only but for the XAD tape runtime,
+see ARCHITECTURE.md) that other Rcpp packages link against. The next-generation `plant`
+core links against it.
+
+**Start here.** `ARCHITECTURE.md` has the map of the headers in dependency order.
+`vignettes/articles/reverse-mode.Rmd` is the design of the gradient machinery and the
+reading order through the headers. The System contract is the concepts in
+`inst/include/odelia/ode_interface.hpp`.
 
 ## Layout
 
-- `inst/include/` — the **header-only C++ core** (the solver; this is the reusable artifact).
-  `ode_callback_system.hpp` is the System over a run-time callable (`std::function`), the
-  language-neutral half of solving an R (or any other) right-hand side.
+- `inst/include/odelia/` — the **C++ core** (the solver; this is the reusable artifact);
+  see the map in `ARCHITECTURE.md`. `inst/include/examples/lorenz_system.hpp` is the
+  shipped example System; `inst/examples/leaf_thermal/` the one the article builds.
+- `inst/include/XAD/` — the vendored autodiff library, with local patches recorded in
+  `tools/`. `src/Tape.cpp` is the one compiled copy of its tape runtime.
 - `src/` — Rcpp glue compiled into the package. `r_system.h` / `r_system_interface.cpp` are
   the R adapter over the callback system and the `OdeSolver` exports.
 - `R/` — friendly **R6** wrappers around the C++ objects.
-- `tools/`, `vendor` (XAD) — the vendored autodiff library.
-- `ARCHITECTURE.md` — read this for the C++ design; `vignettes/` for worked examples
-  (e.g. the Lorenz benchmark).
+- `vignettes/` — `odelia.Rmd` (getting started), `parameter-fitting.Rmd`; `articles/` holds
+  the website-only pieces that compile C++ (`leaf-thermal`, `reverse-mode`).
+- `tests/testthat/` — the R suite; `tests/standalone/` — the R-free C++ suite, which also
+  holds the smallest complete sweepable System (`Grow`).
 
 ## Build & test (Makefile)
 
 - `make compile` — compile C++ after C++-only changes.
 - `make Rcpp` / `make roxygen` — regenerate Rcpp exports / roxygen docs (don't hand-edit
   generated files: `R/RcppExports.R`, `src/RcppExports.cpp`, `NAMESPACE`, `man/`).
-- `make test` — run the test suite (`testthat`). `make check` — `R CMD check`.
+- `make test` — install with tests and run the full suite against the installed package
+  (the AD and DLL-lifecycle tests need that). `make test-local` — the fast `load_all` loop,
+  which skips those. `make check` — `R CMD check`.
 - `make test-cpp` — build and run the core as plain C++ with no R on the include path
-  (`tests/standalone/`); fast, and the guard that keeps the headers R-free.
+  (`tests/standalone/`), and compile every core header on its own; fast, and the guard
+  that keeps the headers R-free.
+- Everything is C++20. Anything compiled against the headers outside `src/` (a
+  `sourceCpp` snippet, a consumer) needs `-DXAD_NO_THREADLOCAL -DXAD_USE_STRONG_INLINE`
+  to match `src/Makevars`; the tests take them from `odelia_cppflags()` in
+  `tests/testthat/helper-load-odelia.R`.
 
 ## Gotchas
 
@@ -73,14 +92,17 @@ non-obvious choice — and nothing else. The bar the AD surface is held to:
   the file — the physics is the point. Give an example a real applied domain, not an
   abstract stand-in.
 
-The contract a System implements to be differentiable is stated as concepts in
-`inst/include/odelia/ode_interface.hpp` -- `Rebindable`, `HasOdeTime`,
-`SolvesForValues` -- so a System that does not satisfy it fails to compile naming
-the requirement it missed. Read those rather than any prose account: a prose copy
-of a compiler-checked contract drifts, and the one this repository used to carry
-listed a member that had been removed. `ARCHITECTURE.md` covers the XAD `Tape`
-link. Don't hand-edit generated files (`R/RcppExports.R`,
-`src/RcppExports.cpp`, `NAMESPACE`, `man/`).
+The contract a System implements is stated as concepts in
+`inst/include/odelia/ode_interface.hpp` -- `HasOdeTime`, `Rebindable`,
+`SolvesForValues`, `ChecksState` for solving, and `Sweepable` for a reverse sweep,
+which `Solver::solve_adjoint` asserts -- so a System that does not satisfy one fails
+to compile naming the requirement it missed. Read those rather than any prose
+account: a prose copy of a compiler-checked contract drifts. The two members a
+widening System adds (`apply_insertion`) and a System solving inside a stage adds
+(`solved_values`) are documented beside the concepts. The comment standard above
+is met by the gradient headers; the older solver headers still carry issue
+numbers and history, which may be removed as they are touched. Don't hand-edit
+generated files (`R/RcppExports.R`, `src/RcppExports.cpp`, `NAMESPACE`, `man/`).
 
 ## Plant family
 

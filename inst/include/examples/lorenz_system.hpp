@@ -26,14 +26,12 @@ public:
     reset();  // initialises state & time
   }
 
-  // rebind names this System on a different scalar, and rebind_from copies its
-  // configuration (values only) into that copy. The gradient driver uses them to
-  // build the active (double -> AD) version of any System the same way, so a new
-  // System gets gradients just by providing these two members. Only values cross,
-  // so the copy starts with no tape state; the driver seeds the active inputs after.
-
-  // The one map: the parameters and the initial state, read back to plain double
-  // (xad::value) so only values cross. rebind_from is a line over it.
+  // --- For a sweep (see Sweepable in odelia/ode_interface.hpp) ---------------
+  //
+  // rebind_from<S2>() is this System on scalar S2, values only: the sweep builds
+  // the adjoint-scalar copy with it and seeds that copy's inputs afterwards.
+  // assign_from is the one map it is a line over: the parameters and the initial
+  // state, read back to plain double (xad::value) so only values cross.
   template <class S1>
   void assign_from(const LorenzSystem<S1>& src) {
     sigma = T(xad::value(src.sigma));
@@ -51,7 +49,7 @@ public:
     return out;
   }
 
-  // ODE interface
+  // --- For solving: what Solver<System> calls -------------------------------
   size_t ode_size() const { return ode_dimension; }
 
   double ode_time() const { return time; }
@@ -70,8 +68,8 @@ public:
     return it;
   }
 
-  // Stand on a state a run recorded, for a reverse sweep. The width never
-  // changes, so this is set_ode_state.
+  // Stand on a state a run recorded. The width never changes, so this is
+  // set_ode_state.
   void set_recorded_state(const std::vector<T>& y, double time_) {
     set_ode_state(y.begin(), time_);
   }
@@ -99,11 +97,13 @@ public:
     return it;
   }
 
-  // The parameters a pass can seed active, in the order it indexes them.
+  // The parameters a sweep accumulates adjoints for, in the order it indexes
+  // them.
   std::vector<T*> ad_parameters() { return {&sigma, &R, &b}; }
 
-  // Everything here that carries the scalar, which is what a walk holding this
-  // System across recordings hands back before it clears the tape.
+  // Every member carrying the scalar, so the sweep can hand their tape slots
+  // back before it clears the tape. A member left out contributes nothing to
+  // the gradient, with every number finite.
   template <class F>
   void for_each_active(F&& f) {
     f(sigma); f(R); f(b);
@@ -136,6 +136,7 @@ public:
     return it;
   }
 
+  // --- For the R binding (solver_interface.hpp); not part of either contract --
   std::vector<std::string> record_colnames() const {
     return {"time", "x", "y", "z", "dxdt", "dydt", "dzdt"};
   }

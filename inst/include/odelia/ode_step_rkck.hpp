@@ -31,8 +31,9 @@ public:
 
   void resize(size_t size_);
   size_t order() const;
-  // `solved` is the row this step is about to create: what its five stages solve
-  // for goes in, and nothing is asked of the System about where it is.
+  // `solved` is the row this step is about to create: what its five stages and
+  // its end-of-step evaluation solve for goes in, six entries, and nothing is
+  // asked of the System about where it is.
   //
   // Or the row an earlier run already created, where a caller hands a CONST one:
   // the stages then LOAD what that run solved instead of solving again. Which of

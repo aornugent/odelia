@@ -12,6 +12,26 @@
 #include <odelia/ode_interface.hpp>
 #include <odelia/ode_util.hpp>
 
+// Reverse mode over one recording at a time. The words used here and in
+// ode_solver.hpp:
+//
+//   tape       a log of arithmetic, appended as a calculation runs and walked
+//              backwards for derivatives (XAD's).
+//   statement  one tape entry, a single left-hand side over a run of
+//              operations; cost is counted in statements.
+//   recording  what sits on the tape between clears -- here, one step's
+//              arithmetic, or one insertion's.
+//   seed       the derivative a backward walk starts from, one per output.
+//   row        one output's derivatives against a list of inputs; adjoint_rows
+//              is a batch of them, because several seeds share one recording.
+//   sweep      the backward walk over a run's rows, last to first.
+//   range      consecutive rows at one state width; a System of fixed width has
+//              one, a System that widens opens a new one at each insertion.
+//
+// Entry points: vector_jacobian_product for a free function,
+// state_and_parameter_adjoints for a map through a System, and
+// Solver::solve_adjoint (ode_solver.hpp) for a whole run.
+
 namespace odelia {
 namespace ode {
 
@@ -196,8 +216,9 @@ struct active_system {
   // registered -- nothing is active when the object goes, so nothing hands its
   // slots back, and the tape zero-fills them on every later recording.
   //
-  // Refused where another tape is active: these slots are not on it, and
-  // handing them back would decrement its count instead.
+  // Skipped where another tape is active: these slots are not on it, and
+  // handing them back would decrement its count instead. Nothing reports the
+  // skip; the next release() on this tape counts what was left behind.
   ~active_system() {
     adjoint_tape<double>* const running = adjoint_tape<double>::getActive();
     if (running != nullptr && running != tape_) {

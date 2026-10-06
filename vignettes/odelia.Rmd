@@ -33,7 +33,7 @@ A simulation in `odelia` is assembled from a few pieces:
 - a **system** — the ODE model itself (parameters, state, and a rule for the
   rates `dy/dt`);
 - a **control** object (`OdeControl`) — the solver's tolerances and step sizes;
-- a **solver** (or *runner*) — which drives the adaptive RK4-5 stepper forward
+- a **solver** (or *runner*) — which drives a stepper forward
   over the times you request and collects the solution history.
 
 ## Define the system

@@ -40,10 +40,10 @@ public:
     reset();
   }
 
-  // rebind + rebind_from copy this System's configuration onto another scalar, so
-  // the gradient driver can build its active (AD) version generically (see
-  // LorenzSystem for the pattern). Only values cross; the driver seeds the active
-  // inputs afterwards.
+  // --- For a sweep (see Sweepable in odelia/ode_interface.hpp) ---------------
+  //
+  // rebind_from<S2>() is this System on scalar S2, values only; the sweep seeds
+  // the copy's inputs afterwards. The drivers are shared, not copied (see below).
 
   template <class S2>
   LeafThermalSystem<S2> rebind_from() const {
@@ -103,10 +103,11 @@ public:
   // The parameters a pass can seed active, in the order it indexes them.
   std::vector<T*> ad_parameters() { return {&k_H, &g_tr_max, &m_tr, &T_tr_mid}; }
 
-  // Every member carrying the scalar, for a reverse sweep. ⚠️ A member left out
-  // here silently contributes nothing to the gradient; T_air is a driver value
-  // and stays double. Both overloads, because visit_active passes over a const
-  // object whose walk is non-const without saying so.
+  // Every member carrying the scalar, so the sweep can hand their tape slots
+  // back before it clears the tape. A member left out contributes nothing to
+  // the gradient, with every number finite; T_air is a driver value and stays
+  // double. Both overloads, because a value handed to implicit_node.hpp's
+  // forms is const there.
   template <class F>
   void for_each_active(F&& f) {
     f(k_H); f(g_tr_max); f(m_tr); f(T_tr_mid);
@@ -203,13 +204,10 @@ private:
 
   // Time and drivers (always double)
   double time;
-  // ⚠️ SHARED, not copied, because temperature_fn points into it. A System copied
-  // with its own Drivers kept a pointer into the source's, which die with the
-  // source -- and R frees the system a solver was built from as soon as nothing
-  // holds it, after which every read was of freed memory. Shared, every copy's
-  // pointer is into one Drivers that lives as long as any copy does. Re-deriving
-  // the pointer after each copy instead measured 2x slower: the solver copies the
-  // System often.
+  // Shared, not copied, because temperature_fn points into it: every copy of
+  // this System (the solver makes many) points into one Drivers that lives as
+  // long as any copy does, where a copy owning its own Drivers would point into
+  // the source's, which can be freed first.
   std::shared_ptr<const drivers::Drivers> drivers;
   const drivers::Function *temperature_fn = nullptr;
 

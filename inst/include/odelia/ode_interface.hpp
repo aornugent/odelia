@@ -21,8 +21,8 @@
 namespace odelia {
 namespace ode {
 
-// Compatibility aliases for callers written against the double-only state.
-// Purely additive: the templated state_type above is the live spelling.
+// Aliases for callers written against the double-only state. The templated
+// state_type below is the one the solver uses.
 typedef std::vector<double>::const_iterator const_iterator;
 typedef std::vector<double>::iterator       iterator;
 
@@ -239,6 +239,9 @@ struct instruction {
 // no row carries two states and nothing has to choose between them. A insertion row
 // shares its time with the row below it, which is the row that holds the state the
 // map ran on.
+// A run of n steps on a state of width w holds n rows of w scalars and six
+// solved values, and nothing else: stage rates and stage states are recomputed
+// by the sweep, six rate evaluations a step, which is cheaper than holding them.
 template <typename System>
 struct step_record : instruction {
   state_type<System> state;
@@ -280,12 +283,29 @@ struct step_record : instruction {
 //
 // For a width that never moves, the first is a System's ordinary load. The second
 // is asked for only where the width changed, so a System that never widens is
-// never asked for it -- ode::apply_insertion above is what a walk calls, and
+// never asked for it -- ode::apply_insertion below is what a walk calls, and
 // passing the state through is what an insertion is for such a System.
 //
 // An insertion whose TIME depends on the parameters is a different map: its
 // adjoint carries a term through that time which nothing here computes. A System
 // walked by the sweep asserts its insertions are scheduled, not triggered.
+
+// What a System needs beyond solving for a reverse sweep to walk it: a copy of
+// itself on the adjoint scalar, the parameters the sweep accumulates adjoints
+// for, every member carrying the scalar (so the tape's slots can be handed back
+// before each recording is cleared), and a way to stand on a recorded state. A
+// System that widens adds apply_insertion, which cannot be a concept because its
+// absence is what a fixed-width System means. Solver::solve_adjoint asserts
+// this, so a System missing a member fails to compile naming the four.
+template <typename S>
+concept Sweepable =
+  Rebindable<S, active_scalar<double>> &&
+  requires(typename rebound_system<S, active_scalar<double>>::type a,
+           const std::vector<active_scalar<double>>& y, double t) {
+    { a.ad_parameters() } -> std::same_as<std::vector<active_scalar<double>*>>;
+    a.for_each_active([](active_scalar<double>&) {});
+    a.set_recorded_state(y, t);
+  };
 
 // Opt-in domain check. A system may declare
 //
@@ -454,7 +474,8 @@ void set_ode_state(T& obj, const StateType& y, double time) {
 
 }
 
-// primarily for Ode_R - maybe remove
+// One rate evaluation: set the state, read the rates. Every stage of a step
+// goes through this, and so does every recording a sweep takes.
 template <typename T, typename StateType>
 void derivs(T& obj, const StateType& y, StateType& dydt,
             const double time) {

@@ -16,16 +16,31 @@
 namespace odelia {
 namespace ode {
 
-// This is a wrapper class that is meant to simplify the
-// difficuly of ownership semantics around the solver and system.
-// It is mostly just be a generic wrapper around ode::Solver<System>
-// You would only write your own if you had system-specific needs, e.g. events, cohort introudctions etc.
-
-// TODO
-// - add ability to set time directly
-// - collect gathers vector of variables at each step
-// - move collect into ode::Solver so that it can be used more generally
-//   for any system, making this a generic Solver class
+// Solver<System> owns a System and a SolverInternal and drives them: forward
+// over a set of times (advance_adaptive, advance_fixed, advance_recorded), and
+// backward over what a forward run recorded (solve_adjoint).
+//
+// A gradient of a run, in full:
+//
+//   Solver<Lorenz> s(system, control);
+//   s.set_keep_states(true);              // keep one step_record per step
+//   s.advance_adaptive({0.0, 10.0});      // the ordinary solve
+//   adjoint_rows lambda = adjoint_rows::one_row({1.0, 0.0, 0.0});  // d(x_final)
+//   adjoint_rows dp(1, n_parameters);     // one row per seed, zeroed
+//   s.solve_adjoint(lambda, dp);
+//   // dp[0][j] = d x_final / d parameter_j; lambda[0][i] = d x_final / d y_i(0)
+//
+// Where to read, in order: step_record and the Sweepable concept
+// (ode_interface.hpp) for what a run keeps and what a System must have;
+// push_step and push_insertion (ode_solver_internal.hpp) for the two places a
+// row is written; state_and_parameter_adjoints (adjoint.hpp) for the transpose
+// of one map; Step::step_adjoint (ode_step_rkck.hpp) for the transpose of one
+// step; solve_adjoint below for the loop over rows and insertions. Only
+// method = rkck records a run; dopri and rodas refuse a sweep or a replay.
+//
+// `collect` (default on) keeps a copy of the whole System at every step in
+// `history`, for callers reading a trajectory from R. A sweep does not read it
+// and does not need it; set_collect(false) where the copies cost.
 
 template <typename System>
 class Solver
@@ -400,8 +415,9 @@ public:
   System get_history_step(std::size_t i) const { return history.at(i); }
 
   // Keep the state at each accepted step beside the time and the size that reached
-  // it. Set before the run, because the state the run starts from is recorded as it
-  // begins.
+  // it. Set before the first step; the row the run starts from is filled from the
+  // state the solver holds when this is turned on. set_state() and reset() start
+  // a new record.
   void set_keep_states(bool keep) { solver.set_keep_states(keep); }
   // The record the run kept: one row per accepted step, each carrying its time,
   // the size that reached it and the state there. What a sweep reads, and the
@@ -437,6 +453,11 @@ public:
                             const std::vector<size_t>& extra_stops = {})
   {
     using scalar = ode::active_scalar<double>;
+    static_assert(ode::Sweepable<System>,
+                  "this System cannot be swept: it needs rebind_from<U>(), "
+                  "ad_parameters(), for_each_active(f) and "
+                  "set_recorded_state(y, time); see Sweepable in "
+                  "ode_interface.hpp");
     if (&lambda == &parameter_adjoint) {
       util::stop("solve_adjoint: the state adjoints are replaced and the "
                  "parameter adjoints accumulated, so they cannot be the same "

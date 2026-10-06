@@ -32,12 +32,11 @@ struct value_with_slope {
   T value;
   T slope;
 
-  // Both, because visit_active dispatches on whether the call compiles: handed a
-  // const object it drops an arm that is non-const and passes over the whole
-  // shape in silence. The rewinding forms in implicit_node.hpp take
-  // `const Inputs&...` -- they read and clear through the tape by slot, so const
-  // is what they want -- and without the const overload here a pair handed to one
-  // of them contributes NO rows, which arrives as an exact zero in a column.
+  // Both, because visit_active dispatches on whether the call compiles, and
+  // refuses a type that declares the non-const walk without the const one. The
+  // rewinding forms in implicit_node.hpp take `const Inputs&...` -- they read and
+  // clear through the tape by slot, so const is what they want -- so the const
+  // overload is the one they reach.
   template <class F>
   void for_each_active(F&& f) {
     f(value);

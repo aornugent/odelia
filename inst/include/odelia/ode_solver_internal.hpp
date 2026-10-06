@@ -75,8 +75,6 @@ public:
                          lambda_out, lambda_in, parameter_adjoint);
   }
 
-  // The tape a sweep's recordings are taken on.
-
   // Rate evaluations recorded since the count was last cleared.
   std::size_t recorded_rates() const { return stepper.recorded_rates; }
   void clear_recorded_rates() { stepper.recorded_rates = 0; }
@@ -85,7 +83,18 @@ public:
   // Keep the state at each accepted step as well as the time and the size. The
   // caller's decision: a run whose gradient will be taken needs the states, and a
   // run that is only integrating does not.
-  void set_keep_states(bool keep) { keep_states_ = keep; }
+  //
+  // Set before the first step. The row the run starts from is already in the
+  // schedule by then (reset() put it there), so turning this on fills that row's
+  // state from the state the solver holds, and the record covers every step.
+  void set_keep_states(bool keep) {
+    keep_states_ = keep;
+    if (keep && prev_schedule.size() == 1 && prev_steps.empty()) {
+      step_record<System> row{prev_schedule.front(), state_type()};
+      row.state.assign(y.begin(), y.end());
+      prev_steps.push_back(std::move(row));
+    }
+  }
   // The record itself, which is what a sweep reads. One row per accepted step,
   // carrying the time, the size that reached it and the state there -- so a
   // caller cannot pair one run's state with another run's size, and cannot be
@@ -101,8 +110,9 @@ public:
                  "the run");
     }
     if (prev_steps.size() != prev_schedule.size()) {
-      util::stop("recording(): keep_states changed during this run, so the "
-                 "record does not cover every step -- set it before the run");
+      util::stop("recording(): keep_states was turned on after the run had "
+                 "stepped, so the record does not cover every step -- "
+                 "set_keep_states(true) before the first step");
     }
     return {prev_steps.data(), prev_steps.size()};
   }
@@ -302,8 +312,8 @@ private:
   // What every run keeps, recording or not: the time each step reached, the
   // size that reached it, and where the state widened. Separate from the
   // records so a run that is only integrating stores 24 bytes a step rather
-  // than a record with a state and a row of solved values -- measured at 0.9.0,
-  // growing the full record on every step cost ~5% of a Lorenz solve. The two
+  // than a record with a state and a row of solved values: growing the full
+  // record on every step measured ~5% of a Lorenz solve. The two
   // are written together, row for row, and recording() refuses if they differ.
   std::vector<instruction> prev_schedule;
   // Whether to keep the states. The caller's: a run whose gradient will be taken
@@ -693,11 +703,9 @@ void SolverInternal<System>::step(System& system, double time_max_) {
 // that goes on to complete), so a replay was near-certain to meet one
 // (plant#642).
 //
-// One caveat for systems that cache per-stage data (`cache(system, rk_step)`):
-// the stage indices restart at 0 on each sub-step, so a subdivided interval
-// leaves the system holding the *last* sub-step's stages rather than stages
-// spanning the whole interval. Consumers that record such a cache for later
-// replay get a coarser record of a subdivided step than of a plain one.
+// A subdivided interval is still one row of the record, holding the last
+// sub-step's solved values, and the row says so (step_record::subdivided): a
+// sweep or a replay refuses it rather than treating the interval as one step.
 template <class System>
 void SolverInternal<System>::step_to(System& system, double time_max_) {
   set_time_max(time_max_);
@@ -785,7 +793,7 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
 }
 
 // This takes a step of the given size, regardless of what the integration error
-// says.  This is used by advance_fixed_steps.
+// says. advance_recorded() drives a replay through it, one recorded step each.
 template <class System>
 void SolverInternal<System>::step_by(System& system, double step_size,
                                      double reached,
