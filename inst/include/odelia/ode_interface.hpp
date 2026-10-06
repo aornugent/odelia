@@ -226,13 +226,12 @@ struct sign_change {
   Values solved{};
 };
 
-// One block a step split, with its components at the end before the split. `solved`
-// holds its pieces' evaluations in order: five from the step's start, six from a split.
+// One block a step split. `solved` holds its pieces' evaluations in order: five
+// from the step's start, six from a split.
 template <class Values>
 struct split_block {
   std::size_t block = 0;
   std::size_t first = 0;
-  std::vector<double> state_before_split;
   std::vector<sign_change<Values>> sign_changes;
   std::vector<Values> solved;
 };
@@ -246,8 +245,10 @@ struct solved_row {
   std::array<Values, 5> stages{};
   Values at_state{};
   // Where the step split a block: what the evaluation at the end before the split
-  // solved for (the dense output reads its rates), and each block it split.
+  // solved for (the dense output reads its rates), what the System read at each of
+  // the step's sample fractions, and each block it split.
   Values at_state_before_split{};
+  std::vector<Values> samples;
   std::vector<split_block<Values>> split_blocks;
 };
 

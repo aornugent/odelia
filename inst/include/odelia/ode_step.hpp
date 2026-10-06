@@ -184,7 +184,8 @@ private:
 };
 
 // A System whose rates change form where a block's sign value changes sign: it
-// reports the sign values, splits each step and carries a run's splits to a walk.
+// reports the sign values, splits each step, and splits a walk's step where the
+// run's split, recording the blocks the walk split.
 // ⚠️ split_sign_changes IS TRUE WHEREVER IT EVALUATED, split or not: the
 // System is then off the step's end, whose rates are evaluated again.
 template <typename System>
@@ -192,12 +193,12 @@ concept SplitsSignChanges =
   std::same_as<typename System::value_type, double> &&
   requires(System& s, const System& cs, std::vector<double>& y,
            const typename Step<System>::template taken_step<double>& step,
+           std::vector<solved_values_t<System>>& samples,
            std::vector<split_block<solved_values_t<System>>>& record,
-           const std::vector<split_block<solved_values_t<System>>>& recorded,
-           const std::vector<double>& run_end) {
+           const step_record<System>& recorded) {
   { cs.sign_values(y) } -> std::same_as<void>;
-  { s.split_sign_changes(step, record) } -> std::same_as<bool>;
-  { cs.take_recorded_splits(recorded, run_end, y) } -> std::same_as<void>;
+  { s.split_sign_changes(step, samples, record) } -> std::same_as<bool>;
+  { s.take_recorded_splits(step, recorded, samples, record) } -> std::same_as<void>;
 };
 
 template <class System>

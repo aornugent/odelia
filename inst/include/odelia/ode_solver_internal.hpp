@@ -210,10 +210,13 @@ private:
       // to arrange.
       solved_scratch_ =
         recorded != nullptr ? *recorded : typename Step<System>::solved_row{};
-      // A walk's evaluations load the row's solved values; take_recorded_splits
-      // carries its splits, which the walk's own row does not record again.
-      solved_scratch_.at_state_before_split = solved_values_t<System>{};
-      solved_scratch_.split_blocks.clear();
+      // A walk's evaluations take the fields of the row's. Where the run split, the
+      // step ends at the state before the split, as the run's did, and
+      // take_recorded_splits() swaps the two back and records the walk's blocks.
+      if (!solved_scratch_.split_blocks.empty()) {
+        std::swap(solved_scratch_.at_state, solved_scratch_.at_state_before_split);
+        solved_scratch_.split_blocks.clear();
+      }
       stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
                    dydt_in_, dydt_out_);
     }
@@ -225,10 +228,13 @@ private:
       if (method != Method::rkck ||
           !system.split_sign_changes(
             stepper.taken(time_, step_size, dydt_out, y, sign_values_in),
-            solved_scratch_.split_blocks)) {
+            solved_scratch_.samples, solved_scratch_.split_blocks)) {
         return;
       }
-      if (!solved_scratch_.split_blocks.empty()) {
+      // The samples are kept only where a block split, for a walk to read.
+      if (solved_scratch_.split_blocks.empty()) {
+        solved_scratch_.samples.clear();
+      } else {
         solved_scratch_.at_state_before_split = std::move(solved_scratch_.at_state);
         solved_scratch_.at_state = solved_values_t<System>{};
       }
@@ -236,14 +242,16 @@ private:
       stepper.read_end_sign_values(system);
     }
   }
-  // A walk has the System carry the splits of the row it follows onto its end,
-  // then evaluates the end's rates as the run did there.
+  // A walk has the System split the step where the run split it, recording the
+  // blocks it split, then evaluates the end's rates as the run did there.
   template <class Row>
   void take_recorded_splits(System& system, const Row& recorded, double time_,
                             double step_size) {
     if constexpr (SplitsSignChanges<System>) {
-      system.take_recorded_splits(recorded.solved.split_blocks, recorded.state, y);
-      solved_scratch_.at_state = recorded.solved.at_state;
+      std::swap(solved_scratch_.at_state, solved_scratch_.at_state_before_split);
+      system.take_recorded_splits(
+        stepper.taken(time_, step_size, dydt_out, y, sign_values_in), recorded,
+        solved_scratch_.samples, solved_scratch_.split_blocks);
       ode::derivs(system, y, dydt_out, time_ + step_size, solved_scratch_.at_state);
       stepper.read_end_sign_values(system);
     } else {
