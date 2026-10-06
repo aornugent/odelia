@@ -2,7 +2,11 @@
 #ifndef ODELIA_ODE_STEP_HPP_
 #define ODELIA_ODE_STEP_HPP_
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <limits>
+#include <utility>
 #include <vector>
 #include <cstddef>
 #include <XAD/XAD.hpp>
@@ -31,6 +35,64 @@ public:
 	    state_type &yerr,
 	    const state_type &dydt_in,
 	    state_type &dydt_out);
+
+  // The step just taken, handed to a System that splits, which rewrites `y_end`
+  // for each block it splits. The sign values are set at double only.
+  template <class S>
+  struct taken_step {
+    const Step& stepper;
+    double time;
+    double h;
+    const std::vector<S>& y0;
+    const std::vector<std::vector<S>>& k;
+    const std::vector<S>& end_rate;
+    std::vector<S>& y_end;
+    const std::vector<double>* sign_values_in = nullptr;
+    const std::array<std::vector<double>, 6>* sign_values = nullptr;
+
+    // Where a System samples what its blocks read, as fractions of the step. The
+    // dense output is a quartic in u, so five fractions reproduce it.
+    static constexpr std::array<double, 5> sample_fractions{0.0, 0.25, 0.5, 0.75,
+                                                            1.0};
+
+    // As many components from `first` as `out` holds, of the state at fraction u
+    // of the step, on Cash-Karp's fourth-order continuous extension.
+    template <class U>
+    void dense_state(const U& u, std::size_t first, std::vector<S>& out) const {
+      stepper.dense_state(u, h, y0, k, end_rate, first, out);
+    }
+    // The quartic through samples taken at each of sample_fractions, at u.
+    template <class U>
+    void sample_at(const U& u, const std::array<std::vector<S>, 5>& samples,
+                   std::vector<S>& out) const;
+    // The block from `first` integrated over the step in substeps meeting at the
+    // fractions `split_at`; `rates(u, own, out)` gives its rates at u.
+    template <class U, class Rates>
+    void integrate_substeps(std::size_t first, const std::vector<U>& split_at,
+                          Rates&& rates, std::vector<S>& own) const {
+      stepper.integrate_substeps(first, split_at, h, y0, k, rates, own);
+    }
+    // Where block `block`'s sign value changes sign in the step, once or as a pair.
+    // `value_at(u, solved)` is the value at u, storing what it solved for if asked.
+    template <class Values, class ValueAt>
+    std::vector<sign_change<Values>> sign_changes(std::size_t block,
+                                                  ValueAt&& value_at) const
+      requires std::same_as<S, double>;
+  };
+
+  // The step just taken, which ended at `y` with rates `dydt_out`, at double.
+  taken_step<double> taken(double time, double step_size,
+                           const state_type& dydt_out, state_type& y,
+                           const std::vector<double>& sign_values_in) const {
+    return {*this, time, step_size, y_start, k, dydt_out, y, &sign_values_in,
+            &sign_values};
+  }
+  // Each block's sign value where the step just taken ended, which the next step
+  // starts from; read again after the end's rates are evaluated again.
+  const std::vector<double>& end_sign_values() const { return sign_values[5]; }
+  void read_end_sign_values(const System& system) {
+    system.sign_values(sign_values[5]);
+  }
 
   // The step transposed, for as many seeds as are handed in: one recording of the
   // whole step, swept once per seed. The active System is the walk's, held across
@@ -66,22 +128,38 @@ private:
   //
   // Y_i for stage i, into `out`: y at stage 0, and y plus the combination of the
   // earlier stage rates above that. Callers pass 1..5; see stage_row for why the
-  // stage-0 arms stay.
-  template <class S>
+  // stage-0 arms stay. Both run over y's length, so a block's substeps reuse them.
+  template <class S, class H>
   void stage_state(int i, const std::vector<S>& y,
-                   const std::vector<std::vector<S>>& k, double h,
+                   const std::vector<std::vector<S>>& k, const H& h,
                    std::vector<S>& out) const;
   // And the state the step ends at, y + h * (c1 k1 + c3 k3 + c4 k4 + c6 k6).
   // k2 and k5 reach it only through the later stages. `out` may be `y`.
-  template <class S>
+  template <class S, class H>
   void step_end(const std::vector<S>& y, const std::vector<std::vector<S>>& k,
-                double h, std::vector<S>& out) const;
+                const H& h, std::vector<S>& out) const;
+  // As many components from `first` as `out` holds, of the state at fraction u
+  // of a step from y0, through its stage rates k and the end's rate.
+  template <class S, class U>
+  void dense_state(const U& u, double h, const std::vector<S>& y0,
+                   const std::vector<std::vector<S>>& k,
+                   const std::vector<S>& end_rate, std::size_t first,
+                   std::vector<S>& out) const;
+  template <class S, class U, class Rates>
+  void integrate_substeps(std::size_t first, const std::vector<U>& split_at,
+                        double h, const std::vector<S>& y0,
+                        const std::vector<std::vector<S>>& k, Rates&& rates,
+                        std::vector<S>& own) const;
   double stage_time(int i, double time, double h) const;
   const double* stage_row(int i) const;
 
   size_t size;
   std::vector<state_type> k{6};
   state_type ytmp;
+  // Where the step just taken started, which a System that splits reads.
+  state_type y_start;
+  // Each block's sign value at the five stages, then at the end, of that step.
+  std::array<std::vector<double>, 6> sign_values;
 
   // Cash carp constants, from GSL.
   static const double ah[];
@@ -98,6 +176,28 @@ private:
   // These are the differences of fifth and fourth order coefficients
   // for error estimation
   static const double ec[];
+
+  // The dense output's weight on each rate (k1..k6, then the end's), as the
+  // coefficient of u, u^2, u^3 and u^4.
+  static const double dense_weights[4][7];
+};
+
+// A System whose rates change form where a block's sign value changes sign: it
+// reports the sign values after every evaluation and splits the step just taken.
+// split_sign_changes must return true if it evaluated anything, which leaves the
+// System off the step's end. A walk hands take_recorded_splits the blocks the run
+// split and the run's end, to carry onto the walk's end `y`.
+template <typename System>
+concept SplitsSignChanges =
+  std::same_as<typename System::value_type, double> &&
+  requires(System& s, const System& cs, std::vector<double>& y,
+           const typename Step<System>::template taken_step<double>& step,
+           std::vector<split_block<solved_values_t<System>>>& record,
+           const std::vector<split_block<solved_values_t<System>>>& recorded,
+           const std::vector<double>& run_end) {
+  { cs.sign_values(y) } -> std::same_as<void>;
+  { s.split_sign_changes(step, record) } -> std::same_as<bool>;
+  { cs.take_recorded_splits(recorded, run_end, y) } -> std::same_as<void>;
 };
 
 template <class System>
@@ -129,13 +229,22 @@ void Step<System>::step(System& system,
   // rate evaluations and one more at the state it ends at, which hands the next
   // step its own k1.
   std::copy(dydt_in.begin(), dydt_in.end(), k[0].begin());
+  if constexpr (SplitsSignChanges<System>) {
+    y_start = y;
+  }
   for (int i = 1; i < 6; ++i) {
     stage_state(i, y, k, h, ytmp);
     ode::derivs(system, ytmp, k[i], stage_time(i, time, h), solved.stages[i - 1]);
+    if constexpr (SplitsSignChanges<System>) {
+      system.sign_values(sign_values[i - 1]);
+    }
   }
 
   step_end(y, k, h, y);
   ode::derivs(system, y, dydt_out, time + h, solved.at_state);
+  if constexpr (SplitsSignChanges<System>) {
+    system.sign_values(sign_values[5]);
+  }
 
   // Difference between 4th and 5th order, for error calculations
   for (size_t q = 0; q < size; ++q) {
@@ -166,9 +275,9 @@ double Step<System>::stage_time(int i, double time, double h) const {
 }
 
 template <class System>
-template <class S>
+template <class S, class H>
 void Step<System>::stage_state(int i, const std::vector<S>& y,
-                               const std::vector<std::vector<S>>& k, double h,
+                               const std::vector<std::vector<S>>& k, const H& h,
                                std::vector<S>& out) const {
   if (i == 0) {
     std::copy(y.begin(), y.end(), out.begin());
@@ -177,13 +286,13 @@ void Step<System>::stage_state(int i, const std::vector<S>& y,
   // Stage 1 keeps its single term grouped as b21 * h * k1: h * (b21 * k1)
   // rounds differently, and the reference numbers were blessed on this one.
   if (i == 1) {
-    for (size_t q = 0; q < size; ++q) {
+    for (size_t q = 0; q < y.size(); ++q) {
       out[q] = y[q] + b21 * h * k[0][q];
     }
     return;
   }
   const double* const b = stage_row(i);
-  for (size_t q = 0; q < size; ++q) {
+  for (size_t q = 0; q < y.size(); ++q) {
     // Summed in ascending stage, then one h. Cash-Karp's rows are dense, so
     // this is a sum over every earlier stage rather than a term for the
     // immediate predecessor.
@@ -196,15 +305,236 @@ void Step<System>::stage_state(int i, const std::vector<S>& y,
 }
 
 template <class System>
-template <class S>
+template <class S, class H>
 void Step<System>::step_end(const std::vector<S>& y,
-                            const std::vector<std::vector<S>>& k, double h,
+                            const std::vector<std::vector<S>>& k, const H& h,
                             std::vector<S>& out) const {
-  for (size_t q = 0; q < size; ++q) {
+  for (size_t q = 0; q < y.size(); ++q) {
     const S combination =
       c1 * k[0][q] + c3 * k[2][q] + c4 * k[3][q] + c6 * k[5][q];
     out[q] = y[q] + h * combination;
   }
+}
+
+template <class System>
+template <class S, class U>
+void Step<System>::dense_state(const U& u, double h, const std::vector<S>& y0,
+                               const std::vector<std::vector<S>>& k,
+                               const std::vector<S>& end_rate, std::size_t first,
+                               std::vector<S>& out) const {
+  if (first + out.size() > y0.size()) {
+    util::stop("dense_state: components past the state's end");
+  }
+  std::array<U, 7> w;
+  for (int i = 0; i < 7; ++i) {
+    w[i] = (((dense_weights[3][i] * u + dense_weights[2][i]) * u +
+             dense_weights[1][i]) * u + dense_weights[0][i]) * u;
+  }
+  // k2 carries no weight at any u, as it carries none at the end.
+  for (size_t q = 0; q < out.size(); ++q) {
+    const size_t i = first + q;
+    const S combination =
+      w[0] * k[0][i] + w[2] * k[2][i] + w[3] * k[3][i] + w[4] * k[4][i] +
+      w[5] * k[5][i] + w[6] * end_rate[i];
+    out[q] = y0[i] + h * combination;
+  }
+}
+
+template <class System>
+template <class S>
+template <class U>
+void Step<System>::taken_step<S>::sample_at(
+    const U& u, const std::array<std::vector<S>, 5>& samples,
+    std::vector<S>& out) const {
+  std::array<U, 5> w;
+  for (std::size_t m = 0; m < w.size(); ++m) {
+    w[m] = U(1.0);
+    for (std::size_t n = 0; n < w.size(); ++n) {
+      if (n != m) {
+        w[m] *= (u - sample_fractions[n]) /
+                (sample_fractions[m] - sample_fractions[n]);
+      }
+    }
+  }
+  out.resize(samples[0].size());
+  for (const std::vector<S>& sample : samples) {
+    util::check_length(sample.size(), out.size());
+  }
+  for (std::size_t q = 0; q < out.size(); ++q) {
+    out[q] = w[0] * samples[0][q] + w[1] * samples[1][q] + w[2] * samples[2][q] +
+             w[3] * samples[3][q] + w[4] * samples[4][q];
+  }
+}
+
+template <class System>
+template <class S, class U, class Rates>
+void Step<System>::integrate_substeps(std::size_t first,
+                                    const std::vector<U>& split_at, double h,
+                                    const std::vector<S>& y0,
+                                    const std::vector<std::vector<S>>& k,
+                                    Rates&& rates, std::vector<S>& own) const {
+  const std::size_t width = own.size();
+  const auto at = static_cast<std::ptrdiff_t>(first);
+  const auto end = at + static_cast<std::ptrdiff_t>(width);
+  std::vector<std::vector<S>> substep_rates(6, std::vector<S>(width));
+  std::vector<S> stage(width);
+  std::copy(y0.begin() + at, y0.begin() + end, own.begin());
+  U from = 0.0;
+  for (std::size_t c = 0; c <= split_at.size(); ++c) {
+    const U to = c < split_at.size() ? split_at[c] : U(1.0);
+    if (!(util::to_passive(to) > util::to_passive(from))) {
+      continue;
+    }
+    const U substep = (to - from) * h;
+    // At the step's start the block's rates are the step's own first ones.
+    if (util::to_passive(from) == 0.0) {
+      std::copy(k[0].begin() + at, k[0].begin() + end, substep_rates[0].begin());
+    } else {
+      rates(from, own, substep_rates[0]);
+    }
+    for (int i = 1; i < 6; ++i) {
+      stage_state(i, own, substep_rates, substep, stage);
+      rates(from + ah[i - 1] * (to - from), stage, substep_rates[i]);
+    }
+    step_end(own, substep_rates, substep, own);
+    from = to;
+  }
+}
+
+template <class System>
+template <class S>
+template <class Values, class ValueAt>
+std::vector<sign_change<Values>>
+Step<System>::taken_step<S>::sign_changes(std::size_t block,
+                                          ValueAt&& value_at) const
+  requires std::same_as<S, double> {
+  const std::array<std::vector<double>, 6>& stages = *sign_values;
+  const double v0 = (*sign_values_in)[block], v1 = stages[5][block];
+  const bool negative = v0 < 0.0;
+  std::vector<sign_change<Values>> changes;
+  // A reading this near zero, as a share of the readings' spread over the step,
+  // has the gaps beside it searched for a pair.
+  const double near_zero = 0.02;
+
+  // The zero between fractions a and b, whose values va and vb differ in sign:
+  // regula falsi, halving a retained end's value (Illinois).
+  auto locate = [&](double a, double va, double b, double vb) {
+    sign_change<Values>& change = changes.emplace_back();
+    const double settled = 1e-10;  // in fractions of the step
+    double u = std::numeric_limits<double>::quiet_NaN();
+    int side = 0;
+    for (int iteration = 0; iteration < 64; ++iteration) {
+      const double next = (a * vb - b * va) / (vb - va);
+      const double v = value_at(next, &change.solved);
+      if (v == 0.0 || std::abs(next - u) < settled || iteration == 63) {
+        // A central difference: the iterates can stay at one end of the bracket,
+        // where a secant misses a curved sign value.
+        const double d = 1e-5;
+        change.u = next;
+        change.slope =
+          (value_at(next + d, nullptr) - value_at(next - d, nullptr)) / (2 * d);
+        return;
+      }
+      u = next;
+      if ((v < 0.0) == (vb < 0.0)) {
+        b = u;
+        vb = v;
+        if (side == -1) {
+          va /= 2;
+        }
+        side = -1;
+      } else {
+        a = u;
+        va = v;
+        if (side == 1) {
+          vb /= 2;
+        }
+        side = 1;
+      }
+    }
+  };
+
+  // Where on (a, b) the sign value leans furthest to the other sign: a golden
+  // section of at most four dense-output values, which stops at the first such.
+  auto search = [&](double a, double b) -> std::pair<double, double> {
+    const double lean = negative ? -1.0 : 1.0;
+    const double g = 0.5 * (3.0 - std::sqrt(5.0));
+    double x1 = a + g * (b - a), x2 = b - g * (b - a);
+    double f1 = lean * value_at(x1, nullptr);
+    if (f1 < 0.0) {
+      return {x1, lean * f1};
+    }
+    double f2 = lean * value_at(x2, nullptr);
+    for (int more = 0; more < 2 && f2 >= 0.0; ++more) {
+      if (f1 < f2) {
+        b = x2;
+        x2 = x1;
+        f2 = f1;
+        x1 = a + g * (b - a);
+        f1 = lean * value_at(x1, nullptr);
+        if (f1 < 0.0) {
+          return {x1, lean * f1};
+        }
+      } else {
+        a = x1;
+        x1 = x2;
+        f1 = f2;
+        x2 = b - g * (b - a);
+        f2 = lean * value_at(x2, nullptr);
+      }
+    }
+    return f1 < f2 ? std::pair{x1, lean * f1} : std::pair{x2, lean * f2};
+  };
+
+  if ((v1 < 0.0) != negative) {
+    locate(0.0, v0, 1.0, v1);
+    return changes;
+  }
+  int deepest = 0;
+  for (int i = 1; i < 6; ++i) {
+    const double v = stages[i - 1][block];
+    if ((v < 0.0) != negative && ah[i - 1] < 1.0 &&
+        (deepest == 0 || std::abs(v) > std::abs(stages[deepest - 1][block]))) {
+      deepest = i;
+    }
+  }
+  if (deepest > 0) {
+    const double um = ah[deepest - 1];
+    const double vm = value_at(um, nullptr);
+    if ((vm < 0.0) != negative) {
+      locate(0.0, v0, um, vm);
+      locate(um, vm, 1.0, v1);
+      return changes;
+    }
+  }
+  // No stage holds the other sign on the dense output. If the reading nearest
+  // zero is within near_zero of their spread, a pair may sit beside it.
+  const double at[6] = {0.0, ah[0], ah[1], ah[2], ah[4], 1.0};
+  const double read[6] = {v0, stages[0][block], stages[1][block],
+                          stages[2][block], stages[4][block], v1};
+  int nearest = 0;
+  double low = v0, high = v0;
+  for (int k = 1; k < 6; ++k) {
+    if (std::abs(read[k]) < std::abs(read[nearest])) {
+      nearest = k;
+    }
+    low = std::min(low, read[k]);
+    high = std::max(high, read[k]);
+  }
+  if (std::abs(read[nearest]) <= near_zero * (high - low)) {
+    for (int k : {nearest - 1, nearest + 1}) {
+      if (k < 0 || k > 5 || !changes.empty()) {
+        continue;
+      }
+      const auto [um, vm] = search(std::min(at[k], at[nearest]),
+                                   std::max(at[k], at[nearest]));
+      if ((vm < 0.0) != negative) {
+        locate(0.0, v0, um, vm);
+        locate(um, vm, 1.0, v1);
+      }
+    }
+  }
+  return changes;
 }
 
 // lambda_in[m] = (d y_end / d y)^T lambda_out[m] for the one step step() takes
@@ -238,6 +568,10 @@ void Step<System>::step_adjoint(active_system<System>& active,
   // what resize() set -- so a state of another width is checked here rather than
   // in the two callers above that happen to check it.
   util::check_length(y.size(), size);
+  if (!solved.split_blocks.empty()) {
+    util::stop("step_adjoint: this step split a block at a sign change, which "
+               "the sweep does not differentiate yet");
+  }
 
   auto whole_step = [&](auto& sys,
                         typename std::vector<scalar>::const_iterator x,
@@ -295,6 +629,18 @@ const double Step<System>::ec[] = {
   250.0 / 621.0 - 18575.0 / 48384.0,
   125.0 / 594.0 - 13525.0 / 55296.0,
   -277.0 / 14336.0, 512.0 / 1771.0 - 0.25 };
+
+// The C1 quartic whose order-5 error at u = 1/2 is least; at u = 1 its weights are
+// the step's own. Without the end's rate the six stages admit no order-4 output.
+template <class System>
+const double Step<System>::dense_weights[4][7] = {
+  {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+  {-156473.0 / 57792.0, 0.0, 1159825.0 / 332304.0, 14725.0 / 60544.0,
+   5301.0 / 38528.0, -202836.0 / 76153.0, 3.0 / 2.0},
+  {729889.0 / 260064.0, 0.0, -8030425.0 / 1495368.0, 290425.0 / 817344.0,
+   -5301.0 / 19264.0, 493736.0 / 76153.0, -4.0},
+  {-24797.0 / 24768.0, 0.0, 2275475.0 / 996912.0, -19225.0 / 49536.0,
+   5301.0 / 38528.0, -3492.0 / 989.0, 5.0 / 2.0}};
 
 }
 }

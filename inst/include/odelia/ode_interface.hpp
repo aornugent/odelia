@@ -217,6 +217,26 @@ void end_solved(System& system) {
   }
 }
 
+// A zero of a block's sign value inside a step: its fraction u of the step, the
+// slope in u there, and what the evaluation at u solved for.
+template <class Values>
+struct sign_change {
+  double u = 0.0;
+  double slope = 0.0;
+  Values solved{};
+};
+
+// One block a step split, with its components at the end before the split.
+// `solved` holds what each evaluation in its substeps solved for, in order.
+template <class Values>
+struct split_block {
+  std::size_t block = 0;
+  std::size_t first = 0;
+  std::vector<double> state_before_split;
+  std::vector<sign_change<Values>> sign_changes;
+  std::vector<Values> solved;
+};
+
 // What a row's rate evaluations solved for. A step fills all six: its five
 // stages, then the evaluation at the state it ends at, which first-same-as-last
 // hands the next step as its first rates. Any other row fills `at_state` alone:
@@ -225,6 +245,10 @@ template <class Values>
 struct solved_row {
   std::array<Values, 5> stages{};
   Values at_state{};
+  // Where the step split a block: what the evaluation at the end before the split
+  // solved for (the dense output reads its rates), and each block it split.
+  Values at_state_before_split{};
+  std::vector<split_block<Values>> split_blocks;
 };
 
 // One instruction of a program: what carries the state from one boundary to the
