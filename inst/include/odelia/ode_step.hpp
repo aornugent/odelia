@@ -51,8 +51,8 @@ public:
     const std::vector<double>* sign_values_in = nullptr;
     const std::array<std::vector<double>, 6>* sign_values = nullptr;
 
-    // Where a System samples what its blocks read, as fractions of the step. The
-    // dense output is a quartic in u, so five fractions reproduce it.
+    // Where a System samples what its blocks read. The quartic through the five
+    // samples is the dense output exactly, and a smooth function of it to O(h^5).
     static constexpr std::array<double, 5> sample_fractions{0.0, 0.25, 0.5, 0.75,
                                                             1.0};
 
@@ -66,15 +66,15 @@ public:
     template <class U>
     void sample_at(const U& u, const std::array<std::vector<S>, 5>& samples,
                    std::vector<S>& out) const;
-    // The block from `first` integrated over the step in substeps meeting at the
-    // fractions `split_at`; `rates(u, own, out)` gives its rates at u.
+    // The block from `first` integrated in substeps meeting at `split_at`, fractions
+    // ascending inside (0, 1); `rates(u, own, out)` gives its rates at u.
     template <class U, class Rates>
     void integrate_substeps(std::size_t first, const std::vector<U>& split_at,
                           Rates&& rates, std::vector<S>& own) const {
       stepper.integrate_substeps(first, split_at, h, y0, k, rates, own);
     }
-    // Where block `block`'s sign value changes sign in the step, once or as a pair.
-    // `value_at(u, solved)` is the value at u, storing what it solved for if asked.
+    // Block `block`'s sign changes: one where the ends differ, two where an inner
+    // reading crosses or nears zero; `value_at(u, solved)` fills a given `solved`.
     template <class Values, class ValueAt>
     std::vector<sign_change<Values>> sign_changes(std::size_t block,
                                                   ValueAt&& value_at) const
@@ -184,10 +184,9 @@ private:
 };
 
 // A System whose rates change form where a block's sign value changes sign: it
-// reports the sign values after every evaluation and splits the step just taken.
-// split_sign_changes must return true if it evaluated anything, which leaves the
-// System off the step's end. A walk hands take_recorded_splits the blocks the run
-// split and the run's end, to carry onto the walk's end `y`.
+// reports the sign values, splits each step and carries a run's splits to a walk.
+// ⚠️ split_sign_changes IS TRUE WHEREVER IT EVALUATED, split or not: the
+// System is then off the step's end, whose rates are evaluated again.
 template <typename System>
 concept SplitsSignChanges =
   std::same_as<typename System::value_type, double> &&
@@ -413,15 +412,14 @@ Step<System>::taken_step<S>::sign_changes(std::size_t block,
   const double v0 = (*sign_values_in)[block], v1 = stages[5][block];
   const bool negative = v0 < 0.0;
   auto other = [&](double v) { return (v < 0.0) != negative; };
-  // `lean * v` is least where v leans furthest to the other sign.
-  const double lean = negative ? -1.0 : 1.0;
+  const double start_sign = negative ? -1.0 : 1.0;
   std::vector<sign_change<Values>> changes;
-  // A reading this near zero, as a share of the readings' spread over the step,
-  // may sit beside a pair.
+  // A reading within this share of the readings' spread from zero is searched
+  // around for a pair.
   const double near_zero = 0.02;
 
   // The zero between fractions a and b, whose values va and vb differ in sign:
-  // regula falsi, halving a retained end's value (Illinois).
+  // regula falsi, halving a retained end's value (Illinois), to 1e-10 or 64 steps.
   auto locate = [&](double a, double va, double b, double vb) {
     sign_change<Values>& change = changes.emplace_back();
     const double settled = 1e-10;  // in fractions of the step
@@ -458,57 +456,57 @@ Step<System>::taken_step<S>::sign_changes(std::size_t block,
     }
   };
 
-  // Where on (a, b) the sign value leans furthest to the other sign: a golden
-  // section of at most four dense-output values, which stops at the first such.
+  // Where on (a, b) the sign value lies furthest toward the other sign: a golden
+  // section of at most four dense-output values, stopping at a value of that sign.
   auto search = [&](double a, double b) -> std::pair<double, double> {
     const double g = 0.5 * (3.0 - std::sqrt(5.0));
     double x1 = a + g * (b - a), x2 = b - g * (b - a);
-    double f1 = lean * value_at(x1, nullptr);
+    double f1 = start_sign * value_at(x1, nullptr);
     if (f1 < 0.0) {
-      return {x1, lean * f1};
+      return {x1, start_sign * f1};
     }
-    double f2 = lean * value_at(x2, nullptr);
+    double f2 = start_sign * value_at(x2, nullptr);
     for (int more = 0; more < 2 && f2 >= 0.0; ++more) {
       if (f1 < f2) {
         b = x2;
         x2 = x1;
         f2 = f1;
         x1 = a + g * (b - a);
-        f1 = lean * value_at(x1, nullptr);
+        f1 = start_sign * value_at(x1, nullptr);
         if (f1 < 0.0) {
-          return {x1, lean * f1};
+          return {x1, start_sign * f1};
         }
       } else {
         a = x1;
         x1 = x2;
         f1 = f2;
         x2 = b - g * (b - a);
-        f2 = lean * value_at(x2, nullptr);
+        f2 = start_sign * value_at(x2, nullptr);
       }
     }
-    return f1 < f2 ? std::pair{x1, lean * f1} : std::pair{x2, lean * f2};
+    return f1 < f2 ? std::pair{x1, start_sign * f1}
+                   : std::pair{x2, start_sign * f2};
   };
 
   if (other(v1)) {
     locate(0.0, v0, 1.0, v1);
     return changes;
   }
-  // A pair: the reading leaning furthest to the other sign, of the ends' and the
-  // stages' strictly inside, where it holds that sign or lies near zero. A stage's
-  // reading is taken again on the dense output, then searched beside if need be.
+  // A pair: the end or inner-stage reading furthest toward the other sign, if it
+  // has that sign or lies near zero; a stage is read again on the dense output.
   const double at[6] = {0.0, ah[0], ah[1], ah[2], ah[4], 1.0};
   const double read[6] = {v0, stages[0][block], stages[1][block],
                           stages[2][block], stages[4][block], v1};
   int m = 0;
   double low = v0, high = v0;
   for (int k = 1; k < 6; ++k) {
-    if (lean * read[k] < lean * read[m]) {
+    if (start_sign * read[k] < start_sign * read[m]) {
       m = k;
     }
     low = std::min(low, read[k]);
     high = std::max(high, read[k]);
   }
-  if (lean * read[m] > near_zero * (high - low)) {
+  if (start_sign * read[m] > near_zero * (high - low)) {
     return changes;
   }
   double um = at[m];
