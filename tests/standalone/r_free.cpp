@@ -32,6 +32,7 @@
 #include <odelia/sweep.hpp>
 #include <odelia/implicit_node.hpp>
 #include <odelia/tangent.hpp>
+#include <odelia/ode_steady_state.hpp>
 #include <odelia/ode_callback_system.hpp>
 #include <examples/lorenz_system.hpp>
 

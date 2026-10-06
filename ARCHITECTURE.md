@@ -107,10 +107,30 @@ evaluation is lazy (setting the state makes no call; reading the rates does),
 and the last call of an accepted step is at the accepted state.
 
 The implicit stepper takes its Jacobian from a System's own `ode_jacobian()`
-hook when there is one, else by forward-mode AD on a `rebind()`-able system
+hook when there is one, else by forward-mode AD on a `rebind_from()`-able system
 (`ode_jacobian.hpp`); `fd_jacobian()` there is the one-line finite-difference
 body for a hook. A system declaring `ode_autonomous()` is not asked for a
 `df/dt` term.
+
+`ode_steady_state.hpp` reuses that Jacobian and the dense LU away from the
+stepper: `SteadyState<System>` solves `f(y*) = 0` by damped Newton, reads the
+fixed point's stability off the eigenvalues of `df/dy` (`ode_linalg.hpp`,
+Hessenberg reduction then Francis QR), and takes the parameter sensitivity
+`dy*/dθ = −(df/dy)⁻¹ (df/dθ)` from the same factorisation. `df/dθ` is the same
+forward sweep as `df/dy` with the seed on a parameter instead of a state
+component; which parameters is the System's `ad_parameters()` hook, a vector of
+pointers to them in a fixed order, which the rates must read live (a quantity
+cached from a parameter at construction carries no tangent and yields a zero
+column; `check_parameters()` detects that through `rebind_from()`). Newton finds any
+root, attracting or not; `solve_with_warmup()` integrates the transient when
+the root it finds is not attracting. Endpoint-only and tape-free by design: the
+transient is never differentiated, `solve()` refuses an active scalar type, and
+a consumer that needs `y*` on its own adjoint tape attaches the sensitivity
+rows as a supplied derivative rather than taping the Newton iteration. The
+callback System reaches the same Newton through its Jacobian hook, which is
+how `ode_steady_state()` serves an R right-hand side
+(`src/r_steady_state_interface.cpp`); its parameter sensitivity is a finite
+difference through `func` done in R, since nothing differentiates R code.
 
 `ode_step_dopri.hpp` is a third stepper, Dormand-Prince 5(4), whose value over
 Cash-Karp is a free continuous extension of order 4: `SolverInternal::interpolate`
