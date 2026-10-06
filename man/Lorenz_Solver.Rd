@@ -50,8 +50,9 @@ R6 wrapper for the Lorenz ODE solver.
     \describe{
       \item{\code{System_xp}}{External pointer to the Lorenz system object.}
       \item{\code{control_xp}}{External pointer to the ODE control object.}
-      \item{\code{method}}{Integration method: `"rkck"` (default, explicit Cash-Karp
-RK 4(5)) or `"rodas"` (implicit RODAS4(3) Rosenbrock, for stiff systems).}
+      \item{\code{method}}{Integration method: \code{"rkck"} (default, explicit Cash-Karp
+RK 4(5)) or \code{"rodas"} (implicit RODAS4(3) Rosenbrock, for stiff
+systems).}
     }
     \if{html}{\out{</div>}}
   }
@@ -260,7 +261,7 @@ RK 4(5)) or `"rodas"` (implicit RODAS4(3) Rosenbrock, for stiff systems).}
 \if{html}{\out{<a id="method-Lorenz_Solver-set_target"></a>}}
 \if{latex}{\out{\hypertarget{method-Lorenz_Solver-set_target}{}}}
 \subsection{\code{Lorenz_Solver$set_target()}}{
-  Set the calibration target for `$fit()`.
+  Set the calibration target for \code{$fit()}.
   \subsection{Usage}{
     \if{html}{\out{<div class="r">}}
     \preformatted{Lorenz_Solver$set_target(times, target, obs_indices)}
@@ -269,18 +270,15 @@ RK 4(5)) or `"rodas"` (implicit RODAS4(3) Rosenbrock, for stiff systems).}
   \subsection{Arguments}{
     \if{html}{\out{<div class="arguments">}}
     \describe{
-      \item{\code{times}}{Numeric vector of requested output times.}
+      \item{\code{times}}{Numeric vector: the schedule \code{$fit()} replays, one entry
+per step. Normally a reference run's \code{$times()}, so each fit takes
+the same steps and the loss is a smooth function of the inputs.}
       \item{\code{target}}{Numeric matrix of observed states, one row per entry of
-`obs_indices` and one column per state variable.}
-      \item{\code{obs_indices}}{Integer indices (1-based) into `times` at which each
-row of `target` was observed.}
+\code{obs_indices} and one column per state variable.}
+      \item{\code{obs_indices}}{Integer indices (1-based) into \code{times} at which
+each row of \code{target} was observed.}
     }
     \if{html}{\out{</div>}}
-  }
-  \subsection{Details}{
-    `times` is the schedule `$fit()` replays: normally a reference
-  run's `$times()`, so each fit takes the same steps and the loss is a
-  smooth function of the inputs.
   }
 }
 
@@ -298,13 +296,14 @@ row of `target` was observed.}
   \subsection{Arguments}{
     \if{html}{\out{<div class="arguments">}}
     \describe{
-      \item{\code{ic}}{Initial state to fit from, or `NULL` to keep the system's.}
-      \item{\code{params}}{Parameters to fit at, or `NULL` to keep the system's.}
+      \item{\code{ic}}{Initial state to fit from, or \code{NULL} to keep the system's.}
+      \item{\code{params}}{Parameters to fit at, or \code{NULL} to keep the system's.}
     }
     \if{html}{\out{</div>}}
   }
   \subsection{Returns}{
-    A list with `loss` (sum of squared differences) and `gradient`:
+    A list with \code{loss} (sum of squared differences) and
+  \code{gradient}:
   d(loss)/d(params), then d(loss)/d(ic), for whichever were given.
   }
 }

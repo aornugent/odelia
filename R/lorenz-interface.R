@@ -9,8 +9,9 @@
 #' @param times Numeric vector of requested output times.
 #' @param value Logical flag for collect-history behavior.
 #' @param i Integer index into solver history.
-#' @param method Integration method: `"rkck"` (default, explicit Cash-Karp
-#'   RK 4(5)) or `"rodas"` (implicit RODAS4(3) Rosenbrock, for stiff systems).
+#' @param method Integration method: \code{"rkck"} (default, explicit Cash-Karp
+#'   RK 4(5)) or \code{"rodas"} (implicit RODAS4(3) Rosenbrock, for stiff
+#'   systems).
 #' @export
 Lorenz_Solver <- R6::R6Class(
   "Lorenz_Solver",
@@ -100,14 +101,14 @@ Lorenz_Solver <- R6::R6Class(
         tibble::remove_rownames()
     },
 
-    #' @description Set the calibration target for `$fit()`.
+    #' @description Set the calibration target for \code{$fit()}.
+    #' @param times Numeric vector: the schedule \code{$fit()} replays, one entry
+    #'   per step. Normally a reference run's \code{$times()}, so each fit takes
+    #'   the same steps and the loss is a smooth function of the inputs.
     #' @param target Numeric matrix of observed states, one row per entry of
-    #'   `obs_indices` and one column per state variable.
-    #' @param obs_indices Integer indices (1-based) into `times` at which each
-    #'   row of `target` was observed.
-    #' @details `times` is the schedule `$fit()` replays: normally a reference
-    #'   run's `$times()`, so each fit takes the same steps and the loss is a
-    #'   smooth function of the inputs.
+    #'   \code{obs_indices} and one column per state variable.
+    #' @param obs_indices Integer indices (1-based) into \code{times} at which
+    #'   each row of \code{target} was observed.
     set_target = function(times, target, obs_indices) {
       private$target <- list(times = as.numeric(times),
                              target = as.matrix(target),
@@ -117,9 +118,10 @@ Lorenz_Solver <- R6::R6Class(
 
     #' @description Least-squares loss against the target, and its exact
     #'   gradient by reverse-mode automatic differentiation.
-    #' @param ic Initial state to fit from, or `NULL` to keep the system's.
-    #' @param params Parameters to fit at, or `NULL` to keep the system's.
-    #' @return A list with `loss` (sum of squared differences) and `gradient`:
+    #' @param ic Initial state to fit from, or \code{NULL} to keep the system's.
+    #' @param params Parameters to fit at, or \code{NULL} to keep the system's.
+    #' @return A list with \code{loss} (sum of squared differences) and
+    #'   \code{gradient}:
     #'   d(loss)/d(params), then d(loss)/d(ic), for whichever were given.
     fit = function(ic = NULL, params = NULL) {
       if (is.null(private$target)) {

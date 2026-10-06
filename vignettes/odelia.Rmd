@@ -129,7 +129,7 @@ rule of Hairer's codes and `deSolve`, which rejects far fewer attempts; see the
 package NEWS for 0.6.0).
 
 To use `method = "rodas"` with your own C++ system, give it either a
-`template<class U> System<U> rebind() const` method (a one-liner that copies the
+`template<class U> System<U> rebind_from() const` method (a one-liner that copies the
 system with its scalar type swapped) so its right-hand side can be
 differentiated for the Jacobian, as the Lorenz example does, or an
 `ode_jacobian(y, t, dydt, J)` method that fills the Jacobian itself -- the

@@ -86,23 +86,41 @@ struct has_ad_parameters<
     S, std::void_t<decltype(std::declval<S&>().ad_parameters())>>
     : std::true_type {};
 
+// The tangent scalar a Jacobian differentiates on, formed lazily so that naming
+// it at an adjoint scalar does not instantiate tangent_over's refusal: there it
+// is the scalar itself, which Jacobian::ad_supported then rules out.
+template <typename T, bool = xad::ExprTraits<T>::isReverse>
+struct jacobian_tangent {
+  using type = tangent_scalar<T>;
+};
+template <typename T>
+struct jacobian_tangent<T, true> {
+  using type = T;
+};
+
 // Jacobian helper. Owns the rebound System's scratch buffers so that repeated
 // evaluations (once per accepted step) reuse storage.
 template <typename System>
 class Jacobian {
 public:
   using value_type = typename System::value_type;
+  // Whether the solver's scalar already carries an adjoint. A tangent is never
+  // put above one (tangent.hpp refuses it at compile time), so the AD route is
+  // closed to such a System and the alias below must not name that scalar: a
+  // class-scope alias is formed when the class is, before any `if constexpr`
+  // can decline it.
+  static constexpr bool value_is_adjoint = xad::ExprTraits<value_type>::isReverse;
   // Tangent scalar: one forward-mode layer on top of the solver's scalar type.
-  using tangent_type = tangent_scalar<value_type>;
+  // At an adjoint scalar it is a placeholder the gate below never lets run.
+  using tangent_type = typename jacobian_tangent<value_type>::type;
   using tangent_system_type = typename rebound_system<System, tangent_type>::type;
 
   // Whether the forward-AD route is instantiable and usable for this System.
-  // Requires (a) a rebind_from() hook and (b) that the tangent System can be built from
-  // the current scalar type. (b) is currently false when value_type is itself an
-  // active AD type (nested tangent-over-adjoint, e.g. FReal<AReal<double>>, is
-  // not yet wired up -- see issue #36).
+  // Requires (a) a rebind_from() hook, (b) a scalar that does not already carry
+  // an adjoint (see value_is_adjoint), and (c) that the tangent System can be
+  // built from the current scalar type.
   static constexpr bool ad_supported =
-      Rebindable<System, tangent_type> &&
+      !value_is_adjoint && Rebindable<System, tangent_type> &&
       std::is_constructible<tangent_type, value_type>::value;
 
   // Whether a Jacobian can be had at all: the system's own hook, or the AD

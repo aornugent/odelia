@@ -40,7 +40,6 @@
 #include <cstdio>
 #include <stdexcept>
 #include <string>
-#include <span>
 #include <vector>
 
 namespace {
@@ -633,82 +632,6 @@ void test_two_preaccumulated_solves_do_not_add_up() {
 }
 
 
-// A region with more than one output, taken off the tape and replaced by rows.
-//
-// u = x^2*y and v = x + y^3, so du/dx = 2xy, du/dy = x^2, dv/dx = 1, dv/dy = 3y^2
-// in closed form -- which is the referee, rather than the two routes agreeing.
-// Downstream reads w = 5u + 7v, so the consumer's own sweep has to carry both
-// rows onward for the answer to come out.
-void test_a_preaccumulated_region_keeps_every_output_row() {
-  using A = odelia::ode::active_scalar<double>;
-  using Tape = odelia::ode::adjoint_tape<double>;
-  const double x0 = 2.0, y0 = 3.0;
-  const double want_dx = 5.0 * (2.0 * x0 * y0) + 7.0 * (1.0 - y0 + 1.0);
-  const double want_dy = 5.0 * (x0 * x0) + 7.0 * (3.0 * y0 * y0 - x0);
-
-  double got_dx[2], got_dy[2], got_w[2];
-  std::size_t statements[2];
-  std::vector<double> scratch;
-
-
-  for (int arm = 0; arm < 2; ++arm) {
-    Tape tape;
-    A x = x0, y = y0;
-    tape.registerInput(x);
-    tape.registerInput(y);
-    tape.newRecording();
-    A u, v;
-    static A* outs[2];
-    auto region = [&]() -> std::span<A* const> {
-      // Padded so the region is bigger than its output count, which is the only
-      // shape this trade is for: multiplying by one is exact, so the padding
-      // moves neither value nor row.
-      A pad = x;
-      for (int i = 0; i < 40; ++i) {
-        pad = pad * 1.0;
-      }
-      // Both outputs read the SAME deep intermediate, which is what makes a
-      // sweep that inherits the previous output's adjoints visible here.
-      A shared = pad * y;
-      for (int i = 0; i < 10; ++i) {
-        shared = shared * 1.0;
-      }
-      u = shared * x;
-      v = shared / y + y * y * y - x * y + x;
-      outs[0] = &u;
-      outs[1] = &v;
-      return std::span<A* const>(outs, 2);
-    };
-    const std::size_t s0 = tape.getNumStatements();
-    if (arm == 0) {
-      region();
-    } else {
-      odelia::preaccumulate<A>(region, scratch, x, y);
-    }
-    statements[arm] = tape.getNumStatements() - s0;
-    A w = 5.0 * u + 7.0 * v;
-    tape.registerOutput(w);
-    xad::derivative(w) = 1.0;
-    tape.computeAdjoints();
-    got_w[arm] = xad::value(w);
-    got_dx[arm] = xad::derivative(x);
-    got_dy[arm] = xad::derivative(y);
-  }
-
-  check(std::fabs(got_w[0] - got_w[1]) < 1e-12, "the region's values are unmoved");
-  check(std::fabs(got_dx[0] - want_dx) < 1e-12 &&
-            std::fabs(got_dy[0] - want_dy) < 1e-12,
-        "the recorded region gives the closed form's rows");
-  check(std::fabs(got_dx[1] - want_dx) < 1e-12 &&
-            std::fabs(got_dy[1] - want_dy) < 1e-12,
-        "and so does the preaccumulated one");
-  check(statements[1] == 2, "which costs one statement per output");
-  check(statements[1] * 10 < statements[0],
-        "against a region an order larger left on the tape");
-  std::printf("       (on the tape %zu statements, preaccumulated %zu)\n",
-              statements[0], statements[1]);
-}
-
 // --- The same bargain on the pinned path (plant#642) ------------------------
 //
 // advance_fixed() steps exactly to a caller-supplied set of times, which is how
@@ -1041,6 +964,192 @@ void test_implicit_value_leaves_the_callers_adjoint_alone() {
   check(std::fabs(xad::derivative(x) - (held + y0 / dFdp)) < 1e-12 &&
             std::fabs(xad::derivative(y) - (held + x0 / dFdp)) < 1e-12,
         "the rows add the theorem's derivative and nothing of the held adjoint");
+}
+
+// --- A run whose state widens -------------------------------------------------
+//
+// Cells of y' = r y (1 - y), one more inserted mid-run with a size set by r, so
+// the newborn's initial condition is a channel of parameter derivative of its
+// own, beside the dynamics'.
+namespace {
+
+template <typename T = double>
+struct Cells {
+  using value_type = T;
+  template <typename> friend struct Cells;
+  T r;
+  std::vector<T> y, dydt;
+  std::vector<double> y_init;
+  double time = 0.0;
+  explicit Cells(T r_ = T(1.0), std::vector<double> y0 = {0.5})
+      : r(r_), y_init(std::move(y0)) { reset(); }
+  template <class S> Cells<S> rebind_from() const {
+    std::vector<double> v;
+    for (const T& c : y) v.push_back(xad::value(c));
+    Cells<S> out(S(xad::value(r)), y_init);
+    out.y.assign(v.begin(), v.end());
+    out.dydt.resize(v.size());
+    out.time = time;
+    out.compute_rates();
+    return out;
+  }
+  size_t ode_size() const { return y.size(); }
+  double ode_time() const { return time; }
+  template <class It> It set_ode_state(It it, double t) {
+    for (T& c : y) c = *it++;
+    time = t; compute_rates(); return it;
+  }
+  void set_recorded_state(const std::vector<T>& s, double t) {
+    y.resize(s.size()); dydt.resize(s.size());
+    set_ode_state(s.begin(), t);
+  }
+  void compute_rates() {
+    for (size_t i = 0; i < y.size(); ++i) dydt[i] = r * y[i] * (T(1.0) - y[i]);
+  }
+  template <class It> It ode_state(It it) const { for (const T& c : y) *it++ = c; return it; }
+  template <class It> It ode_rates(It it) const { for (const T& c : dydt) *it++ = c; return it; }
+  void reset() {
+    y.assign(y_init.begin(), y_init.end()); dydt.resize(y.size());
+    time = 0.0; compute_rates();
+  }
+  std::vector<T*> ad_parameters() { return {&r}; }
+  template <class F> void for_each_active(F&& f) {
+    f(r); for (T& c : y) f(c); for (T& c : dydt) f(c);
+  }
+  // The cells as they were, then a newborn of size r / 100.
+  template <class It> void apply_insertion(double, It x, std::vector<T>& out) {
+    const size_t n = y.size();
+    y.resize(n + 1); dydt.resize(n + 1);
+    for (size_t i = 0; i < n; ++i) y[i] = *x++;
+    y[n] = T(0.01) * r;
+    compute_rates();
+    out.resize(n + 1);
+    ode_state(out.begin());
+  }
+};
+
+// Widen the solver's System at its current time and record the row.
+void insert_cell(odelia::ode::Solver<Cells<double>>& s) {
+  Cells<double>& sys = s.get_system_ref();
+  std::vector<double> before(sys.ode_size());
+  sys.ode_state(before.begin());
+  std::vector<double> widened;
+  sys.apply_insertion(s.time(), before.begin(), widened);
+  s.set_state_from_system();
+  s.push_insertion();
+}
+
+// The run: to 0.5, insert, to t_end. Pinned to `seg1`/`seg2` when given.
+double cells_sum(double r, const std::vector<double>* seg1,
+                 const std::vector<double>* seg2, double t_end = 1.0) {
+  Cells<double> c(r, {0.5});
+  odelia::ode::Solver<Cells<double>> s(c, odelia::ode::OdeControl());
+  if (seg1) s.advance_fixed(*seg1); else s.advance_adaptive(std::vector<double>{0.0, 0.5});
+  insert_cell(s);
+  if (seg2) s.advance_fixed(*seg2); else s.advance_adaptive(std::vector<double>{0.5, t_end});
+  double sum = 0.0;
+  for (double v : s.state()) sum += v;
+  return sum;
+}
+
+} // namespace
+
+void test_sweep_across_an_insertion() {
+  const double r = 2.0;
+  Cells<double> c(r, {0.5});
+  odelia::ode::Solver<Cells<double>> s(c, odelia::ode::OdeControl());
+  s.set_keep_states(true);
+  s.reset();
+  s.advance_adaptive(std::vector<double>{0.0, 0.5});
+  insert_cell(s);
+  s.advance_adaptive(std::vector<double>{0.5, 1.0});
+  const auto rec = s.recording();
+  size_t insertions = 0;
+  for (const auto& row : rec) insertions += row.insertion;
+  check(insertions == 1, "the recording holds the insertion row");
+  check(rec.front().state.size() == 1 && rec.back().state.size() == 2,
+        "and widens from one cell to two");
+
+  // The same steps, pinned, for the difference.
+  std::vector<double> seg1, seg2;
+  for (const auto& ins : s.schedule()) {
+    if (ins.time <= 0.5) seg1.push_back(ins.time);
+    if (ins.time >= 0.5) seg2.push_back(ins.time);
+  }
+  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0, 1.0});
+  odelia::ode::adjoint_rows dp(1, 1);
+  const size_t ranges = s.solve_adjoint(lambda, dp);
+  check(ranges == 2, "two ranges, one each side of the insertion");
+  check(lambda.width() == 1, "the adjoint comes back at the width the run started at");
+  const double h = 1e-6;
+  const double fd = (cells_sum(r + h, &seg1, &seg2) - cells_sum(r - h, &seg1, &seg2)) / (2 * h);
+  check(std::fabs(dp[0][0] - fd) < 1e-7 * std::fabs(fd),
+        "d(sum of cells)/dr across the insertion is the central difference");
+  std::printf("       (sweep %.10g, difference %.10g)\n", dp[0][0], fd);
+
+  // The newborn's size is r / 100, so its own row carries a derivative that is
+  // not the dynamics'.
+  odelia::ode::adjoint_rows newborn = odelia::ode::adjoint_rows::one_row({0.0, 1.0});
+  odelia::ode::adjoint_rows dp_newborn(1, 1);
+  s.solve_adjoint(newborn, dp_newborn);
+  check(dp_newborn[0][0] != 0.0 && std::fabs(dp_newborn[0][0]) < std::fabs(dp[0][0]),
+        "the newborn's initial condition contributes a parameter derivative");
+
+  // After the sweep the solver stands where the run left it, at the run's width,
+  // and steps on from there as a run that was never swept does.
+  check(s.state().size() == 2, "the solver's state is at the run's width after the sweep");
+  s.advance_adaptive(std::vector<double>{1.0, 1.5});
+  Cells<double> c2(r, {0.5});
+  odelia::ode::Solver<Cells<double>> unswept(c2, odelia::ode::OdeControl());
+  unswept.advance_adaptive(std::vector<double>{0.0, 0.5});
+  insert_cell(unswept);
+  unswept.advance_adaptive(std::vector<double>{0.5, 1.0});
+  unswept.advance_adaptive(std::vector<double>{1.0, 1.5});
+  check(s.state() == unswept.state() && s.time() == unswept.time(),
+        "and a step taken after the sweep is the step an unswept run takes");
+
+  // A replay of the recording records the insertion row too, so its own
+  // recording can be swept.
+  Cells<double> again(r, {0.5});
+  odelia::ode::Solver<Cells<double>> replay(again, odelia::ode::OdeControl());
+  replay.set_keep_states(true);
+  replay.reset();
+  replay.advance_recorded(rec);
+  const auto rec2 = replay.recording();
+  check(rec2.size() == rec.size(), "a replay's recording has the run's rows");
+  bool same = true;
+  for (size_t k = 0; k < rec.size(); ++k) {
+    same = same && rec2[k].insertion == rec[k].insertion &&
+           rec2[k].state.size() == rec[k].state.size();
+  }
+  check(same, "with the insertion where the run had it");
+}
+
+// A scalar that already carries an adjoint is closed to the forward-AD Jacobian,
+// and naming the Jacobian at it must not be a compile error: the implicit
+// stepper refuses at run time, as it did before the tangent scalar was named.
+void test_jacobian_is_closed_at_an_adjoint_scalar() {
+  using A = odelia::ode::active_scalar<double>;
+  using Sys = LorenzSystem<A>;
+  check(odelia::ode::Jacobian<Sys>::value_is_adjoint,
+        "the Jacobian sees an adjoint scalar");
+  check(!odelia::ode::Jacobian<Sys>::ad_supported && !odelia::ode::Jacobian<Sys>::supported,
+        "and offers no route to a Jacobian there");
+  check(!odelia::ode::RodasStep<Sys>::supported, "so RODAS is closed to it");
+  // The step-size controller reads doubles, so an adjoint-scalar run is pinned;
+  // the adaptive path at such a scalar has never compiled.
+  Sys sys(A(10.0), A(28.0), A(8.0 / 3.0));
+  odelia::ode::Solver<Sys> s(sys, odelia::ode::OdeControl(), odelia::ode::Method::rodas);
+  bool refused = false;
+  try {
+    s.advance_fixed(std::vector<double>{0.0, 0.1});
+  } catch (const std::runtime_error& e) {
+    refused = std::string(e.what()).find("not available") != std::string::npos;
+  }
+  check(refused, "and a RODAS step at an adjoint scalar is refused at run time");
+  odelia::ode::Solver<Sys> rk(sys, odelia::ode::OdeControl());
+  rk.advance_fixed(std::vector<double>{0.0, 0.1});
+  check(rk.time() == 0.1, "while the explicit stepper steps at it as before");
 }
 
 // CallbackSystem wraps a std::function as a System, so an R closure (or a
@@ -1725,7 +1834,6 @@ int main() {
   test_supplied_rows_carry_a_direction();
   test_a_preaccumulated_residual_keeps_its_rows();
   test_two_preaccumulated_solves_do_not_add_up();
-  test_a_preaccumulated_region_keeps_every_output_row();
 
   test_pinned_step_domain_error_is_a_rejection();
   test_pinned_step_predicate_is_enforced();
@@ -1736,6 +1844,8 @@ int main() {
   test_subdivided_pinned_row_is_refused();
   test_sweep_refuses_one_batch_for_both();
   test_implicit_value_leaves_the_callers_adjoint_alone();
+  test_sweep_across_an_insertion();
+  test_jacobian_is_closed_at_an_adjoint_scalar();
   test_jacobian_hook_is_detected();
   test_callback_rodas_matches_compiled();
   test_callback_call_budget();

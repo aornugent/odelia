@@ -186,6 +186,7 @@ public:
         system.ode_state(before.begin());
         ode::apply_insertion(system, program[k].time, before.begin(), widened);
         set_state_from_system();
+        solver.push_insertion(system);
         continue;
       }
       if (std::isnan(program[k].step_size))
@@ -245,6 +246,7 @@ public:
         system.ode_state(before.begin());
         ode::apply_insertion(system, rec[k].time, before.begin(), widened);
         set_state_from_system();
+        solver.push_insertion(system);
         continue;
       }
       if (std::isnan(rec[k].step_size))
@@ -465,8 +467,14 @@ public:
     // leaves the System at its widest -- where every caller's tail widens back from
     // the lowest and reads the mismatch as a length error one call later, naming
     // neither this walk nor what refused.
+    //
+    // The solver's own buffers are re-seeded from the System at the same time:
+    // a sweep sizes the stage buffers to each range it walks, so after a range
+    // narrower than the run they hold a truncated state marked current, and a
+    // step taken next would start from it.
     struct restore_on_exit {
       System& sys;
+      SolverInternal<System>& solver;
       std::span<const ode::step_record<System>> rec;
       ~restore_on_exit() {
         // This runs with another exception possibly in flight, so a failure here
@@ -474,10 +482,11 @@ public:
         // already failing.
         try {
           ode::be_at_step(sys, rec, rec.size() - 1);
+          solver.set_state_from_system(sys);
         } catch (...) {
         }
       }
-    } restore{system, rec};
+    } restore{system, solver, rec};
 
     // One tape for the whole descent, held active across every recording it takes.
     // Clearing between recordings keeps the capacity the largest of them grew,
@@ -527,6 +536,25 @@ public:
       // it started from.
       ode::be_at_step(system, rec, at - 1);
       const double when = rec[at].time;
+      // A System that declares no map passes its state through, which is only a
+      // map where the width did not move. Checked here, because the pass-through
+      // reads one entry per output and the input it would read past is the
+      // narrower state.
+      if constexpr (!requires(System& s, double t,
+                              typename state_type<System>::const_iterator x,
+                              state_type<System>& y) {
+                      s.apply_insertion(t, x, y);
+                    }) {
+        if (rec[at].state.size() != rec[at - 1].state.size()) {
+          util::stop("solve_adjoint: the recording widens from " +
+                     util::to_string(static_cast<int>(rec[at - 1].state.size())) +
+                     " to " +
+                     util::to_string(static_cast<int>(rec[at].state.size())) +
+                     " at row " + util::to_string(at) +
+                     ", but the System declares no apply_insertion, so there "
+                     "is no map to transpose");
+        }
+      }
       auto insert = [&](auto& sys,
                         typename std::vector<scalar>::const_iterator x,
                         std::vector<scalar>& y) -> void {
