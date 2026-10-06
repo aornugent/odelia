@@ -214,7 +214,7 @@ public:
           util::stop("A recorded step carries the size it took; row " +
                      util::to_string(k) + " has none");
         }
-        solver.step_by(system, row.step_size, row.time, &row.solved);
+        solver.step_by(system, row.step_size, row.time, &row);
       }
       else if (std::isnan(row.step_size))
       {
@@ -457,6 +457,10 @@ public:
   // How the attempts at each error-controlled step ended; step_outcomes says
   // what each count covers.
   const ode::step_outcomes& outcomes() const { return solver.outcomes(); }
+  // By block, the steps this run split at a sign change since the last reset.
+  const std::vector<std::size_t>& splits_by_block() const {
+    return solver.splits_by_block();
+  }
 
   // Should we record history at every step?
   // TODO: should this be part of ode_solver?

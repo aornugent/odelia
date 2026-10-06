@@ -40,6 +40,21 @@ The first consumer is plant's invasion run. There an invader's rates are evaluat
 in a field recorded by another run, whose derivative with respect to the invader is
 zero, and the invader solves for its own leaf operating points.
 
+**A System whose rates change form where a sign value changes sign can split the
+step there.** A System satisfying `SplitsSignChanges` reports one sign value per
+block after every evaluation. After each step the error estimate keeps, and each
+pinned step, odelia hands it the step just taken (`taken_step`), which offers:
+- Cash-Karp's fourth-order dense output, and the quartic through five samples;
+- where a block's sign value changes sign inside the step;
+- one block integrated in pieces with the step's own tableau.
+
+The System integrates each block whose sign value changed sign in pieces that meet
+there, and records each block it split on the row (`split_block`). odelia then
+evaluates the end's rates again, and counts the steps split by block
+(`splits_by_block()`). A walk hands the System the blocks the run split, with the
+run's end, to carry onto its own end; a walk that repeats a run ends on the run's
+states to the bit. The sweep refuses a run that split.
+
 **⚠️ `step_record::solved` is a `solved_row {stages[5], at_state}`.** `at_state` is
 the evaluation at the row's state: a step's end, which first-same-as-last hands the
 next step as its first rates; the rates after an insertion; or the rates a run
