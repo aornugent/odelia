@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <tuple>
 #include <utility>
 #include <vector>
 #include <cstddef>
@@ -411,9 +412,12 @@ Step<System>::taken_step<S>::sign_changes(std::size_t block,
   const std::array<std::vector<double>, 6>& stages = *sign_values;
   const double v0 = (*sign_values_in)[block], v1 = stages[5][block];
   const bool negative = v0 < 0.0;
+  auto other = [&](double v) { return (v < 0.0) != negative; };
+  // `lean * v` is least where v leans furthest to the other sign.
+  const double lean = negative ? -1.0 : 1.0;
   std::vector<sign_change<Values>> changes;
   // A reading this near zero, as a share of the readings' spread over the step,
-  // has the gaps beside it searched for a pair.
+  // may sit beside a pair.
   const double near_zero = 0.02;
 
   // The zero between fractions a and b, whose values va and vb differ in sign:
@@ -457,7 +461,6 @@ Step<System>::taken_step<S>::sign_changes(std::size_t block,
   // Where on (a, b) the sign value leans furthest to the other sign: a golden
   // section of at most four dense-output values, which stops at the first such.
   auto search = [&](double a, double b) -> std::pair<double, double> {
-    const double lean = negative ? -1.0 : 1.0;
     const double g = 0.5 * (3.0 - std::sqrt(5.0));
     double x1 = a + g * (b - a), x2 = b - g * (b - a);
     double f1 = lean * value_at(x1, nullptr);
@@ -486,53 +489,39 @@ Step<System>::taken_step<S>::sign_changes(std::size_t block,
     return f1 < f2 ? std::pair{x1, lean * f1} : std::pair{x2, lean * f2};
   };
 
-  if ((v1 < 0.0) != negative) {
+  if (other(v1)) {
     locate(0.0, v0, 1.0, v1);
     return changes;
   }
-  int deepest = 0;
-  for (int i = 1; i < 6; ++i) {
-    const double v = stages[i - 1][block];
-    if ((v < 0.0) != negative && ah[i - 1] < 1.0 &&
-        (deepest == 0 || std::abs(v) > std::abs(stages[deepest - 1][block]))) {
-      deepest = i;
-    }
-  }
-  if (deepest > 0) {
-    const double um = ah[deepest - 1];
-    const double vm = value_at(um, nullptr);
-    if ((vm < 0.0) != negative) {
-      locate(0.0, v0, um, vm);
-      locate(um, vm, 1.0, v1);
-      return changes;
-    }
-  }
-  // No stage holds the other sign on the dense output. If the reading nearest
-  // zero is within near_zero of their spread, a pair may sit beside it.
+  // A pair: the reading leaning furthest to the other sign, of the ends' and the
+  // stages' strictly inside, where it holds that sign or lies near zero. A stage's
+  // reading is taken again on the dense output, then searched beside if need be.
   const double at[6] = {0.0, ah[0], ah[1], ah[2], ah[4], 1.0};
   const double read[6] = {v0, stages[0][block], stages[1][block],
                           stages[2][block], stages[4][block], v1};
-  int nearest = 0;
+  int m = 0;
   double low = v0, high = v0;
   for (int k = 1; k < 6; ++k) {
-    if (std::abs(read[k]) < std::abs(read[nearest])) {
-      nearest = k;
+    if (lean * read[k] < lean * read[m]) {
+      m = k;
     }
     low = std::min(low, read[k]);
     high = std::max(high, read[k]);
   }
-  if (std::abs(read[nearest]) <= near_zero * (high - low)) {
-    for (int k : {nearest - 1, nearest + 1}) {
-      if (k < 0 || k > 5 || !changes.empty()) {
-        continue;
-      }
-      const auto [um, vm] = search(std::min(at[k], at[nearest]),
-                                   std::max(at[k], at[nearest]));
-      if ((vm < 0.0) != negative) {
-        locate(0.0, v0, um, vm);
-        locate(um, vm, 1.0, v1);
-      }
+  if (lean * read[m] > near_zero * (high - low)) {
+    return changes;
+  }
+  double um = at[m];
+  double vm = m == 0 || m == 5 ? read[m] : value_at(um, nullptr);
+  for (int k : {m - 1, m + 1}) {
+    if (!other(vm) && k >= 0 && k <= 5) {
+      std::tie(um, vm) =
+        search(std::min(at[k], at[m]), std::max(at[k], at[m]));
     }
+  }
+  if (other(vm)) {
+    locate(0.0, v0, um, vm);
+    locate(um, vm, 1.0, v1);
   }
   return changes;
 }
