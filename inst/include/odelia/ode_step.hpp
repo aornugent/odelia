@@ -556,10 +556,6 @@ void Step<System>::step_adjoint(active_system<System>& active,
   // what resize() set -- so a state of another width is checked here rather than
   // in the two callers above that happen to check it.
   util::check_length(y.size(), size);
-  if (!solved.split_blocks.empty()) {
-    util::stop("step_adjoint: this step split a block at a sign change, which "
-               "the sweep does not differentiate yet");
-  }
 
   auto whole_step = [&](auto& sys,
                         typename std::vector<scalar>::const_iterator x,
@@ -576,6 +572,18 @@ void Step<System>::step_adjoint(active_system<System>& active,
       ++recorded_rates;
     }
     step_end(y0, rate, h, y_end);
+    if constexpr (SplitsSignChanges<System>) {
+      if (!solved.split_blocks.empty()) {
+        // The dense output reads the rates at the end before the split, and the
+        // System, lifted to the active scalar, splits as it recorded.
+        std::vector<scalar> end_rate(size);
+        ode::derivs(sys, y_end, end_rate, time + h, solved.at_state_before_split);
+        ++recorded_rates;
+        sys.split_as_recorded(
+          taken_step<scalar>{*this, time, h, y0, rate, end_rate, y_end},
+          solved.samples, solved.split_blocks);
+      }
+    }
   };
 
   ode::state_and_parameter_adjoints(active, y, lambda_out, whole_step, lambda_in,

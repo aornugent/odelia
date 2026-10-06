@@ -4,8 +4,8 @@
 # dips inside one, a stage holding the other sign or not; that a System that
 # splits nothing runs bit for bit as one that cannot split; that a walk splits
 # where the recorded run split, and a walk at another scalar refuses to; that splits
-# are counted where steps are committed; and that the sweep refuses a run that
-# split.
+# are counted where steps are committed; and that the sweep through a split step
+# moves each sign change with the parameters.
 
 compile_split_interface <- function() {
   ensure_ode_interface_loaded()
@@ -20,7 +20,9 @@ compile_split_interface <- function() {
     #include <Rcpp.h>
     #include <algorithm>
     #include <cmath>
+    #include <numeric>
     #include <vector>
+    #include <odelia/implicit_node.hpp>
     #include <odelia/ode_solver.hpp>
     #include <odelia/tangent.hpp>
 
@@ -435,6 +437,36 @@ compile_split_interface <- function() {
                                 samples_type&, record_type& record) {
         split(step, record, &recorded.solved.split_blocks);
       }
+      // The split the sweep takes: each recorded sign change moves with a, b and c
+      // as the zero of its sign value on the dense output, and its block is
+      // integrated again in substeps between them.
+      template <class Step>
+      void split_as_recorded(const Step& step, const samples_type&,
+                             const record_type& recorded) {
+        std::array<std::vector<T>, 5> samples;
+        for (std::size_t m = 0; m < samples.size(); ++m) {
+          samples[m].resize(1);
+          step.dense_state(step.sample_fractions[m], 2, samples[m]);
+        }
+        std::vector<T> sample;
+        for (const auto& block : recorded) {
+          auto value_at = [&](const T& u) -> T {
+            step.sample_at(u, samples, sample);
+            return gate(block.block, sample[0]);
+          };
+          std::vector<T> split_at;
+          for (const auto& change : block.sign_changes) {
+            split_at.push_back(
+              implicit_value<T>(change.u, change.slope, value_at));
+          }
+          std::vector<T> own(1);
+          step.integrate_substeps(block.first, split_at,
+                                [&](const T& u, const std::vector<T>&,
+                                    std::vector<T>& r) { r[0] = turn(value_at(u)); },
+                                own);
+          step.y_end[block.first] = own[0];
+        }
+      }
 
       T a, b, c;
       std::vector<T> y{T(0.0), T(0.0), T(0.0)};
@@ -460,19 +492,56 @@ compile_split_interface <- function() {
       walk.advance_recorded(run.recording());
     }
 
-    // Sweep a run over [0, 1] at `pars` that split, which the sweep refuses.
+    // The run over `grid` from the origin at `pars`: pinned where `pinned`, else
+    // adaptive to its end. Its end state, its program, the steps it split, and
+    // the sweep of `lambda_end` back over it.
     // [[Rcpp::export]]
-    int turning_sweep(std::vector<double> pars) {
+    Rcpp::List turning_run(std::vector<double> pars, std::vector<double> grid,
+                           bool pinned, std::vector<double> lambda_end) {
       Turning<double> sys(pars[0], pars[1], pars[2]);
       ode::Solver<Turning<double>> solver(sys, ode::OdeControl());
       solver.set_collect(false);
       solver.set_keep_states(true);
       solver.set_state({0.0, 0.0, 0.0}, 0.0);
-      solver.advance_fixed({0.0, 1.0});
-      ode::adjoint_rows lambda = ode::adjoint_rows::one_row({1.0, 1.0, 1.0});
+      if (pinned) {
+        solver.advance_fixed(grid);
+      } else {
+        solver.advance_adaptive(grid);
+      }
+      ode::adjoint_rows lambda = ode::adjoint_rows::one_row(lambda_end);
       ode::adjoint_rows rows(1, 3);
       solver.solve_adjoint(lambda, rows);
-      return static_cast<int>(solver.splits_by_block().size());
+      std::vector<double> times, sizes;
+      for (const ode::instruction& row : solver.schedule()) {
+        times.push_back(row.time);
+        sizes.push_back(row.step_size);
+      }
+      const auto& by_block = solver.splits_by_block();
+      return Rcpp::List::create(
+        Rcpp::Named("state") = solver.state(), Rcpp::Named("times") = times,
+        Rcpp::Named("sizes") = sizes,
+        Rcpp::Named("splits") = static_cast<int>(
+          std::accumulate(by_block.begin(), by_block.end(), std::size_t{0})),
+        Rcpp::Named("lambda") = lambda.to_rows()[0],
+        Rcpp::Named("parameters") = rows.to_rows()[0]);
+    }
+
+    // The program of a run, `times` and `sizes`, replayed from `y0` at `pars`.
+    // [[Rcpp::export]]
+    std::vector<double> turning_replay(std::vector<double> pars,
+                                       std::vector<double> times,
+                                       std::vector<double> sizes,
+                                       std::vector<double> y0) {
+      Turning<double> sys(pars[0], pars[1], pars[2]);
+      ode::Solver<Turning<double>> solver(sys, ode::OdeControl());
+      solver.set_collect(false);
+      solver.set_state(y0, 0.0);
+      std::vector<ode::instruction> program;
+      for (std::size_t i = 0; i < times.size(); ++i) {
+        program.push_back({times[i], sizes[i]});
+      }
+      solver.advance_recorded(program);
+      return solver.state();
     }
   ', verbose = FALSE)
 }
@@ -570,8 +639,31 @@ test_that("a walk at another scalar refuses a run that split", {
                "cannot take a recorded step that split")
 })
 
-test_that("the sweep refuses a run that split", {
+test_that("the sweep through a split step moves each sign change with the parameters", {
   compile_split_interface()
-  expect_error(turning_sweep(c(0.3, 0.0025, 0.6)),
-               "split a block at a sign change")
+  pars <- c(0.3, 0.0025, 0.6)
+  # Asymmetric, so a dropped transpose shows.
+  lambda_end <- c(0.7, -1.3, 0.4)
+  for (pinned in c(TRUE, FALSE)) {
+    grid <- if (pinned) c(0, 1) else c(0, 2)
+    run <- turning_run(pars, grid, pinned, lambda_end)
+    expect_gt(run$splits, 0L)
+    end_at <- function(p, y0 = c(0, 0, 0)) turning_replay(p, run$times, run$sizes, y0)
+    expect_identical(bits(end_at(pars)), bits(run$state))
+    # Central differences of the forward on the run's own steps: each sign change
+    # is found again at the moved parameters.
+    d <- 1e-5
+    by_parameter <- sapply(seq_along(pars), function(j) {
+      up <- pars; up[j] <- up[j] + d
+      down <- pars; down[j] <- down[j] - d
+      sum(lambda_end * (end_at(up) - end_at(down))) / (2 * d)
+    })
+    expect_equal(run$parameters, by_parameter, tolerance = 1e-6)
+    by_state <- sapply(1:3, function(j) {
+      up <- c(0, 0, 0); up[j] <- d
+      down <- c(0, 0, 0); down[j] <- -d
+      sum(lambda_end * (end_at(pars, up) - end_at(pars, down))) / (2 * d)
+    })
+    expect_equal(run$lambda, by_state, tolerance = 1e-6)
+  }
 })
