@@ -101,7 +101,7 @@ public:
   // How the attempts this run has made ended. accepted + accepted_at_minimum is
   // the number of rows step() added to the record.
   const ode::step_outcomes& outcomes() const { return outcomes_; }
-  // By block, the steps this run split since the last reset.
+  // By block, the steps this run committed split since the last reset.
   const std::vector<std::size_t>& splits_by_block() const {
     return splits_by_block_;
   }
@@ -231,12 +231,6 @@ private:
       if (!solved_scratch_.split_blocks.empty()) {
         solved_scratch_.at_state_before_split = std::move(solved_scratch_.at_state);
         solved_scratch_.at_state = solved_values_t<System>{};
-        for (const auto& block : solved_scratch_.split_blocks) {
-          if (block.block >= splits_by_block_.size()) {
-            splits_by_block_.resize(block.block + 1);
-          }
-          ++splits_by_block_[block.block];
-        }
       }
       ode::derivs(system, y, dydt_out, time_ + step_size, solved_scratch_.at_state);
       stepper.read_end_sign_values(system);
@@ -363,6 +357,14 @@ void SolverInternal<System>::set_state_from_system(
 template <class System>
 void SolverInternal<System>::push_step(System& system, double time_,
                                        double step_size) {
+  // A step's splits count once it is committed, and the row is spent here, so no
+  // later row counts them again.
+  for (const auto& block : solved_scratch_.split_blocks) {
+    if (block.block >= splits_by_block_.size()) {
+      splits_by_block_.resize(block.block + 1);
+    }
+    ++splits_by_block_[block.block];
+  }
   step_record<System> record{{time_, step_size}, state_type()};
   record.error_index = control.error_index;
   record.error_ratio = control.error_ratio;
@@ -371,6 +373,7 @@ void SolverInternal<System>::push_step(System& system, double time_,
     system.ode_state(record.state.begin());
     record.solved = std::move(solved_scratch_);
   }
+  solved_scratch_.split_blocks.clear();
   prev_steps.push_back(std::move(record));
 }
 
