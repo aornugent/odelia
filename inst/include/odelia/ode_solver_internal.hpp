@@ -4,8 +4,9 @@
 
 #include <odelia/ode_interface.hpp>
 #include <odelia/ode_control.hpp>
-#include <odelia/ode_step.hpp>
+#include <odelia/ode_step_rkck.hpp>
 #include <odelia/ode_step_rodas.hpp>
+#include <odelia/ode_step_dopri.hpp>
 
 #include <limits>
 #include <string>
@@ -15,9 +16,10 @@
 namespace odelia {
 namespace ode {
 
-// Integration method: the explicit Cash-Karp RKCK 4(5) stepper (default) or the
-// implicit RODAS4(3) Rosenbrock stepper for stiff systems.
-enum class Method { rkck, rodas };
+// Integration method: the explicit Cash-Karp RKCK 4(5) stepper (default), the
+// implicit RODAS4(3) Rosenbrock stepper for stiff systems, or the explicit
+// Dormand-Prince 5(4) stepper with order-4 dense output.
+enum class Method { rkck, rodas, dopri };
 
 template <class System>
 class SolverInternal {
@@ -43,10 +45,46 @@ public:
   void advance_euler(System& system, const std::vector<double>& times);
 
   void step(System& system);
+  void step(System& system, double time_max_);
   void step_to(System& system, double time_max_);
   void step_euler(System& system, double time_max_);
 
   void set_time_max(double time_max_);
+
+  // The step the controller will try next: the size of the last accepted step
+  // as adjusted by its error estimate, or the control's initial size after a
+  // reset. A consumer that re-seeds the state through set_state(), which resets
+  // this, may put a step it knows to be good back with set_step_size().
+  double get_step_size() const { return step_size_last; }
+  void set_step_size(double h) {
+    if (!util::is_finite(h) || h <= 0.0) {
+      util::stop("step size must be positive and finite");
+    }
+    step_size_last = h;
+  }
+  // Attempts the adaptive and pinned paths rejected and retried smaller, since
+  // construction. A diagnostic: with the system's own count of right-hand-side
+  // evaluations it says what a solve cost and why.
+  size_t get_n_rejections() const { return n_rejections; }
+  // True while an attempt is in progress, and therefore afterwards if one was
+  // abandoned by an exception that escaped step(): y and the system then hold
+  // a half-finished attempt and must be re-seeded (reset()) before stepping
+  // again. A consumer whose right-hand side can raise -- an R callback -- reads
+  // this rather than guessing from where the error came from.
+  bool mid_step() const { return in_step; }
+
+  // Dense output (#24): the state at any t inside the last accepted adaptive
+  // step, at no further evaluation. Under Dormand-Prince it is the method's
+  // own order-4 continuous extension, from the step's stages, with an error of
+  // the step's own order. Under the other steppers it is cubic Hermite on the
+  // step's endpoints and the derivatives there: exact for a cubic, otherwise
+  // one order below the step (measured on Lorenz at 40-100x the integration
+  // error), so a consumer that wants dense output within tolerance uses
+  // Method::dopri. Refuses a t outside [previous time, current time], and is
+  // unavailable until a step has been accepted since the last reset.
+  bool can_interpolate() const { return have_prev; }
+  double previous_time() const { return time_prev; }
+  void interpolate(double t, state_type& out) const;
 
 private:
   void resize(size_t size_);
@@ -60,41 +98,63 @@ private:
   void stepper_step(System& system, double time_, double step_size,
                     state_type& y_, state_type& yerr_,
                     const state_type& dydt_in_, state_type& dydt_out_) {
-    if (method == Method::rodas) {
+    if (method == Method::dopri) {
+      dopri_stepper.step(system, time_, step_size, y_, yerr_, dydt_in_, dydt_out_);
+    } else if (method == Method::rodas) {
       if constexpr (RodasStep<System>::supported) {
         rodas_stepper.step(system, time_, step_size, y_, yerr_, dydt_in_,
                            dydt_out_);
       } else {
-        // RODAS is unavailable for this System: either it provides no rebind()
-        // hook for the AD Jacobian, or its scalar type is itself active (nested
-        // tangent-over-adjoint is not yet wired up -- see issue #35). The passive
-        // solver of a system with rebind() supports RODAS.
+        // RODAS is unavailable for this System: it has neither an
+        // ode_jacobian() hook nor a rebind() hook for the AD Jacobian, or its
+        // scalar type is itself active (nested tangent-over-adjoint is not yet
+        // wired up -- see issue #36).
         util::stop("method='rodas' is not available for this system/scalar type "
-                   "(needs a rebind() hook and a non-active scalar); "
-                   "use method='rkck'.");
+                   "(needs an ode_jacobian() hook, or a rebind() hook with a "
+                   "non-active scalar); use method='rkck'.");
       }
     } else {
       stepper.step(system, time_, step_size, y_, yerr_, dydt_in_, dydt_out_);
     }
   }
   size_t stepper_order() const {
-    return method == Method::rodas ? rodas_stepper.order() : stepper.order();
+    switch (method) {
+    case Method::rodas: return rodas_stepper.order();
+    case Method::dopri: return dopri_stepper.order();
+    default: return stepper.order();
+    }
   }
   bool stepper_can_use_dydt_in() const {
-    return method == Method::rodas ? RodasStep<System>::can_use_dydt_in
-                                   : Step<System>::can_use_dydt_in;
+    switch (method) {
+    case Method::rodas: return RodasStep<System>::can_use_dydt_in;
+    case Method::dopri: return DopriStep<System>::can_use_dydt_in;
+    default: return Step<System>::can_use_dydt_in;
+    }
   }
   bool stepper_first_same_as_last() const {
-    return method == Method::rodas ? RodasStep<System>::first_same_as_last
-                                   : Step<System>::first_same_as_last;
+    switch (method) {
+    case Method::rodas: return RodasStep<System>::first_same_as_last;
+    case Method::dopri: return DopriStep<System>::first_same_as_last;
+    default: return Step<System>::first_same_as_last;
+    }
   }
 
   OdeControl control;
   Method method;
   Step<System> stepper;
   RodasStep<System> rodas_stepper;
+  DopriStep<System> dopri_stepper;
 
   double step_size_last; // Size of last successful step (or suggestion)
+  size_t n_rejections = 0; // Rejected attempts, cumulative (not reset)
+  bool in_step = false;    // An attempt is in progress (see mid_step())
+
+  // The last accepted adaptive step: its start state and derivative, for the
+  // interpolant and for restoring y on a rejected attempt.
+  state_type y_prev;
+  state_type dydt_prev;
+  double time_prev = 0.0;
+  bool have_prev = false;
 
   double time;     // Current time
   double time_max; // Time we will not go past
@@ -123,6 +183,8 @@ void SolverInternal<System>::reset(System& system) {
   prev_times.clear();
   step_size_last = control.step_size_initial;
   time_max = std::numeric_limits<double>::infinity();
+  in_step = false;
+  have_prev = false;
   set_state_from_system(system);
 }
 
@@ -272,12 +334,16 @@ void SolverInternal<System>::step(System& system) {
 
 
   // Save y in case of failure in a step (recall that stepper.step
-  // changes 'y')
-  const state_type y_orig = y;
+  // changes 'y'). Kept as a member: it is also the start of the step the
+  // interpolant reads, once the step is accepted.
+  y_prev = y;
+  const state_type& y_orig = y_prev;
   const size_t size = y.size();
 
+  in_step = true;
   // Compute the derivatives at the beginning.
   setup_dydt_in(system);
+  dydt_prev = dydt_in;
 
   while (true) {
     // Does this appear to be the last step before reaching `time_max`?
@@ -337,6 +403,7 @@ void SolverInternal<System>::step(System& system) {
       	y         = y_orig;
       	time      = time_orig;
       	step_size = step_size_next;
+        ++n_rejections;
         if (invalid) {
           // Put the system back on the restored state explicitly. After a caught
           // DomainError it is left holding whichever intermediate stage threw, and
@@ -381,11 +448,33 @@ void SolverInternal<System>::step(System& system) {
 	      step_size_last = step_size_next;
       }
       prev_times.push_back(time);
+      time_prev = time_orig;
+      have_prev = true;
       save_dydt_out_as_in();
       cache(system);
+      in_step = false;
       return; // This exits the infinite loop.
     }
   }
+}
+
+// One adaptive step that will not pass time_max_: the single-step form of
+// advance_adaptive(), for a caller that drives the integration itself and may
+// change the state between steps (#62). An infinite time_max_ removes the bound,
+// which is what a solver has after reset(). Stepping from time_max_ itself is
+// refused: a zero-length step is not a step, and the implicit stepper divides by
+// h.
+template <class System>
+void SolverInternal<System>::step(System& system, double time_max_) {
+  if (util::is_finite(time_max_)) {
+    set_time_max(time_max_);
+    if (!(time < time_max)) {
+      util::stop("step(): already at time_max = " + util::format_double(time_max));
+    }
+  } else {
+    time_max = std::numeric_limits<double>::infinity();
+  }
+  step(system);
 }
 
 // This takes a step up to time "time_max_", regardless of what the
@@ -416,6 +505,8 @@ void SolverInternal<System>::step(System& system) {
 template <class System>
 void SolverInternal<System>::step_to(System& system, double time_max_) {
   set_time_max(time_max_);
+  in_step = true;
+  have_prev = false; // a pinned step may be subdivided; no single interpolant
   load(system); // option to load pre-calculated states in mutant runs
   setup_dydt_in(system);
 
@@ -481,12 +572,49 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
                  " is already at the minimum)");
     }
     step_size = step_size_next;
+    ++n_rejections;
   }
 
   cache(system);
 
   time = time_max;
   prev_times.push_back(time);
+  in_step = false;
+}
+
+template <class System>
+void SolverInternal<System>::interpolate(double t, state_type& out) const {
+  if (!have_prev) {
+    util::stop("interpolate(): no accepted step to interpolate within");
+  }
+  if (!(t >= time_prev && t <= time)) {
+    util::stop("interpolate(): t = " + util::format_double(t) +
+               " is outside the last step [" + util::format_double(time_prev) +
+               ", " + util::format_double(time) + "]");
+  }
+  const size_t n = y.size();
+  out.resize(n);
+  const double h = time - time_prev;
+  if (!(h > 0.0)) {
+    out = y;
+    return;
+  }
+  const double s = (t - time_prev) / h;
+  if (method == Method::dopri) {
+    dopri_stepper.dense(s, y, out);
+    return;
+  }
+  const double s2 = s * s, s3 = s2 * s;
+  const double h00 = 2.0 * s3 - 3.0 * s2 + 1.0;
+  const double h10 = (s3 - 2.0 * s2 + s) * h;
+  const double h01 = -2.0 * s3 + 3.0 * s2;
+  const double h11 = (s3 - s2) * h;
+  // dydt_in is f at the current y: FSAL carried it, or the next step's
+  // setup will compute it. Only the carried case can be read here.
+  const state_type& dydt_now = dydt_in_is_clean ? dydt_in : dydt_out;
+  for (size_t i = 0; i < n; ++i) {
+    out[i] = h00 * y_prev[i] + h10 * dydt_prev[i] + h01 * y[i] + h11 * dydt_now[i];
+  }
 }
 
 template <class System>
@@ -497,6 +625,7 @@ void SolverInternal<System>::resize(size_t size_) {
   dydt_out.resize(size_);
   stepper.resize(size_);
   rodas_stepper.resize(size_);
+  dopri_stepper.resize(size_);
 }
 
 template <class System>
