@@ -246,6 +246,10 @@ private:
       solved_scratch_.at_state = recorded.solved.at_state;
       ode::derivs(system, y, dydt_out, time_ + step_size, solved_scratch_.at_state);
       stepper.read_end_sign_values(system);
+    } else {
+      // Walked unsplit, the step would differentiate a map the run did not take.
+      util::stop("A walk at this scalar cannot take a recorded step that split a "
+                 "block at a sign change.");
     }
   }
   size_t stepper_order() const {

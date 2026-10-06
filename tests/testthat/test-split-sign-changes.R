@@ -3,8 +3,9 @@
 # changes, once where its sign value changes sign across a step and twice where it
 # dips inside one, a stage holding the other sign or not; that a System that
 # splits nothing runs bit for bit as one that cannot split; that a walk takes the
-# recorded run's splits; that splits are counted where steps are committed; and
-# that the sweep refuses a run that split.
+# recorded run's splits, and a walk at another scalar refuses them; that splits
+# are counted where steps are committed; and that the sweep refuses a run that
+# split.
 
 compile_split_interface <- function() {
   ensure_ode_interface_loaded()
@@ -21,6 +22,7 @@ compile_split_interface <- function() {
     #include <cmath>
     #include <vector>
     #include <odelia/ode_solver.hpp>
+    #include <odelia/tangent.hpp>
 
     using namespace odelia;
     using record_type = std::vector<ode::split_block<ode::no_solved_values>>;
@@ -427,6 +429,23 @@ compile_split_interface <- function() {
       double time = 0.0;
     };
 
+    // A walk at the tangent scalar over a run at `pars` that split, which it
+    // refuses.
+    // [[Rcpp::export]]
+    void turning_tangent_walk(std::vector<double> pars) {
+      Turning<double> sys(pars[0], pars[1], pars[2]);
+      ode::Solver<Turning<double>> run(sys, ode::OdeControl());
+      run.set_collect(false);
+      run.set_keep_states(true);
+      run.set_state({0.0, 0.0, 0.0}, 0.0);
+      run.advance_fixed({0.0, 1.0});
+      using tangent = ode::tangent_scalar<>;
+      ode::Solver<Turning<tangent>> walk(sys.rebind_from<tangent>(),
+                                         ode::OdeControl());
+      walk.set_collect(false);
+      walk.advance_recorded(run.recording());
+    }
+
     // Sweep a run over [0, 1] at `pars` that split, which the sweep refuses.
     // [[Rcpp::export]]
     int turning_sweep(std::vector<double> pars) {
@@ -530,6 +549,12 @@ test_that("a step's splits are counted once it is committed", {
   expect_equal(res$refused, 1L)
   expect_gt(sum(res$recorded), 0L)
   expect_identical(res$counted, res$recorded)
+})
+
+test_that("a walk at another scalar refuses a run that split", {
+  compile_split_interface()
+  expect_error(turning_tangent_walk(c(0.3, 0.0025, 0.6)),
+               "cannot take a recorded step that split")
 })
 
 test_that("the sweep refuses a run that split", {

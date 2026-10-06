@@ -53,7 +53,8 @@ there, and records each block it split on the row (`split_block`). odelia then
 evaluates the end's rates again, and counts the steps split by block
 (`splits_by_block()`). A walk hands the System the blocks the run split, with the
 run's end, to carry onto its own end; a walk that repeats a run ends on the run's
-states to the bit. The sweep refuses a run that split.
+states to the bit, and a walk at another scalar refuses a row that split. The
+sweep refuses a run that split.
 
 **⚠️ `step_record::solved` is a `solved_row {stages[5], at_state}`.** `at_state` is
 the evaluation at the row's state: a step's end, which first-same-as-last hands the
