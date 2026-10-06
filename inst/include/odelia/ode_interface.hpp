@@ -226,8 +226,8 @@ struct sign_change {
   Values solved{};
 };
 
-// One block a step split, with its components at the end before the split.
-// `solved` holds what each evaluation in its pieces solved for, in order.
+// One block a step split, with its components at the end before the split. `solved`
+// holds its pieces' evaluations in order: five from the step's start, six from a split.
 template <class Values>
 struct split_block {
   std::size_t block = 0;

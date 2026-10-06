@@ -503,14 +503,14 @@ test_that("one step is integrated in pieces at a sign change and at a dip", {
   expect_length(plain$splits, 0L)
 })
 
-test_that("a pair is found from the reading leaning furthest to the other sign", {
+test_that("a pair is found from the reading furthest toward the other sign", {
   compile_split_interface()
   # g_1's dip holds the stage at 0.6, as the dense output there confirms. g_2 reads
   # 0.0084 at the step's start and at the first stage, within 2% of its readings'
-  # spread of 0.8; the start leans furthest, and the gap beside it holds the dip.
-  # g_3's first stage reads -0.002, which the dense output there does not hold, so
-  # the gaps beside it are searched. g_4's first stage reads 0.0007, near zero, and
-  # the dense output there -0.0009.
+  # spread of 0.8; the start lies furthest toward zero, and the gap next to it holds
+  # the dip. g_3's first stage reads -0.002, which the dense output there does not
+  # hold, so the gaps next to it are searched. g_4's first stage reads 0.0007, near
+  # zero, and the dense output there -0.0009.
   at <- kinked_one_step(TRUE)$sign_changes
   tol <- 1e-9
   expect_equal(at[[1]], 0.3, tolerance = tol)

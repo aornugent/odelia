@@ -210,8 +210,8 @@ private:
       // to arrange.
       solved_scratch_ =
         recorded != nullptr ? *recorded : typename Step<System>::solved_row{};
-      // The row a walk follows lends its evaluations; its splits are carried by
-      // take_recorded_splits, not recorded again.
+      // A walk's evaluations load the row's solved values; take_recorded_splits
+      // carries its splits, which the walk's own row does not record again.
       solved_scratch_.at_state_before_split = solved_values_t<System>{};
       solved_scratch_.split_blocks.clear();
       stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
@@ -219,7 +219,7 @@ private:
     }
   }
   // Hand the step just taken to a System that splits, and evaluate the end's rates
-  // again if it evaluated anything. Cash-Karp only: Rosenbrock has no dense output.
+  // again if it evaluated anything. Does nothing under Rosenbrock: no dense output.
   void split(System& system, double time_, double step_size) {
     if constexpr (SplitsSignChanges<System>) {
       if (method != Method::rkck ||
@@ -361,8 +361,8 @@ void SolverInternal<System>::set_state_from_system(
 template <class System>
 void SolverInternal<System>::push_step(System& system, double time_,
                                        double step_size) {
-  // A step's splits count once it is committed, and the row is spent here, so no
-  // later row counts them again.
+  // Counted when the step is committed; the scratch row moves into the record
+  // below, so no later step counts it again.
   for (const auto& block : solved_scratch_.split_blocks) {
     if (block.block >= splits_by_block_.size()) {
       splits_by_block_.resize(block.block + 1);
