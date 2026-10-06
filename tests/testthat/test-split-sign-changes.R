@@ -2,8 +2,8 @@
 # on the step's solution; that a block is integrated in substeps between its sign
 # changes, once where its sign value changes sign across a step and twice where it
 # dips inside one, a stage holding the other sign or not; that a System that
-# splits nothing runs bit for bit as one that cannot split; that a walk takes the
-# recorded run's splits, and a walk at another scalar refuses them; that splits
+# splits nothing runs bit for bit as one that cannot split; that a walk splits
+# where the recorded run split, and a walk at another scalar refuses to; that splits
 # are counted where steps are committed; and that the sweep refuses a run that
 # split.
 
@@ -26,16 +26,19 @@ compile_split_interface <- function() {
 
     using namespace odelia;
     using record_type = std::vector<ode::split_block<ode::no_solved_values>>;
+    using samples_type = std::vector<ode::no_solved_values>;
 
     // A toy System splits as plant does: each block whose sign value changes sign
     // in the step is integrated in substeps that meet at its sign changes, its rates
     // read from what it samples of the rest of the state at the five sample
     // fractions. Block p is component p. `read(state, out)` writes what a block
     // reads; `rate(p, sample, out)` writes the rate of block p and returns its sign
-    // value.
+    // value. A walk hands in the blocks the run split as `recorded`, and each is
+    // split where the run split it.
     template <class Step, class Read, class Rate>
     bool split_toy(const Step& step, std::size_t blocks, record_type& record,
-                   Read&& read, Rate&& rate) {
+                   Read&& read, Rate&& rate,
+                   const record_type* recorded = nullptr) {
       std::array<std::vector<double>, 5> samples;
       std::vector<double> state(step.y0.size()), sample, out(1);
       bool sampled = false;
@@ -51,17 +54,25 @@ compile_split_interface <- function() {
         return rate(p, sample, r);
       };
       for (std::size_t p = 0; p < blocks; ++p) {
-        auto changes = step.template sign_changes<ode::no_solved_values>(
-          p, [&](double u, ode::no_solved_values*) {
-            return block_rates(p, u, out);
-          });
+        std::vector<ode::sign_change<ode::no_solved_values>> changes;
+        if (recorded == nullptr) {
+          changes = step.template sign_changes<ode::no_solved_values>(
+            p, [&](double u, ode::no_solved_values*) {
+              return block_rates(p, u, out);
+            });
+        } else {
+          for (const auto& run_block : *recorded) {
+            if (run_block.block == p) {
+              changes = run_block.sign_changes;
+            }
+          }
+        }
         if (changes.empty()) {
           continue;
         }
         ode::split_block<ode::no_solved_values>& block = record.emplace_back();
         block.block = p;
         block.first = p;
-        block.state_before_split.assign(1, step.y_end[p]);
         std::vector<double> split_at;
         for (const auto& change : changes) {
           split_at.push_back(change.u);
@@ -75,19 +86,6 @@ compile_split_interface <- function() {
         step.y_end[p] = own[0];
       }
       return sampled;
-    }
-
-    // The toys walk laid out as they ran, so each recorded block is carried in
-    // place.
-    static void carry_in_place(const record_type& recorded,
-                               const std::vector<double>& run_end,
-                               std::vector<double>& y) {
-      for (const auto& block : recorded) {
-        for (std::size_t q = 0; q < block.state_before_split.size(); ++q) {
-          const std::size_t i = block.first + q;
-          y[i] = (y[i] - block.state_before_split[q]) + run_end[i];
-        }
-      }
     }
 
     // y1 = cos t, y2 = -sin t. Its split reads the dense output at each of `u`
@@ -112,7 +110,7 @@ compile_split_interface <- function() {
       }
       void sign_values(std::vector<double>& out) const { out.clear(); }
       template <class Step>
-      bool split_sign_changes(const Step& step, record_type&) {
+      bool split_sign_changes(const Step& step, samples_type&, record_type&) {
         std::vector<double> out(2);
         dense.clear();
         for (double v : u) {
@@ -124,8 +122,9 @@ compile_split_interface <- function() {
         end = step.y_end;
         return false;
       }
-      void take_recorded_splits(const record_type&, const std::vector<double>&,
-                                std::vector<double>&) const {}
+      template <class Step>
+      void take_recorded_splits(const Step&, const ode::step_record<Oscillator>&,
+                                samples_type&, record_type&) {}
       std::vector<double> y{1.0, 0.0};
       double time = 0.0;
       std::vector<double> u, end;
@@ -198,12 +197,9 @@ compile_split_interface <- function() {
       }
       // A block reads z and w.
       template <class Step>
-      bool split_sign_changes(const Step& step, record_type& record)
-        requires Splits {
-        if (!splits) {
-          return false;
-        }
-        const bool evaluated = split_toy(
+      bool split(const Step& step, record_type& record,
+                 const record_type* recorded = nullptr) {
+        return split_toy(
           step, 5, record,
           [](const std::vector<double>& state, std::vector<double>& out) {
             out.assign(state.begin() + 5, state.begin() + 7);
@@ -213,7 +209,16 @@ compile_split_interface <- function() {
             const double v = gate(p, sample[0], sample[1]);
             out[0] = std::max(v, 0.0);
             return v;
-          });
+          },
+          recorded);
+      }
+      template <class Step>
+      bool split_sign_changes(const Step& step, samples_type&, record_type& record)
+        requires Splits {
+        if (!splits) {
+          return false;
+        }
+        const bool evaluated = split(step, record);
         if (!record.empty()) {
           split_end = step.y_end;
         }
@@ -227,10 +232,12 @@ compile_split_interface <- function() {
         }
         return true;
       }
-      void take_recorded_splits(const record_type& recorded,
-                                const std::vector<double>& run_end,
-                                std::vector<double>& y) const requires Splits {
-        carry_in_place(recorded, run_end, y);
+      template <class Step>
+      void take_recorded_splits(const Step& step,
+                                const ode::step_record<Kinked>& recorded,
+                                samples_type&, record_type& record)
+        requires Splits {
+        split(step, record, &recorded.solved.split_blocks);
       }
 
       bool splits = true;
@@ -403,7 +410,8 @@ compile_split_interface <- function() {
       }
       // A block reads z alone.
       template <class Step>
-      bool split_sign_changes(const Step& step, record_type& record) {
+      bool split(const Step& step, record_type& record,
+                 const record_type* recorded = nullptr) {
         return split_toy(
           step, 2, record,
           [](const std::vector<double>& state, std::vector<double>& out) {
@@ -414,12 +422,18 @@ compile_split_interface <- function() {
             const double v = util::to_passive(gate(p, T(sample[0])));
             out[0] = util::to_passive(turn(T(v)));
             return v;
-          });
+          },
+          recorded);
       }
-      void take_recorded_splits(const record_type& recorded,
-                                const std::vector<double>& run_end,
-                                std::vector<double>& y) const {
-        carry_in_place(recorded, run_end, y);
+      template <class Step>
+      bool split_sign_changes(const Step& step, samples_type&, record_type& record) {
+        return split(step, record);
+      }
+      template <class Step>
+      void take_recorded_splits(const Step& step,
+                                const ode::step_record<Turning>& recorded,
+                                samples_type&, record_type& record) {
+        split(step, record, &recorded.solved.split_blocks);
       }
 
       T a, b, c;
@@ -533,12 +547,11 @@ test_that("a System that splits nothing runs bit for bit as one that cannot", {
   expect_length(res$unsplit$splits, 0L)
 })
 
-test_that("a walk takes the recorded run's splits and repeats it bit for bit", {
+test_that("a walk splits where the recorded run split and repeats it bit for bit", {
   compile_split_interface()
   res <- kinked_runs()
   expect_identical(bits(res$walk_states), bits(res$run_states))
-  # The walk splits nothing of its own.
-  expect_length(res$walk$splits, 0L)
+  expect_identical(res$walk$splits, res$split$splits)
 })
 
 test_that("a step's splits are counted once it is committed", {
