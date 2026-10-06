@@ -3,7 +3,8 @@
 # changes, once where its sign value changes sign across a step and twice where it
 # dips inside one, a stage holding the other sign or not; that a System that
 # splits nothing runs bit for bit as one that cannot split; that a walk takes the
-# recorded run's splits; and that the sweep refuses a run that split.
+# recorded run's splits; that splits are counted where steps are committed; and
+# that the sweep refuses a run that split.
 
 compile_split_interface <- function() {
   ensure_ode_interface_loaded()
@@ -200,7 +201,7 @@ compile_split_interface <- function() {
         if (!splits) {
           return false;
         }
-        return split_toy(
+        const bool evaluated = split_toy(
           step, 5, record,
           [](const std::vector<double>& state, std::vector<double>& out) {
             out.assign(state.begin() + 5, state.begin() + 7);
@@ -211,6 +212,18 @@ compile_split_interface <- function() {
             out[0] = std::max(v, 0.0);
             return v;
           });
+        if (!record.empty()) {
+          split_end = step.y_end;
+        }
+        return evaluated;
+      }
+      // Where `refuse` is set, refuses the end of a step it split, once.
+      bool ode_state_valid(const std::vector<double>& state) const {
+        if (refuse && state == split_end) {
+          refuse = false;
+          return false;
+        }
+        return true;
       }
       void take_recorded_splits(const record_type& recorded,
                                 const std::vector<double>& run_end,
@@ -219,15 +232,19 @@ compile_split_interface <- function() {
       }
 
       bool splits = true;
+      mutable bool refuse = false;
+      std::vector<double> split_end;
       std::vector<double> y{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
       std::vector<double> g{0.0, 0.0, 0.0, 0.0, 0.0};
       double time = 0.0;
     };
 
     template <bool Splits>
-    static ode::Solver<Kinked<Splits>> kinked_solver(bool splits, bool keep) {
+    static ode::Solver<Kinked<Splits>> kinked_solver(bool splits, bool keep,
+                                                     bool refuse = false) {
       Kinked<Splits> sys;
       sys.splits = splits;
+      sys.refuse = refuse;
       ode::Solver<Kinked<Splits>> solver(sys, ode::OdeControl());
       solver.set_collect(false);
       solver.set_keep_states(keep);
@@ -294,6 +311,26 @@ compile_split_interface <- function() {
                                 Rcpp::Named("walk") = run(walk),
                                 Rcpp::Named("run_states") = run_states,
                                 Rcpp::Named("walk_states") = walk_states);
+    }
+
+    // An adaptive run over [0, 2] that refuses the end of a step it split, once:
+    // the splits counted by block, those its rows hold, and the attempts refused.
+    // [[Rcpp::export]]
+    Rcpp::List kinked_refused() {
+      auto solver = kinked_solver<true>(true, true, true);
+      solver.advance_adaptive({0.0, 2.0});
+      std::vector<int> counted(5), recorded(5);
+      const auto& by_block = solver.splits_by_block();
+      std::copy(by_block.begin(), by_block.end(), counted.begin());
+      for (const auto& row : solver.recording()) {
+        for (const auto& block : row.solved.split_blocks) {
+          ++recorded[block.block];
+        }
+      }
+      return Rcpp::List::create(
+        Rcpp::Named("counted") = counted, Rcpp::Named("recorded") = recorded,
+        Rcpp::Named("refused") =
+          static_cast<int>(solver.outcomes().rejected_refused));
     }
 
     // Two blocks of one component, x_p rising at the smooth positive part of g_p,
@@ -483,6 +520,16 @@ test_that("a walk takes the recorded run's splits and repeats it bit for bit", {
   expect_identical(bits(res$walk_states), bits(res$run_states))
   # The walk splits nothing of its own.
   expect_length(res$walk$splits, 0L)
+})
+
+test_that("a step's splits are counted once it is committed", {
+  compile_split_interface()
+  # The end of a step that split is refused, so the step is taken again; only the
+  # rows the run keeps are counted.
+  res <- kinked_refused()
+  expect_equal(res$refused, 1L)
+  expect_gt(sum(res$recorded), 0L)
+  expect_identical(res$counted, res$recorded)
 })
 
 test_that("the sweep refuses a run that split", {
