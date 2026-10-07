@@ -168,6 +168,7 @@ compile_alone_interface <- function() {
     #include <cmath>
     #include <vector>
     #include <odelia/ode_solver.hpp>
+    #include <odelia/tangent.hpp>
     ', store_system, '
 
     using namespace odelia;
@@ -284,6 +285,22 @@ compile_alone_interface <- function() {
                                 Rcpp::_["same_steps"] = same_steps);
     }
 
+    // A walk at the tangent scalar over a run that took the store alone, which it
+    // refuses.
+    // [[Rcpp::export]]
+    void store_tangent_walk(std::vector<double> pars, std::vector<double> y0,
+                            double t_end, double tol, double share) {
+      ode::Solver<StoreA> run(store(pars, share), control_at(tol));
+      run.set_keep_states(true);
+      run.set_state(y0, 0.0);
+      run.advance_adaptive({0.0, t_end});
+      using tangent = ode::tangent_scalar<>;
+      ode::Solver<Store<tangent, true>> walk(
+        store(pars, share).rebind_from<tangent>(), control_at(tol));
+      walk.set_collect(false);
+      walk.advance_recorded(run.recording());
+    }
+
     // [[Rcpp::export]]
     Rcpp::List store_adjoint(std::vector<double> pars, std::vector<double> y0,
                              double t_end, std::vector<double> lambda_end,
@@ -394,6 +411,12 @@ testthat::test_that("a replay takes the run's inner steps, at the run's paramete
   expect_error(store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6,
                             0.1, "rodas"),
                "cannot take a System's block alone")
+})
+
+testthat::test_that("a walk at another scalar refuses a step that took the store alone", {
+  compile_alone_interface()
+  expect_error(store_tangent_walk(store_pars, store_y, 0.5, 1e-6, 0.1),
+               "cannot take a recorded step that took the System's block alone")
 })
 
 testthat::test_that("the sweep through steps taken alone matches central differences of the replayed program", {
