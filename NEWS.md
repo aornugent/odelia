@@ -20,7 +20,13 @@ Only `method = "rkck"` records a run: `"dopri"` and `"rodas"` refuse a sweep or 
 
 A consumer that `LinkingTo` odelia now compiles as C++20 (`CXX_STD = CXX20`) and must set the same two XAD defines as `src/Makevars`, `-DXAD_NO_THREADLOCAL -DXAD_USE_STRONG_INLINE`: the storage class of the active tape does not change the symbol's name, so a translation unit built without them reaches the same tape through the other storage class.
 
-A **minor** bump: `rebind()` becomes `rebind_from()`, the trait probes become concepts, `ode_fit.hpp` and the `active` argument on the `Solver_*` bindings go, and `step_record` changes shape, so a System or a consumer that touched any of those recompiles differently. 0.6.0 and 0.6.1 shipped between this change's first draft and its merge; the reverse-mode machinery sits on top of both.
+A **minor** bump: `rebind()` becomes `rebind_from()`, the trait probes become concepts, `ode_fit.hpp` and the `active` argument on the `Solver_*` bindings go, and `step_record` changes shape, so a System or a consumer that touched any of those recompiles differently. 0.6.0, 0.6.1 and 0.6.2 shipped between this change's first draft and its merge; the reverse-mode machinery sits on top of all three.
+
+## odelia 0.6.2
+
+**Resizing a solver no longer costs the square of the state length when RODAS is not the stepper (plant#656).** `SolverInternal::resize()` resizes every stepper the solver holds, and `RodasStep::resize()` zero-filled its two dense n×n buffers (`J`, `W`) each time, whatever the method. A consumer that changes its state length often paid that on every change: plant grows its state at each cohort introduction, so a run over n unknowns cost O(n²) per introduction for a stepper it never calls. The buffers are now sized on RODAS's first step at a new length, and `W` without a fill, since every step overwrites it. Results are bit-identical; only allocation moved. In plant, `run_mutant()` over 51 FF16 mutants against one resident fell from 45 s to 0.72 s (63×), now cheaper per mutant than running them one at a time, and a three-species FF16 resident run from 0.76 s to 0.37 s.
+
+A **patch** bump: no signature changes, and the same results for every method.
 
 ## odelia 0.6.1
 
