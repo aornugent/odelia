@@ -237,7 +237,7 @@ private:
   std::array<std::vector<double>, 6> sign_values;
   // Where that step took the System's block alone, the predictor's block at the
   // sample fractions and where the block starts; empty otherwise.
-  std::array<std::vector<double>, 5> alone_samples;
+  std::array<state_type, 5> alone_samples;
   std::size_t alone_first = 0;
 
   // Cash carp constants, from GSL.
