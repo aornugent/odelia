@@ -252,6 +252,15 @@ struct solved_row {
   std::vector<split_block<Values>> split_blocks;
 };
 
+// Where a step took the System's block alone: the slope its predictor
+// extrapolated the block's inputs by, and where each inner step ended, as
+// fractions of the step. Both passes take the same inner steps. Empty where the
+// step took the block with the rest.
+struct alone_steps {
+  std::vector<double> slope;
+  std::vector<double> ends;
+};
+
 // One instruction of a program: what carries the state from one boundary to the
 // next. A step reaches `time`, by `step_size` where a run pinned it and by whatever
 // the controller chooses where that is NaN. A insertion applies the System's own
@@ -270,10 +279,14 @@ struct solved_row {
 // The first entry is where a program starts, which no instruction reached: a step
 // of NaN size. `insertion` is last and defaults, so a grid written {time, NaN} is a
 // program of steps without saying so.
+//
+// `alone` is a step's record where it took the System's block alone (see
+// StepsBlockAlone); a replay and the sweep take it as recorded.
 struct instruction {
   double time;
   double step_size;
   bool insertion = false;
+  alone_steps alone{};
 };
 
 // One row of a recording: the instruction the run executed and the state it left
@@ -351,6 +364,21 @@ template <typename System>
 concept WeighsErrors = requires(const System& s, double time,
                                 std::vector<double>& w) {
   { s.error_weights(time, w) } -> std::same_as<void>;
+};
+
+// A System whose block [first, first + size) of the state reads the rest only
+// through inputs, so a step can take the block alone: whether the step about to
+// be taken does, the inputs the last evaluation handed the block, and its rates
+// under given inputs, at the System's scalar.
+template <typename System>
+concept StepsBlockAlone =
+  requires(const System& s, double time,
+           const std::vector<typename System::value_type>& y,
+           std::vector<typename System::value_type>& out) {
+  { s.alone_block() } -> std::same_as<std::pair<std::size_t, std::size_t>>;
+  { s.steps_alone() } -> std::same_as<bool>;
+  s.alone_inputs(out);
+  s.alone_rates(time, y, y, out);
 };
 
 // The recursive interface. Each helper walks a container of elements, threading
