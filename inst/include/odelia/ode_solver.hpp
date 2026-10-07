@@ -214,7 +214,7 @@ public:
           util::stop("A recorded step carries the size it took; row " +
                      util::to_string(k) + " has none");
         }
-        solver.step_by(system, row.step_size, row.time, &row);
+        solver.step_by(system, row.step_size, row.time, nullptr, &row);
       }
       else if (std::isnan(row.step_size))
       {
@@ -222,7 +222,7 @@ public:
       }
       else
       {
-        solver.step_by(system, row.step_size, row.time);
+        solver.step_by(system, row.step_size, row.time, &row.alone);
       }
       if (collect)
       {
@@ -519,7 +519,7 @@ private:
       solver.step_adjoint(active, rec[k - 1].solved.at_state,
                           ode::at_state_time(rec, k - 1), rec[k].solved,
                           rec[k - 1].time, rec[k].step_size, from,
-                          lambda, lambda_in, parameter_adjoint);
+                          lambda, lambda_in, parameter_adjoint, rec[k].alone);
       // Swapped rather than moved from: a move leaves the buffer this step wrote
       // into empty, so the next step allocates one the same size again. Swapping
       // hands it the row above's, which the sweep refills rather than regrows.
