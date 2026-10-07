@@ -123,9 +123,16 @@ public:
   static const bool first_same_as_last = true;
 
 private:
+  // The five stages and the end, at the caller's scalar: the forward step and the
+  // recording its transpose is taken from both take this, so the two cannot come
+  // apart. k[0] holds y0's rates; `y_end` may be `y0`.
+  template <class Sys, class Row, class S>
+  void take_step(Sys& sys, Row& solved, double time, double h,
+                 const std::vector<S>& y0, std::vector<std::vector<S>>& k,
+                 std::vector<S>& y_end);
+
   // The tableau, written once and used at whatever scalar the caller holds its
-  // rates in: the forward step and the recording its transpose is taken from
-  // both step through these, so the two cannot come apart.
+  // rates in.
   //
   // Y_i for stage i, into `out`: y at stage 0, and y plus the combination of the
   // earlier stage rates above that. Callers pass 1..5; see stage_row for why the
@@ -156,7 +163,6 @@ private:
 
   size_t size;
   std::vector<state_type> k{6};
-  state_type ytmp;
   // Where the step just taken started, which a System that splits reads.
   state_type y_start;
   // Each block's sign value at the five stages, then at the end, of that step.
@@ -207,7 +213,6 @@ void Step<System>::resize(size_t size_) {
   for (state_type& stage_rate : k) {
     stage_rate.resize(size);
   }
-  ytmp.resize(size);
 }
 
 template <class System>
@@ -233,15 +238,7 @@ void Step<System>::step(System& system,
   if constexpr (SplitsSignChanges<System>) {
     y_start = y;
   }
-  for (int i = 1; i < 6; ++i) {
-    stage_state(i, y, k, h, ytmp);
-    ode::derivs(system, ytmp, k[i], stage_time(i, time, h), solved.stages[i - 1]);
-    if constexpr (SplitsSignChanges<System>) {
-      system.sign_values(sign_values[i - 1]);
-    }
-  }
-
-  step_end(y, k, h, y);
+  take_step(system, solved, time, h, y, k, y);
   ode::derivs(system, y, dydt_out, time + h, solved.at_state);
   if constexpr (SplitsSignChanges<System>) {
     system.sign_values(sign_values[5]);
@@ -252,6 +249,23 @@ void Step<System>::step(System& system,
     yerr[q] = h * (ec[1] * k[0][q] + ec[3] * k[2][q] + ec[4] * k[3][q] +
                    ec[5] * k[4][q] + ec[6] * k[5][q]);
   }
+}
+
+template <class System>
+template <class Sys, class Row, class S>
+void Step<System>::take_step(Sys& sys, Row& solved, double time, double h,
+                             const std::vector<S>& y0,
+                             std::vector<std::vector<S>>& k,
+                             std::vector<S>& y_end) {
+  std::vector<S> stage(y0.size());
+  for (int i = 1; i < 6; ++i) {
+    stage_state(i, y0, k, h, stage);
+    ode::derivs(sys, stage, k[i], stage_time(i, time, h), solved.stages[i - 1]);
+    if constexpr (SplitsSignChanges<Sys>) {
+      sys.sign_values(sign_values[i - 1]);
+    }
+  }
+  step_end(y0, k, h, y_end);
 }
 
 // The tableau row stage i's state combines the earlier stage rates with.
@@ -562,16 +576,10 @@ void Step<System>::step_adjoint(active_system<System>& active,
                         std::vector<scalar>& y_end) -> void {
     const std::vector<scalar> y0(x, x + static_cast<std::ptrdiff_t>(size));
     std::vector<std::vector<scalar>> rate(6, std::vector<scalar>(size));
-    std::vector<scalar> stage(size);
     // k1 repeats the evaluation the row below recorded at this state.
     ode::derivs(sys, y0, rate[0], first_time, first);
-    ++recorded_rates;
-    for (int i = 1; i < 6; ++i) {
-      stage_state(i, y0, rate, h, stage);
-      ode::derivs(sys, stage, rate[i], stage_time(i, time, h), solved.stages[i - 1]);
-      ++recorded_rates;
-    }
-    step_end(y0, rate, h, y_end);
+    take_step(sys, solved, time, h, y0, rate, y_end);
+    recorded_rates += 6;
     if constexpr (SplitsSignChanges<System>) {
       if (!solved.split_blocks.empty()) {
         // The dense output reads the rates at the end before the split, and the
