@@ -323,8 +323,9 @@ private:
   // Each block's sign value where dydt_in was evaluated.
   std::vector<double> sign_values_in;
   std::vector<std::size_t> splits_by_block_;
-  // The block's inputs at the last accepted step's start and that step's size, from
-  // which a step taken alone takes its slope; empty once the state is set anew.
+  // The block's inputs at the last accepted step's start and that step's size,
+  // from which a step taken alone takes its slope; empty once the state is set
+  // to another.
   state_type alone_inputs_last_;
   double alone_step_last_ = 0.0;
 
@@ -346,6 +347,7 @@ void SolverInternal<System>::reset(System& system) {
   prev_steps.clear();
   outcomes_ = ode::step_outcomes();
   splits_by_block_.clear();
+  alone_inputs_last_.clear();
   step_size_last = control.step_size_initial;
   time_max = std::numeric_limits<double>::infinity();
   set_state_from_system(system);
@@ -359,8 +361,16 @@ template <class System>
 void SolverInternal<System>::set_state_from_system(
     System& system, const solved_values_t<System>* seed) {
   open_at(ode::ode_time(system));
+  if constexpr (std::same_as<value_type, double>) {
+    // An insertion that changes nothing, as a zero pulse at a knot, keeps the
+    // inputs a step taken alone takes its slope from.
+    state_type now(system.ode_size());
+    system.ode_state(now.begin());
+    if (now != y) {
+      alone_inputs_last_.clear();
+    }
+  }
   resize(system.ode_size());
-  alone_inputs_last_.clear();
   system.ode_state(y.begin());
   solved_values_t<System> at_state = seed != nullptr ? *seed : solved_values_t<System>{};
   ode::derivs(system, y, dydt_in, time, at_state);

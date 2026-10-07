@@ -249,6 +249,32 @@ compile_alone_interface <- function() {
         Rcpp::_["last_dense"] = last_dense);
     }
 
+    // A run stopped at `t_stop`, where an insertion that changes nothing may
+    // follow: where it lands, and the slope its first step after the stop took.
+    // [[Rcpp::export]]
+    Rcpp::List store_stopped_run(double share, double tol, double t_stop,
+                                 double t_end, std::vector<double> pars,
+                                 std::vector<double> y0, bool insert) {
+      ode::Solver<StoreA> solver(store(pars, share), control_at(tol));
+      solver.set_keep_states(true);
+      solver.set_state(y0, 0.0);
+      solver.advance_adaptive({0.0, t_stop});
+      if (insert) {
+        solver.push_insertion();
+        solver.set_state_from_system();
+      }
+      solver.advance_adaptive({t_stop, t_end});
+      std::vector<double> slope;
+      for (const auto& row : solver.recording()) {
+        if (row.time > t_stop) {
+          slope = row.alone.slope;
+          break;
+        }
+      }
+      return Rcpp::List::create(Rcpp::_["y"] = solver.state(),
+                                Rcpp::_["slope"] = slope);
+    }
+
     // [[Rcpp::export]]
     Rcpp::List store_plain_run(double tol, double t_end,
                                std::vector<double> pars,
@@ -357,6 +383,15 @@ testthat::test_that("each row records its slope and inner steps, landing on ever
   expect_true(r$ascending)
   expect_true(r$stops_landed)
   expect_gt(r$inner, 8L * r$alone)
+})
+
+testthat::test_that("an insertion that changes nothing keeps the slope of the step taken alone after it", {
+  compile_alone_interface()
+  stopped <- store_stopped_run(0.1, 1e-6, 0.7, 2.0, store_pars, store_y, FALSE)
+  inserted <- store_stopped_run(0.1, 1e-6, 0.7, 2.0, store_pars, store_y, TRUE)
+  expect_true(all(stopped$slope != 0))
+  expect_identical(inserted$slope, stopped$slope)
+  expect_identical(inserted$y, stopped$y)
 })
 
 testthat::test_that("the dense output reads the store from the predictor's inner steps", {
