@@ -79,7 +79,8 @@ public:
                     const typename Step<System>::solved_row& solved, double time,
                     double step_size, const state_type& y,
                     const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
-                    adjoint_rows& parameter_adjoint) {
+                    adjoint_rows& parameter_adjoint,
+                    const alone_steps& alone = alone_steps{}) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck'.");
     }
@@ -89,7 +90,7 @@ public:
     // is the end of the solver's forward state either way.
     resize(lambda_out.width());
     stepper.step_adjoint(active, first, first_time, solved, time, step_size, y,
-                         lambda_out, lambda_in, parameter_adjoint);
+                         lambda_out, lambda_in, parameter_adjoint, alone);
   }
 
   // The tape a sweep's recordings are taken on.
@@ -151,16 +152,20 @@ public:
 
   // One accepted step, into the record: the time it reached, the size that
   // reached it, and the state there where the run was asked to keep states.
-  void push_step(System& system, double time_, double step_size);
+  // `alone` is the step's record where it took the System's block alone.
+  void push_step(System& system, double time_, double step_size,
+                 const alone_steps& alone = alone_steps{});
   // The insertion the caller just applied, as a row of its own: it holds the state
   // the map produced, at the time the row below it holds. Only schedule() has to
   // know that two rows share a time, and it drops these.
   void push_insertion(System& system);
   void step_to(System& system, double time_max_);
   // `reached` is the time a recording says this step ended at; NaN accumulates.
+  // `alone` is a program row's record where the run took the block alone.
   // `recorded` is the row a walk follows, for its evaluations and its splits.
   template <class Row = step_record<System>>
   void step_by(System& system, double step_size, double reached,
+               const alone_steps* alone = nullptr,
                const Row* recorded = nullptr);
   void step_euler(System& system, double time_max_);
 
@@ -184,8 +189,14 @@ private:
   void stepper_step(System& system, double time_, double step_size,
                     state_type& y_, state_type& yerr_,
                     const state_type& dydt_in_, state_type& dydt_out_,
-                    const typename Step<System>::solved_row* recorded = nullptr) {
+                    const typename Step<System>::solved_row* recorded = nullptr,
+                    const alone_steps* alone = nullptr,
+                    const state_type& inputs = {}) {
     if (method == Method::rodas) {
+      if (alone != nullptr) {
+        util::stop("method='rodas' cannot take a System's block alone; use "
+                   "method='rkck'.");
+      }
       if (recorded != nullptr) {
         // RODAS keeps no row, so a walk would drop what the recording holds.
         util::stop("method='rodas' cannot walk a recording: the Rosenbrock "
@@ -218,7 +229,7 @@ private:
         solved_scratch_.split_blocks.clear();
       }
       stepper.step(system, solved_scratch_, time_, step_size, y_, yerr_,
-                   dydt_in_, dydt_out_);
+                   dydt_in_, dydt_out_, alone, inputs);
     }
   }
   // Hand the step just taken to a System that splits, and evaluate the end's rates
@@ -312,6 +323,10 @@ private:
   // Each block's sign value where dydt_in was evaluated.
   std::vector<double> sign_values_in;
   std::vector<std::size_t> splits_by_block_;
+  // The block's inputs at the last accepted step's start and that step's size, from
+  // which a step taken alone takes its slope; empty once the state is set anew.
+  state_type alone_inputs_last_;
+  double alone_step_last_ = 0.0;
 
   bool dydt_in_is_clean;
 };
@@ -345,6 +360,7 @@ void SolverInternal<System>::set_state_from_system(
     System& system, const solved_values_t<System>* seed) {
   open_at(ode::ode_time(system));
   resize(system.ode_size());
+  alone_inputs_last_.clear();
   system.ode_state(y.begin());
   solved_values_t<System> at_state = seed != nullptr ? *seed : solved_values_t<System>{};
   ode::derivs(system, y, dydt_in, time, at_state);
@@ -368,7 +384,8 @@ void SolverInternal<System>::set_state_from_system(
 // state it holds.
 template <class System>
 void SolverInternal<System>::push_step(System& system, double time_,
-                                       double step_size) {
+                                       double step_size,
+                                       const alone_steps& alone) {
   // Counted when the step is committed; the scratch row moves into the record
   // below, so no later step counts it again.
   for (const auto& block : solved_scratch_.split_blocks) {
@@ -377,7 +394,7 @@ void SolverInternal<System>::push_step(System& system, double time_,
     }
     ++splits_by_block_[block.block];
   }
-  step_record<System> record{{time_, step_size}, state_type()};
+  step_record<System> record{{time_, step_size, false, alone}, state_type()};
   record.error_index = control.error_index;
   record.error_ratio = control.error_ratio;
   if (keep_states_) {
@@ -551,6 +568,34 @@ void SolverInternal<System>::step(System& system) {
     system.state_tolerance_factors(time_orig, factors);
   }
 
+  // Held across this step's retries: whether it takes the block alone, the slope
+  // since the last accepted step, and the block's factor, the least outside it.
+  alone_steps alone;
+  state_type inputs;
+  if constexpr (StepsBlockAlone<System> && std::same_as<value_type, double>) {
+    system.alone_inputs(inputs);
+    if (method == Method::rkck && system.steps_alone()) {
+      alone.slope.assign(inputs.size(), 0.0);
+      if (alone_inputs_last_.size() == inputs.size()) {
+        for (size_t q = 0; q < inputs.size(); ++q) {
+          alone.slope[q] = (inputs[q] - alone_inputs_last_[q]) / alone_step_last_;
+        }
+      }
+      const auto [first, n] = system.alone_block();
+      double outside = std::numeric_limits<double>::infinity();
+      for (size_t q = 0; q < factors.size(); ++q) {
+        if (q < first || q >= first + n) {
+          outside = std::min(outside, factors[q]);
+        }
+      }
+      if (std::isfinite(outside)) {
+        std::fill(factors.begin() + static_cast<std::ptrdiff_t>(first),
+                  factors.begin() + static_cast<std::ptrdiff_t>(first + n),
+                  outside);
+      }
+    }
+  }
+
   while (true) {
     // Does this appear to be the last step before reaching `time_max`?
     const bool final_step = step_size > time_remaining;
@@ -574,7 +619,17 @@ void SolverInternal<System>::step(System& system) {
     bool invalid = false;
     std::string invalid_reason;
     try {
-      stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
+      // A step taken alone chooses its inner steps, then takes them as a replay
+      // would.
+      if constexpr (StepsBlockAlone<System> && std::same_as<value_type, double>) {
+        if (!alone.slope.empty()) {
+          alone.ends = stepper.alone_ends(system, time, step_size, y, dydt_in,
+                                          inputs, alone.slope,
+                                          control.get_step_size_min());
+        }
+      }
+      stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, nullptr,
+                   alone.slope.empty() ? nullptr : &alone, inputs);
     } catch (const util::DomainError& e) {
       invalid = true;
       invalid_reason = e.what();
@@ -672,7 +727,9 @@ void SolverInternal<System>::step(System& system) {
 	      step_size_last = step_size_next;
       }
       save_dydt_out_as_in();
-      push_step(system, time, step_size);
+      push_step(system, time, step_size, alone);
+      alone_inputs_last_ = std::move(inputs);
+      alone_step_last_ = step_size;
       return; // This exits the infinite loop.
     }
   }
@@ -789,7 +846,8 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
 template <class System>
 template <class Row>
 void SolverInternal<System>::step_by(System& system, double step_size,
-                                     double reached, const Row* recorded) {
+                                     double reached, const alone_steps* alone,
+                                     const Row* recorded) {
   if (!util::is_finite(step_size)) {
     util::stop("step_size must be finite!");
   }
@@ -798,8 +856,26 @@ void SolverInternal<System>::step_by(System& system, double step_size,
   }
   control.forget_error_component();
   setup_dydt_in(system);
+  // A program's step taken alone takes the run's inner steps on its own inputs.
+  // ⚠️ A WALK STEPS THE BLOCK WITH THE REST: its evaluations read what the run
+  // recorded, so its own block is never read. A System whose walk read its own
+  // block would step it past its stability limit on such a row.
+  const bool taken_alone = alone != nullptr && !alone->slope.empty();
+  state_type inputs;
+  if constexpr (StepsBlockAlone<System>) {
+    if (taken_alone) {
+      system.alone_inputs(inputs);
+    }
+  }
+  if constexpr (!std::same_as<value_type, double>) {
+    if (recorded != nullptr && !recorded->alone.slope.empty()) {
+      util::stop("A walk at this scalar cannot take a recorded step that took "
+                 "the System's block alone.");
+    }
+  }
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out,
-               recorded != nullptr ? &recorded->solved : nullptr);
+               recorded != nullptr ? &recorded->solved : nullptr,
+               taken_alone ? alone : nullptr, inputs);
   if (recorded == nullptr) {
     split(system, time, step_size);
   } else if (!recorded->solved.split_blocks.empty()) {
@@ -813,7 +889,7 @@ void SolverInternal<System>::step_by(System& system, double step_size,
   // t1 -- so a replay that adds arrives a bit short and has to be nudged.
   time = util::is_finite(reached) ? reached : time + step_size;
   time_max = time;
-  push_step(system, time, step_size);
+  push_step(system, time, step_size, taken_alone ? *alone : alone_steps{});
 }
 
 template <class System>
