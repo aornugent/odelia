@@ -214,7 +214,7 @@ public:
           util::stop("A recorded step carries the size it took; row " +
                      util::to_string(k) + " has none");
         }
-        solver.step_by(system, row.step_size, row.time, nullptr, &row);
+        solver.step_by(system, row, &row);
       }
       else if (std::isnan(row.step_size))
       {
@@ -222,7 +222,7 @@ public:
       }
       else
       {
-        solver.step_by(system, row.step_size, row.time, &row.alone);
+        solver.step_by(system, row);
       }
       if (collect)
       {

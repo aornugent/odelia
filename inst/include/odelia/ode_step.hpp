@@ -378,7 +378,7 @@ std::vector<double> Step<System>::alone_ends(
       if (inner.step_size_shrank()) {
         if (!(substep < asked)) {
           throw util::DomainError(
-            "The System's block alone is not finite at the smallest step");
+            "The System's block alone fails its error test at the smallest step");
         }
         continue;
       }
@@ -480,7 +480,7 @@ void Step<System>::take_step_alone(Sys& sys, Row& solved, double time, double h,
     sys.alone_inputs(stage_inputs[i - 1]);
   }
 
-  // The corrector, to the inputs of the fourth stage, at t + h, over the same
+  // The corrector, to the inputs at the stage at t + h, over the same
   // inner steps; the step keeps its end.
   const std::vector<S>& u1 = stage_inputs[3];
   const std::vector<S> end = pass(u1, [](double, const std::vector<S>&) {});

@@ -160,12 +160,11 @@ public:
   // know that two rows share a time, and it drops these.
   void push_insertion(System& system);
   void step_to(System& system, double time_max_);
-  // `reached` is the time a recording says this step ended at; NaN accumulates.
-  // `alone` is a program row's record where the run took the block alone.
-  // `recorded` is the row a walk follows, for its evaluations and its splits.
+  // A step of `row`'s size to its time, where a NaN time accumulates. A program's
+  // row taken alone takes its recorded inner steps; `recorded` is the row a walk
+  // follows, for its evaluations and its splits.
   template <class Row = step_record<System>>
-  void step_by(System& system, double step_size, double reached,
-               const alone_steps* alone = nullptr,
+  void step_by(System& system, const instruction& row,
                const Row* recorded = nullptr);
   void step_euler(System& system, double time_max_);
 
@@ -855,9 +854,9 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
 // says.  This is used by advance_fixed_steps.
 template <class System>
 template <class Row>
-void SolverInternal<System>::step_by(System& system, double step_size,
-                                     double reached, const alone_steps* alone,
+void SolverInternal<System>::step_by(System& system, const instruction& row,
                                      const Row* recorded) {
+  const double step_size = row.step_size;
   if (!util::is_finite(step_size)) {
     util::stop("step_size must be finite!");
   }
@@ -866,11 +865,13 @@ void SolverInternal<System>::step_by(System& system, double step_size,
   }
   control.forget_error_component();
   setup_dydt_in(system);
+  // The slope of a later adaptive step comes from adaptive steps alone.
+  alone_inputs_last_.clear();
   // A program's step taken alone takes the run's inner steps on its own inputs.
   // ⚠️ A WALK STEPS THE BLOCK WITH THE REST: its evaluations read what the run
   // recorded, so its own block is never read. A System whose walk read its own
   // block would step it past its stability limit on such a row.
-  const bool taken_alone = alone != nullptr && !alone->slope.empty();
+  const bool taken_alone = recorded == nullptr && !row.alone.slope.empty();
   state_type inputs;
   if constexpr (StepsBlockAlone<System>) {
     if (taken_alone) {
@@ -878,14 +879,14 @@ void SolverInternal<System>::step_by(System& system, double step_size,
     }
   }
   if constexpr (!std::same_as<value_type, double>) {
-    if (recorded != nullptr && !recorded->alone.slope.empty()) {
+    if (recorded != nullptr && !row.alone.slope.empty()) {
       util::stop("A walk at this scalar cannot take a recorded step that took "
                  "the System's block alone.");
     }
   }
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out,
                recorded != nullptr ? &recorded->solved : nullptr,
-               taken_alone ? alone : nullptr, inputs);
+               taken_alone ? &row.alone : nullptr, inputs);
   if (recorded == nullptr) {
     split(system, time, step_size);
   } else if (!recorded->solved.split_blocks.empty()) {
@@ -897,9 +898,9 @@ void SolverInternal<System>::step_by(System& system, double step_size,
   // this time plus this size. A run does not accumulate either: its last step
   // into an interval is set to the interval's end, and fl(t + (t1 - t)) is not
   // t1 -- so a replay that adds arrives a bit short and has to be nudged.
-  time = util::is_finite(reached) ? reached : time + step_size;
+  time = util::is_finite(row.time) ? row.time : time + step_size;
   time_max = time;
-  push_step(system, time, step_size, taken_alone ? *alone : alone_steps{});
+  push_step(system, time, step_size, taken_alone ? row.alone : alone_steps{});
 }
 
 template <class System>

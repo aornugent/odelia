@@ -430,7 +430,7 @@ testthat::test_that("the dense output reads the store from the predictor's inner
 testthat::test_that("a store whose rates fail at every inner step stops the run, saying why", {
   compile_alone_interface()
   expect_error(store_run(0.1, 1e-6, 2.0, store_pars, store_y, fail_after = 1.0),
-               "block alone is not finite at the smallest step")
+               "block alone fails its error test at the smallest step")
 })
 
 testthat::test_that("a replay takes the run's inner steps, at the run's parameters to the bit", {
