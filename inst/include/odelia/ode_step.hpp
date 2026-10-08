@@ -31,8 +31,8 @@ public:
   size_t order() const;
   // `solved` is the row this step creates: each of its six evaluations stores
   // into its own slot, which holds whatever the caller put there beforehand.
-  // `alone`, where the step takes the System's block alone, is the row's record,
-  // which the step takes as recorded, and `inputs` the block's at the start.
+  // `alone`, where the step takes the System's block alone, holds its inner
+  // steps, and `inputs` are the block's at the start.
   void step(System& system, solved_row& solved,
             double time, double step_size,
 	    state_type &y,
@@ -42,14 +42,21 @@ public:
             const alone_steps* alone = nullptr,
             const state_type& inputs = {});
 
-  // Where the predictor's inner steps end: Cash-Karp on the block alone under
+  // The inner steps a step taken alone takes: Cash-Karp on the block under
   // `inputs` extrapolated by `slope`, at alone_tol, landing on every stop.
-  std::vector<double> alone_ends(const System& system, double time,
+  alone_steps choose_alone_steps(const System& system, double time,
                                  double step_size, const state_type& y,
                                  const state_type& dydt, const state_type& inputs,
-                                 const std::vector<double>& slope,
+                                 std::vector<double> slope,
                                  double step_size_min) const
     requires StepsBlockAlone<System>;
+
+  // The block a step took alone, at each sample fraction, and where it starts.
+  template <class S>
+  struct block_samples {
+    std::size_t first = 0;
+    std::array<std::vector<S>, 5> at{};
+  };
 
   // The step just taken, handed to a System that splits, which rewrites `y_end`
   // for each block it splits. The sign values are set at double only.
@@ -64,10 +71,8 @@ public:
     std::vector<S>& y_end;
     const std::vector<double>* sign_values_in = nullptr;
     const std::array<std::vector<double>, 6>* sign_values = nullptr;
-    // Where the step took the System's block alone: the predictor's block at each
-    // sample fraction, and where the block starts.
-    const std::array<std::vector<S>, 5>* alone_samples = nullptr;
-    std::size_t alone_first = 0;
+    // Where the step took the System's block alone, the predictor's block.
+    const block_samples<S>* alone = nullptr;
 
     // Where a System samples what its blocks read. The quartic through the five
     // samples is the dense output exactly, and a smooth function of it to O(h^5).
@@ -75,21 +80,21 @@ public:
                                                             1.0};
 
     // As many components from `first` as `out` holds, of the state at fraction u
-    // of the step, on Cash-Karp's fourth-order continuous extension. A block the
-    // step took alone is read from the predictor's samples instead.
+    // of the step, on Cash-Karp's fourth-order continuous extension; a block the
+    // step took alone, on the quartic through the predictor's samples.
     template <class U>
     void dense_state(const U& u, std::size_t first, std::vector<S>& out) const {
       stepper.dense_state(u, h, y0, k, end_rate, first, out);
-      if (alone_samples == nullptr) {
+      if (alone == nullptr) {
         return;
       }
       std::vector<S> block;
-      sample_at(u, *alone_samples, block);
-      const std::size_t lo = std::max(first, alone_first);
+      sample_at(u, alone->at, block);
+      const std::size_t lo = std::max(first, alone->first);
       const std::size_t hi =
-        std::min(first + out.size(), alone_first + block.size());
+        std::min(first + out.size(), alone->first + block.size());
       for (std::size_t q = lo; q < hi; ++q) {
-        out[q - first] = block[q - alone_first];
+        out[q - first] = block[q - alone->first];
       }
     }
     // The quartic through samples taken at each of sample_fractions, at u.
@@ -117,8 +122,7 @@ public:
                            const state_type& dydt_out, state_type& y,
                            const std::vector<double>& sign_values_in) const {
     return {*this, time, step_size, y_start, k, dydt_out, y, &sign_values_in,
-            &sign_values, alone_samples[0].empty() ? nullptr : &alone_samples,
-            alone_first};
+            &sign_values, alone_samples ? &*alone_samples : nullptr};
   }
   // Each block's sign value where the step just taken ended, which the next step
   // starts from; read again after the end's rates are evaluated again.
@@ -135,15 +139,15 @@ public:
   // the parameter halves to be got wrong.
   //
   // `first` is what the evaluation at the step's start state solved for, and
-  // `first_time` when it ran: the row below's `at_state`. `alone` is the row's
-  // record where the step took the System's block alone.
+  // `first_time` when it ran: the row below's `at_state`. `alone` holds the row's
+  // inner steps where the step took the System's block alone.
   void step_adjoint(active_system<System>& active,
                     const solved_values& first, double first_time,
                     const solved_row& solved,
                     double time, double step_size,
                     const state_type &y, const adjoint_rows& lambda_out,
                     adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint,
-                    const alone_steps& alone = alone_steps{});
+                    const std::optional<alone_steps>& alone = std::nullopt);
 
   // Rate evaluations the sweeps since the last clear have recorded, counted where
   // they are recorded rather than added up as a total the loop could disagree
@@ -157,41 +161,46 @@ public:
   static const bool first_same_as_last = true;
 
 private:
-  // The five stages and the end, at the caller's scalar: the forward step and the
-  // recording its transpose is taken from both take this, so the two cannot come
-  // apart. k[0] holds y0's rates; `y_end` may be `y0`.
+  // The five stages and the end at the caller's scalar, for the forward step and
+  // the sweep's recording. k[0] holds y0's rates; `y_end` may be `y0`.
   template <class Sys, class Row, class S>
   void take_step(Sys& sys, Row& solved, double time, double h,
                  const std::vector<S>& y0, std::vector<std::vector<S>>& k,
                  std::vector<S>& y_end);
 
-  // Where the predictor of a step taken alone stops: each stage's fraction and
-  // each sample fraction, written as ah[] and sample_fractions write them.
-  static constexpr std::array<double, 8> alone_stops{
-    1.0 / 5.0, 0.25, 0.3, 0.5, 3.0 / 5.0, 0.75, 7.0 / 8.0, 1.0};
   // The inner steps' relative tolerance; the absolute one is 1e-4 of it.
   static constexpr double alone_tol = 1e-9;
 
-  // A step taken alone: in, the row's record and the block's inputs at its start;
-  // out, the predictor's block at the sample fractions and, at double, its error.
-  template <class S>
-  struct alone_pass {
-    const alone_steps& record;
-    const std::vector<S>& inputs;
-    std::array<std::vector<S>, 5> samples{};
-    std::vector<double> error{};
-  };
-  // take_step for a step taken alone, over the record's inner steps.
+  // take_step for a step taken alone, over `alone`'s inner steps from the block's
+  // `inputs`; fills the predictor's `samples` and returns, at double, the
+  // coupling's error.
   template <class Sys, class Row, class S>
-  void take_step_alone(Sys& sys, Row& solved, double time, double h,
-                       const std::vector<S>& y0, std::vector<std::vector<S>>& k,
-                       std::vector<S>& y_end, alone_pass<S>& alone);
+  std::vector<double> take_step_alone(Sys& sys, Row& solved, double time,
+                                      double h, const std::vector<S>& y0,
+                                      std::vector<std::vector<S>>& k,
+                                      std::vector<S>& y_end,
+                                      const alone_steps& alone,
+                                      const std::vector<S>& inputs,
+                                      block_samples<S>& samples);
   // The inputs extrapolated over the step by `slope`, stopping at zero rather
   // than changing sign.
   template <class S>
   static std::vector<S> predicted_inputs(const std::vector<S>& inputs,
                                          const std::vector<double>& slope,
                                          double h);
+  // `rates(u, block, out)`: the block's rates at fraction u of a step of h from
+  // `time`, under inputs on the line from `from` to `to`.
+  template <class Sys, class S>
+  static auto rates_on_line(const Sys& sys, double time, double h,
+                            const std::vector<S>& from, const std::vector<S>& to) {
+    return [&sys, time, h, &from, &to, line = std::vector<S>(from.size())](
+             double u, const std::vector<S>& block, std::vector<S>& out) mutable {
+      for (std::size_t q = 0; q < line.size(); ++q) {
+        line[q] = from[q] + (to[q] - from[q]) * u;
+      }
+      sys.alone_rates(time + u * h, block, line, out);
+    };
+  }
 
   // The tableau, written once and used at whatever scalar the caller holds its
   // rates in.
@@ -226,6 +235,12 @@ private:
                         double h, const std::vector<S>& y0,
                         const std::vector<std::vector<S>>& k, Rates&& rates,
                         std::vector<S>& own, AtEnd&& at_end) const;
+  // One substep of a block, from fraction `from` to `to` of a step of h, from `own`
+  // whose rates r[0] holds, into `out`; r[1..5] take its stage rates.
+  template <class S, class U, class Rates>
+  void take_substep(const std::vector<S>& own, std::vector<std::vector<S>>& r,
+                  const U& from, const U& to, double h, Rates&& rates,
+                  std::vector<S>& out) const;
   double stage_time(int i, double time, double h) const;
   const double* stage_row(int i) const;
 
@@ -235,13 +250,25 @@ private:
   state_type y_start;
   // Each block's sign value at the five stages, then at the end, of that step.
   std::array<std::vector<double>, 6> sign_values;
-  // Where that step took the System's block alone, the predictor's block at the
-  // sample fractions and where the block starts; empty otherwise.
-  std::array<state_type, 5> alone_samples;
-  std::size_t alone_first = 0;
+  // Where that step took the System's block alone, the predictor's block.
+  std::optional<block_samples<value_type>> alone_samples;
 
   // Cash carp constants, from GSL.
-  static const double ah[];
+  static constexpr double ah[5] = {1.0 / 5.0, 0.3, 3.0 / 5.0, 1.0, 7.0 / 8.0};
+  // Where the predictor of a step taken alone stops: each stage's fraction and
+  // each sample fraction after the start, ascending.
+  static constexpr std::array<double, 8> alone_stops = [] {
+    const auto& samples = taken_step<double>::sample_fractions;
+    std::array<double, std::size(ah) + samples.size() - 1> all{};
+    std::copy(std::begin(ah), std::end(ah), all.begin());
+    std::copy(samples.begin() + 1, samples.end(), all.begin() + std::size(ah));
+    std::sort(all.begin(), all.end());
+    std::array<double, 8> stops{};
+    if (std::unique_copy(all.begin(), all.end(), stops.begin()) != stops.end()) {
+      throw "alone_stops holds each distinct fraction once";
+    }
+    return stops;
+  }();
   static const double b21;
   static const double b3[];
   static const double b4[];
@@ -313,15 +340,12 @@ void Step<System>::step(System& system,
     y_start = y;
   }
   std::vector<double> block_error;
-  alone_samples[0].clear();
+  alone_samples.reset();
   if (alone == nullptr) {
     take_step(system, solved, time, h, y, k, y);
   } else if constexpr (StepsBlockAlone<System>) {
-    alone_pass<value_type> pass{*alone, inputs};
-    take_step_alone(system, solved, time, h, y, k, y, pass);
-    alone_first = system.alone_block().first;
-    alone_samples = std::move(pass.samples);
-    block_error = std::move(pass.error);
+    block_error = take_step_alone(system, solved, time, h, y, k, y, *alone,
+                                  inputs, alone_samples.emplace());
   } else {
     util::stop("A step taken alone needs a System that names its block");
   }
@@ -331,46 +355,38 @@ void Step<System>::step(System& system,
   }
 
   step_error(k, h, yerr);
-  // A block taken alone carries the coupling's error instead.
-  std::copy(block_error.begin(), block_error.end(),
-            yerr.begin() + static_cast<std::ptrdiff_t>(alone_first));
+  // A block taken alone takes its error from the coupling.
+  if (alone_samples) {
+    std::copy(block_error.begin(), block_error.end(),
+              yerr.begin() + static_cast<std::ptrdiff_t>(alone_samples->first));
+  }
 }
 
 template <class System>
-std::vector<double> Step<System>::alone_ends(
+alone_steps Step<System>::choose_alone_steps(
     const System& system, double time, double step_size, const state_type& y,
-    const state_type& dydt, const state_type& inputs,
-    const std::vector<double>& slope, double step_size_min) const
+    const state_type& dydt, const state_type& inputs, std::vector<double> slope,
+    double step_size_min) const
   requires StepsBlockAlone<System> {
   const double h = step_size;
   const auto [first, n] = system.alone_block();
+  util::check_length(inputs.size(), n);
   const auto at = static_cast<std::ptrdiff_t>(first);
   const std::vector<double> to = predicted_inputs(inputs, slope, h);
-  std::vector<double> own(y.begin() + at, y.begin() + at + n), next(n), stage(n),
-    line(n), error(n);
+  auto rates = rates_on_line(system, time, h, inputs, to);
+  std::vector<double> own(y.begin() + at, y.begin() + at + n), next(n), error(n);
   std::vector<std::vector<double>> r(6, std::vector<double>(n));
   std::copy(dydt.begin() + at, dydt.begin() + at + n, r[0].begin());
-  auto rates = [&](double u, const std::vector<double>& b,
-                   std::vector<double>& out) {
-    for (std::size_t q = 0; q < n; ++q) {
-      line[q] = inputs[q] + (to[q] - inputs[q]) * u;
-    }
-    system.alone_rates(time + u * h, b, line, out);
-  };
   // Controlled as the solver controls its steps, in fractions of this one and
   // down to the solver's smallest step.
   OdeControl inner(1e-4 * alone_tol, alone_tol, 1.0, 0.0, step_size_min / h, 1.0,
                    1.0);
-  std::vector<double> ends;
+  alone_steps chosen{std::move(slope), {}};
   double from = 0.0, substep = 1.0;
   for (const double stop : alone_stops) {
     while (from < stop) {
       const double end = std::min(from + substep, stop);
-      for (int i = 1; i < 6; ++i) {
-        stage_state(i, own, r, (end - from) * h, stage);
-        rates(from + ah[i - 1] * (end - from), stage, r[i]);
-      }
-      step_end(own, r, (end - from) * h, next);
+      take_substep(own, r, from, end, h, rates, next);
       step_error(r, (end - from) * h, error);
       // Compared with the substep asked for: `end - from` rounds away from it.
       const double asked = substep;
@@ -382,7 +398,7 @@ std::vector<double> Step<System>::alone_ends(
         }
         continue;
       }
-      ends.push_back(end);
+      chosen.ends.push_back(end);
       from = end;
       std::swap(own, next);
       if (from < 1.0) {
@@ -390,7 +406,7 @@ std::vector<double> Step<System>::alone_ends(
       }
     }
   }
-  return ends;
+  return chosen;
 }
 
 template <class System>
@@ -411,14 +427,15 @@ std::vector<S> Step<System>::predicted_inputs(const std::vector<S>& inputs,
 
 template <class System>
 template <class Sys, class Row, class S>
-void Step<System>::take_step_alone(Sys& sys, Row& solved, double time, double h,
-                                   const std::vector<S>& y0,
-                                   std::vector<std::vector<S>>& k,
-                                   std::vector<S>& y_end, alone_pass<S>& alone) {
+std::vector<double> Step<System>::take_step_alone(
+    Sys& sys, Row& solved, double time, double h, const std::vector<S>& y0,
+    std::vector<std::vector<S>>& k, std::vector<S>& y_end,
+    const alone_steps& alone, const std::vector<S>& inputs,
+    block_samples<S>& samples) {
   const std::pair<std::size_t, std::size_t> block = sys.alone_block();
   const std::size_t first = block.first, n = block.second;
-  const std::vector<S>& u0 = alone.inputs;
-  const std::vector<double>& ends = alone.record.ends;
+  const std::vector<S>& u0 = inputs;
+  const std::vector<double>& ends = alone.ends;
   util::check_length(u0.size(), n);
   if (ends.empty() || ends.back() != 1.0) {
     util::stop("A step taken alone needs inner steps that end at the step's end");
@@ -426,18 +443,10 @@ void Step<System>::take_step_alone(Sys& sys, Row& solved, double time, double h,
   const std::vector<double> split_at(ends.begin(), ends.end() - 1);
   // The block alone over the inner steps, under inputs on the line from u0 to
   // `to`; `at_end(u, block)` sees the block where each inner step ends.
-  std::vector<S> line(n);
   auto pass = [&](const std::vector<S>& to, auto&& at_end) {
     std::vector<S> own(n);
-    integrate_substeps(
-      first, split_at, h, y0, k,
-      [&](double u, const std::vector<S>& b, std::vector<S>& out) {
-        for (std::size_t q = 0; q < n; ++q) {
-          line[q] = u0[q] + (to[q] - u0[q]) * u;
-        }
-        sys.alone_rates(time + u * h, b, line, out);
-      },
-      own, at_end);
+    integrate_substeps(first, split_at, h, y0, k,
+                     rates_on_line(sys, time, h, u0, to), own, at_end);
     return own;
   };
 
@@ -445,7 +454,7 @@ void Step<System>::take_step_alone(Sys& sys, Row& solved, double time, double h,
   // block at each stop.
   std::array<std::vector<S>, alone_stops.size()> at;
   std::size_t next = 0;
-  pass(predicted_inputs(u0, alone.record.slope, h),
+  pass(predicted_inputs(u0, alone.slope, h),
        [&](double u, const std::vector<S>& b) {
          if (next < at.size() && u == alone_stops[next]) {
            at[next++] = b;
@@ -459,10 +468,11 @@ void Step<System>::take_step_alone(Sys& sys, Row& solved, double time, double h,
     return at.at(static_cast<std::size_t>(stop - alone_stops.begin()));
   };
   // Kept before the end is written: `y_end` may be `y0`.
-  alone.samples[0].assign(y0.begin() + static_cast<std::ptrdiff_t>(first),
-                          y0.begin() + static_cast<std::ptrdiff_t>(first + n));
-  for (std::size_t m = 1; m < alone.samples.size(); ++m) {
-    alone.samples[m] = at_fraction(taken_step<S>::sample_fractions[m]);
+  samples.first = first;
+  samples.at[0].assign(y0.begin() + static_cast<std::ptrdiff_t>(first),
+                       y0.begin() + static_cast<std::ptrdiff_t>(first + n));
+  for (std::size_t m = 1; m < samples.at.size(); ++m) {
+    samples.at[m] = at_fraction(taken_step<S>::sample_fractions[m]);
   }
 
   // The stages read the block from the predictor, and the inputs after each.
@@ -480,39 +490,41 @@ void Step<System>::take_step_alone(Sys& sys, Row& solved, double time, double h,
     sys.alone_inputs(stage_inputs[i - 1]);
   }
 
-  // The corrector, to the inputs at the stage at t + h, over the same
-  // inner steps; the step keeps its end.
-  const std::vector<S>& u1 = stage_inputs[3];
-  const std::vector<S> end = pass(u1, [](double, const std::vector<S>&) {});
+  // The corrector, to the inputs at the stage at t + h, over the same inner
+  // steps; the step keeps its end.
+  constexpr auto stage_at_end = static_cast<std::size_t>(
+    std::find(std::begin(ah), std::end(ah), 1.0) - std::begin(ah));
+  const std::vector<S>& inputs_at_end = stage_inputs[stage_at_end];
+  const std::vector<S> end = pass(inputs_at_end, [](double, const std::vector<S>&) {});
   step_end(y0, k, h, y_end);
   std::copy(end.begin(), end.end(),
             y_end.begin() + static_cast<std::ptrdiff_t>(first));
 
+  std::vector<double> error;
   if constexpr (std::same_as<S, double>) {
     // The coupling's error: the larger of the passes' gap at the end and the
     // stages' input defect from the corrector's line, as step_end weighs stages.
     const double weight[5] = {0.0, c3, c4, 0.0, c6};
     const std::vector<S>& predicted_end = at_fraction(1.0);
-    std::vector<double> with_inputs(n), on_line(n);
-    alone.error.assign(n, 0.0);
+    auto on_line = rates_on_line(sys, time, h, u0, inputs_at_end);
+    std::vector<double> with_inputs(n), along_line(n);
+    error.assign(n, 0.0);
     for (int i = 1; i < 6; ++i) {
       if (weight[i - 1] == 0.0) {
         continue;
       }
-      for (std::size_t q = 0; q < n; ++q) {
-        line[q] = u0[q] + (u1[q] - u0[q]) * ah[i - 1];
-      }
       const std::vector<S>& b = at_fraction(ah[i - 1]);
       sys.alone_rates(stage_time(i, time, h), b, stage_inputs[i - 1], with_inputs);
-      sys.alone_rates(stage_time(i, time, h), b, line, on_line);
+      on_line(ah[i - 1], b, along_line);
       for (std::size_t q = 0; q < n; ++q) {
-        alone.error[q] += h * weight[i - 1] * std::abs(with_inputs[q] - on_line[q]);
+        error[q] += h * weight[i - 1] * std::abs(with_inputs[q] - along_line[q]);
       }
     }
     for (std::size_t q = 0; q < n; ++q) {
-      alone.error[q] = std::max(std::abs(end[q] - predicted_end[q]), alone.error[q]);
+      error[q] = std::max(std::abs(end[q] - predicted_end[q]), error[q]);
     }
   }
+  return error;
 }
 
 template <class System>
@@ -667,7 +679,6 @@ void Step<System>::integrate_substeps(std::size_t first,
   const auto at = static_cast<std::ptrdiff_t>(first);
   const auto end = at + static_cast<std::ptrdiff_t>(width);
   std::vector<std::vector<S>> substep_rates(6, std::vector<S>(width));
-  std::vector<S> stage(width);
   std::copy(y0.begin() + at, y0.begin() + end, own.begin());
   U from = 0.0;
   for (std::size_t c = 0; c <= split_at.size(); ++c) {
@@ -675,21 +686,31 @@ void Step<System>::integrate_substeps(std::size_t first,
     if (!(util::to_passive(to) > util::to_passive(from))) {
       continue;
     }
-    const U substep = (to - from) * h;
     // At the step's start the block's rates are the step's own first ones.
     if (util::to_passive(from) == 0.0) {
       std::copy(k[0].begin() + at, k[0].begin() + end, substep_rates[0].begin());
     } else {
       rates(from, own, substep_rates[0]);
     }
-    for (int i = 1; i < 6; ++i) {
-      stage_state(i, own, substep_rates, substep, stage);
-      rates(from + ah[i - 1] * (to - from), stage, substep_rates[i]);
-    }
-    step_end(own, substep_rates, substep, own);
+    take_substep(own, substep_rates, from, to, h, rates, own);
     at_end(to, own);
     from = to;
   }
+}
+
+template <class System>
+template <class S, class U, class Rates>
+void Step<System>::take_substep(const std::vector<S>& own,
+                              std::vector<std::vector<S>>& r, const U& from,
+                              const U& to, double h, Rates&& rates,
+                              std::vector<S>& out) const {
+  const U substep = (to - from) * h;
+  std::vector<S> stage(own.size());
+  for (int i = 1; i < 6; ++i) {
+    stage_state(i, own, r, substep, stage);
+    rates(from + ah[i - 1] * (to - from), stage, r[i]);
+  }
+  step_end(own, r, substep, out);
 }
 
 template <class System>
@@ -837,7 +858,7 @@ void Step<System>::step_adjoint(active_system<System>& active,
                                 const state_type &y, const adjoint_rows& lambda_out,
                                 adjoint_rows& lambda_in,
                                 adjoint_rows& parameter_adjoint,
-                                const alone_steps& alone) {
+                                const std::optional<alone_steps>& alone) {
   using scalar = active_scalar<double>;
   const double h = step_size;
   if (lambda_out.empty()) {
@@ -855,22 +876,20 @@ void Step<System>::step_adjoint(active_system<System>& active,
     std::vector<std::vector<scalar>> rate(6, std::vector<scalar>(size));
     // k1 repeats the evaluation the row below recorded at this state.
     ode::derivs(sys, y0, rate[0], first_time, first);
-    std::array<std::vector<scalar>, 5> samples;
-    std::size_t block_first = 0;
-    if (alone.slope.empty()) {
+    ++recorded_rates;
+    std::optional<block_samples<scalar>> samples;
+    if (!alone) {
       take_step(sys, solved, time, h, y0, rate, y_end);
     } else if constexpr (StepsBlockAlone<std::remove_cvref_t<decltype(sys)>>) {
       // The block's inputs at the start, off the evaluation that just ran there.
       std::vector<scalar> inputs;
       sys.alone_inputs(inputs);
-      alone_pass<scalar> pass{alone, inputs};
-      take_step_alone(sys, solved, time, h, y0, rate, y_end, pass);
-      samples = std::move(pass.samples);
-      block_first = sys.alone_block().first;
+      take_step_alone(sys, solved, time, h, y0, rate, y_end, *alone, inputs,
+                      samples.emplace());
     } else {
       util::stop("A step taken alone needs a System that names its block");
     }
-    recorded_rates += 6;
+    recorded_rates += solved.stages.size();
     if constexpr (SplitsSignChanges<System>) {
       if (!solved.split_blocks.empty()) {
         // The dense output reads the rates at the end before the split, and the
@@ -880,8 +899,7 @@ void Step<System>::step_adjoint(active_system<System>& active,
         ++recorded_rates;
         sys.split_as_recorded(
           taken_step<scalar>{*this, time, h, y0, rate, end_rate, y_end, nullptr,
-                             nullptr, samples[0].empty() ? nullptr : &samples,
-                             block_first},
+                             nullptr, samples ? &*samples : nullptr},
           solved.samples, solved.split_blocks);
       }
     }
@@ -892,10 +910,6 @@ void Step<System>::step_adjoint(active_system<System>& active,
 }
 
 // RKCK coefficients, from GSL
-template <class System>
-const double Step<System>::ah[] = {
-  1.0 / 5.0, 0.3, 3.0 / 5.0, 1.0, 7.0 / 8.0 };
-
 template <class System>
 const double Step<System>::b21 = 1.0 / 5.0;
 template <class System>

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <span>
 #include <array>
+#include <optional>
 #include <vector>
 #include <odelia/ode_control.hpp>
 #include <odelia/ode_util.hpp>
@@ -252,13 +253,12 @@ struct solved_row {
   std::vector<split_block<Values>> split_blocks;
 };
 
-// Where a step took the System's block alone: the slope its predictor
-// extrapolated the block's inputs by, and where each inner step ended, as
-// fractions of the step. Both passes take the same inner steps. Empty where the
-// step took the block with the rest.
+// How a step took the System's block alone: the slope its inputs were
+// extrapolated by, and where each inner step ends, as fractions of the step.
 struct alone_steps {
   std::vector<double> slope;
   std::vector<double> ends;
+  bool operator==(const alone_steps&) const = default;
 };
 
 // One instruction of a program: what carries the state from one boundary to the
@@ -280,13 +280,13 @@ struct alone_steps {
 // of NaN size. `insertion` is last and defaults, so a grid written {time, NaN} is a
 // program of steps without saying so.
 //
-// `alone` is a step's record where it took the System's block alone (see
-// StepsBlockAlone); a replay and the sweep take it as recorded.
+// `alone` holds a step's inner steps where it took the System's block alone
+// (see StepsBlockAlone); a replay and the sweep take them as recorded.
 struct instruction {
   double time;
   double step_size;
   bool insertion = false;
-  alone_steps alone{};
+  std::optional<alone_steps> alone{};
 };
 
 // One row of a recording: the instruction the run executed and the state it left
@@ -367,9 +367,7 @@ concept ScalesStateTolerances = requires(const System& s, double time,
 };
 
 // A System whose block [first, first + size) of the state reads the rest only
-// through inputs, so a step can take the block alone: whether the step about to
-// be taken does, the inputs the last evaluation handed the block, and its rates
-// under given inputs, at the System's scalar.
+// through one input per component, so a step can take the block alone.
 template <typename System>
 concept StepsBlockAlone =
   requires(const System& s, double time,

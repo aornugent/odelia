@@ -218,18 +218,19 @@ compile_alone_interface <- function() {
       int alone = 0, inner = 0;
       bool stops_landed = true, ascending = true, sized = true;
       for (const ode::instruction& row : program) {
-        if (row.alone.slope.empty()) {
+        if (!row.alone) {
           continue;
         }
+        const ode::alone_steps& taken = *row.alone;
         ++alone;
-        inner += row.alone.ends.size();
-        sized = sized && row.alone.slope.size() == 2;
-        ascending = ascending && std::is_sorted(row.alone.ends.begin(),
-                                                row.alone.ends.end());
+        inner += taken.ends.size();
+        sized = sized && taken.slope.size() == 2;
+        ascending = ascending && std::is_sorted(taken.ends.begin(),
+                                                taken.ends.end());
         for (double stop : stops) {
           stops_landed = stops_landed &&
-            std::find(row.alone.ends.begin(), row.alone.ends.end(), stop) !=
-              row.alone.ends.end();
+            std::find(taken.ends.begin(), taken.ends.end(), stop) !=
+              taken.ends.end();
         }
       }
       // The last step: where it started, its size, its slope, and what the dense
@@ -245,7 +246,8 @@ compile_alone_interface <- function() {
         Rcpp::_["last_start"] = rec[rec.size() - 2].state,
         Rcpp::_["last_time"] = rec[rec.size() - 2].time,
         Rcpp::_["last_size"] = last.step_size,
-        Rcpp::_["last_slope"] = last.alone.slope,
+        Rcpp::_["last_slope"] =
+          last.alone ? last.alone->slope : std::vector<double>{},
         Rcpp::_["last_dense"] = last_dense);
     }
 
@@ -267,7 +269,7 @@ compile_alone_interface <- function() {
       std::vector<double> slope;
       for (const auto& row : solver.recording()) {
         if (row.time > t_stop) {
-          slope = row.alone.slope;
+          slope = row.alone.value().slope;
           break;
         }
       }
@@ -304,8 +306,7 @@ compile_alone_interface <- function() {
       const std::vector<ode::instruction> taken = replay.schedule();
       bool same_steps = taken.size() == program.size();
       for (size_t k = 0; same_steps && k < taken.size(); ++k) {
-        same_steps = taken[k].alone.ends == program[k].alone.ends &&
-                     taken[k].alone.slope == program[k].alone.slope;
+        same_steps = taken[k].alone == program[k].alone;
       }
       return Rcpp::List::create(Rcpp::_["y"] = replay.state(),
                                 Rcpp::_["same_steps"] = same_steps);
