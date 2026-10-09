@@ -253,12 +253,13 @@ struct solved_row {
   std::vector<split_block<Values>> split_blocks;
 };
 
-// How a step took the System's block alone: the slope its inputs were
-// extrapolated by, and where each inner step ends, as fractions of the step.
-struct alone_steps {
-  std::vector<double> slope;
+// How a step integrated the System's subsystem in substeps: the slope its
+// inputs were extrapolated along, and where each substep ends, as fractions of
+// the step.
+struct subsystem_substeps {
+  std::vector<double> input_slope;
   std::vector<double> ends;
-  bool operator==(const alone_steps&) const = default;
+  bool operator==(const subsystem_substeps&) const = default;
 };
 
 // One instruction of a program: what carries the state from one boundary to the
@@ -280,13 +281,13 @@ struct alone_steps {
 // of NaN size. `insertion` is last and defaults, so a grid written {time, NaN} is a
 // program of steps without saying so.
 //
-// `alone` holds a step's inner steps where it took the System's block alone
-// (see StepsBlockAlone); a replay and the sweep take them as recorded.
+// `subsystem` holds a step's substeps where it substepped the System's
+// subsystem (see HasSubsystem); a replay and the sweep take them as recorded.
 struct instruction {
   double time;
   double step_size;
   bool insertion = false;
-  std::optional<alone_steps> alone{};
+  std::optional<subsystem_substeps> subsystem{};
 };
 
 // One row of a recording: the instruction the run executed and the state it left
@@ -366,17 +367,24 @@ concept ScalesStateTolerances = requires(const System& s, double time,
   { s.state_tolerance_factors(time, f) } -> std::same_as<void>;
 };
 
-// A System whose block [first, first + size) of the state reads the rest only
-// through one input per component, so a step can take the block alone.
+// Components [first, first + size) of a System's state.
+struct state_range {
+  std::size_t first;
+  std::size_t size;
+};
+
+// A System with a subsystem: a range of its state whose rates read the rest only
+// through one input per component, so a step can integrate it in substeps of its
+// own under given inputs.
 template <typename System>
-concept StepsBlockAlone =
+concept HasSubsystem =
   requires(const System& s, double time,
            const std::vector<typename System::value_type>& y,
            std::vector<typename System::value_type>& out) {
-  { s.alone_block() } -> std::same_as<std::pair<std::size_t, std::size_t>>;
-  { s.steps_alone() } -> std::same_as<bool>;
-  s.alone_inputs(out);
-  s.alone_rates(time, y, y, out);
+  { s.subsystem() } -> std::same_as<state_range>;
+  { s.subsystem_weakly_coupled() } -> std::same_as<bool>;
+  s.subsystem_inputs(out);
+  s.subsystem_rates(time, y, y, out);
 };
 
 // The recursive interface. Each helper walks a container of elements, threading

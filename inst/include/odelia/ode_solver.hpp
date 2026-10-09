@@ -519,7 +519,7 @@ private:
       solver.step_adjoint(active, rec[k - 1].solved.at_state,
                           ode::at_state_time(rec, k - 1), rec[k].solved,
                           rec[k - 1].time, rec[k].step_size, from,
-                          lambda, lambda_in, parameter_adjoint, rec[k].alone);
+                          lambda, lambda_in, parameter_adjoint, rec[k].subsystem);
       // Swapped rather than moved from: a move leaves the buffer this step wrote
       // into empty, so the next step allocates one the same size again. Swapping
       // hands it the row above's, which the sweep refills rather than regrows.

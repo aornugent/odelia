@@ -1,15 +1,16 @@
-# Tests for a step that takes a System's block alone: where a stiff block reads
-# the rest only through a few inputs, the rest takes long steps while the block
-# takes inner steps of its own, which replays and the sweep take as recorded.
+# Tests for a step that substeps a System's subsystem: where a stiff subsystem
+# reads the rest only through a few inputs, the rest takes long steps while the
+# subsystem takes substeps of its own, which replays and the sweep take as
+# recorded.
 
 # A population x drawing on a two-layer store w, which a seasonal source fills
 # and drainage K w^2 carries layer to layer: stiff in w where K is large. The
-# uptake c x w is what the rest of the state hands the store. With `Alone` false
-# it is the same System naming no block.
+# uptake c x w is what the rest of the state hands the store. With
+# `WithSubsystem` false it is the same System with no subsystem.
 store_system <- '
   static std::vector<std::vector<double>> last_dense;
 
-  template <typename T, bool Alone = true>
+  template <typename T, bool WithSubsystem = true>
   class Store {
   public:
     using value_type = T;
@@ -19,7 +20,7 @@ store_system <- '
     template <typename, bool> friend class Store;
 
     template <class S2>
-    void assign_from(const Store<S2, Alone>& src) {
+    void assign_from(const Store<S2, WithSubsystem>& src) {
       a = T(odelia::util::to_passive(src.a));
       m = T(odelia::util::to_passive(src.m));
       K = T(odelia::util::to_passive(src.K));
@@ -29,14 +30,14 @@ store_system <- '
       w1 = T(odelia::util::to_passive(src.w1));
       w2 = T(odelia::util::to_passive(src.w2));
       time = src.time;
-      alone_share = src.alone_share;
+      substep_below = src.substep_below;
       fail_after = src.fail_after;
       compute_rates();
     }
 
     template <class S2>
-    Store<S2, Alone> rebind_from() const {
-      Store<S2, Alone> out;
+    Store<S2, WithSubsystem> rebind_from() const {
+      Store<S2, WithSubsystem> out;
       out.assign_from(*this);
       return out;
     }
@@ -71,24 +72,27 @@ store_system <- '
       return it;
     }
 
-    // The store, from index 1, taken alone where the uptake is under
-    // alone_share of the water moving through it.
-    std::pair<std::size_t, std::size_t> alone_block() const requires Alone {
+    // The store, from index 1, substepped where the uptake is under
+    // substep_below of the water moving through it.
+    odelia::ode::state_range subsystem() const requires WithSubsystem {
       return {1, 2};
     }
-    bool steps_alone() const requires Alone {
+    bool subsystem_weakly_coupled() const requires WithSubsystem {
       const double in1 = odelia::util::to_passive(inflow_at(time));
       const double k = odelia::util::to_passive(K);
       const double p1 = odelia::util::to_passive(w1), p2 = odelia::util::to_passive(w2);
       const double v1 = std::abs(odelia::util::to_passive(u1));
       const double v2 = std::abs(odelia::util::to_passive(u2));
       const double moving = in1 + 2.0 * k * p1 * p1 + k * p2 * p2 + v1 + v2;
-      return (v1 + v2) / moving < alone_share;
+      return (v1 + v2) / moving < substep_below;
     }
-    void alone_inputs(std::vector<T>& u) const requires Alone { u = {u1, u2}; }
+    void subsystem_inputs(std::vector<T>& u) const requires WithSubsystem {
+      u = {u1, u2};
+    }
     template <class U>
-    void alone_rates(double t, const std::vector<U>& w, const std::vector<U>& u,
-                     std::vector<U>& out) const requires Alone {
+    void subsystem_rates(double t, const std::vector<U>& w,
+                         const std::vector<U>& u,
+                         std::vector<U>& out) const requires WithSubsystem {
       store_rates(t, w, out);
       out[0] -= u[0];
       out[1] -= u[1];
@@ -116,8 +120,8 @@ store_system <- '
     template <class Step, class Samples, class Record>
     void split_as_recorded(const Step&, const Samples&, const Record&) {}
 
-    double alone_share = 0.0;
-    // Past this time the rates of the store alone are NaN.
+    double substep_below = 0.0;
+    // Past this time the store has NaN rates.
     double fail_after = 1e300;
 
   private:
@@ -153,7 +157,7 @@ store_system <- '
   };
 '
 
-compile_alone_interface <- function() {
+compile_substep_interface <- function() {
   ensure_ode_interface_loaded()
 
   odelia_so <- .odelia_test_cache$odelia_so
@@ -175,8 +179,8 @@ compile_alone_interface <- function() {
     using StoreA = Store<double, true>;
     using StoreP = Store<double, false>;
 
-    static_assert(ode::StepsBlockAlone<StoreA>);
-    static_assert(!ode::StepsBlockAlone<StoreP>);
+    static_assert(ode::HasSubsystem<StoreA>);
+    static_assert(!ode::HasSubsystem<StoreP>);
     static_assert(ode::SplitsSignChanges<StoreA>);
 
     ode::OdeControl control_at(double tol) {
@@ -188,7 +192,7 @@ compile_alone_interface <- function() {
 
     StoreA store(const std::vector<double>& p, double share) {
       StoreA s(p[0], p[1], p[2], p[3], p[4]);
-      s.alone_share = share;
+      s.substep_below = share;
       return s;
     }
 
@@ -206,8 +210,8 @@ compile_alone_interface <- function() {
     Rcpp::List store_run(double share, double tol, double t_end,
                          std::vector<double> pars, std::vector<double> y0,
                          double fail_after = 1e300) {
-      const std::vector<double> stops{1.0 / 5.0, 0.25, 0.3, 0.5, 3.0 / 5.0,
-                                      0.75, 7.0 / 8.0, 1.0};
+      const std::vector<double> fractions{1.0 / 5.0, 0.25, 0.3, 0.5, 3.0 / 5.0,
+                                          0.75, 7.0 / 8.0, 1.0};
       StoreA s = store(pars, share);
       s.fail_after = fail_after;
       ode::Solver<StoreA> solver(s, control_at(tol));
@@ -215,21 +219,21 @@ compile_alone_interface <- function() {
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
       const std::vector<ode::instruction> program = solver.schedule();
-      int alone = 0, inner = 0;
-      bool stops_landed = true, ascending = true, sized = true;
+      int substepped = 0, substeps = 0;
+      bool fractions_landed = true, ascending = true, sized = true;
       for (const ode::instruction& row : program) {
-        if (!row.alone) {
+        if (!row.subsystem) {
           continue;
         }
-        const ode::alone_steps& taken = *row.alone;
-        ++alone;
-        inner += taken.ends.size();
-        sized = sized && taken.slope.size() == 2;
+        const ode::subsystem_substeps& taken = *row.subsystem;
+        ++substepped;
+        substeps += taken.ends.size();
+        sized = sized && taken.input_slope.size() == 2;
         ascending = ascending && std::is_sorted(taken.ends.begin(),
                                                 taken.ends.end());
-        for (double stop : stops) {
-          stops_landed = stops_landed &&
-            std::find(taken.ends.begin(), taken.ends.end(), stop) !=
+        for (double fraction : fractions) {
+          fractions_landed = fractions_landed &&
+            std::find(taken.ends.begin(), taken.ends.end(), fraction) !=
               taken.ends.end();
         }
       }
@@ -240,14 +244,15 @@ compile_alone_interface <- function() {
       return Rcpp::List::create(
         Rcpp::_["y"] = solver.state(),
         Rcpp::_["steps"] = (int) program.size() - 1,
-        Rcpp::_["alone"] = alone, Rcpp::_["inner"] = inner,
-        Rcpp::_["stops_landed"] = stops_landed, Rcpp::_["ascending"] = ascending,
+        Rcpp::_["substepped"] = substepped, Rcpp::_["substeps"] = substeps,
+        Rcpp::_["fractions_landed"] = fractions_landed,
+        Rcpp::_["ascending"] = ascending,
         Rcpp::_["sized"] = sized,
         Rcpp::_["last_start"] = rec[rec.size() - 2].state,
         Rcpp::_["last_time"] = rec[rec.size() - 2].time,
         Rcpp::_["last_size"] = last.step_size,
         Rcpp::_["last_slope"] =
-          last.alone ? last.alone->slope : std::vector<double>{},
+          last.subsystem ? last.subsystem->input_slope : std::vector<double>{},
         Rcpp::_["last_dense"] = last_dense);
     }
 
@@ -269,7 +274,7 @@ compile_alone_interface <- function() {
       std::vector<double> slope;
       for (const auto& row : solver.recording()) {
         if (row.time > t_stop) {
-          slope = row.alone.value().slope;
+          slope = row.subsystem.value().input_slope;
           break;
         }
       }
@@ -290,7 +295,7 @@ compile_alone_interface <- function() {
     }
 
     // The program a run at `program_pars` took, replayed at `pars` from `y0`:
-    // where it lands, and whether its own rows took the inner steps the run took.
+    // where it lands, and whether its own rows took the substeps the run took.
     // [[Rcpp::export]]
     Rcpp::List store_replay(std::vector<double> program_pars,
                             std::vector<double> pars, std::vector<double> y0,
@@ -306,13 +311,13 @@ compile_alone_interface <- function() {
       const std::vector<ode::instruction> taken = replay.schedule();
       bool same_steps = taken.size() == program.size();
       for (size_t k = 0; same_steps && k < taken.size(); ++k) {
-        same_steps = taken[k].alone == program[k].alone;
+        same_steps = taken[k].subsystem == program[k].subsystem;
       }
       return Rcpp::List::create(Rcpp::_["y"] = replay.state(),
                                 Rcpp::_["same_steps"] = same_steps);
     }
 
-    // A walk at the tangent scalar over a run that took the store alone, which it
+    // A walk at the tangent scalar over a run that substepped the store, which it
     // refuses.
     // [[Rcpp::export]]
     void store_tangent_walk(std::vector<double> pars, std::vector<double> y0,
@@ -353,41 +358,41 @@ store_pars <- c(1.0, 0.8, 1e4, 200, 0.3)
 store_y <- c(1.0, 0.5, 0.5)
 
 testthat::test_that("with the share at zero, every step is the plain System's", {
-  compile_alone_interface()
+  compile_substep_interface()
   off <- store_run(0.0, 1e-6, 0.5, store_pars, store_y)
   plain <- store_plain_run(1e-6, 0.5, store_pars, store_y)
-  expect_identical(off$alone, 0L)
+  expect_identical(off$substepped, 0L)
   expect_identical(off$steps, plain$steps)
   expect_identical(off$y, plain$y)
 })
 
-testthat::test_that("taken alone, the stiff store lets the population take long steps, as accurately", {
-  compile_alone_interface()
+testthat::test_that("substepped, the stiff store lets the population take long steps, as accurately", {
+  compile_substep_interface()
   reference <- store_plain_run(1e-12, 2.0, store_pars, store_y)$y
   ck <- store_plain_run(1e-6, 2.0, store_pars, store_y)
-  alone <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
+  substepped <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
   # Cash-Karp is held to its stability boundary by the store's drainage; every
-  # step taken alone takes inner steps of its own instead.
+  # step that substeps the store takes substeps of its own instead.
   expect_gt(ck$steps, 1000L)
-  expect_identical(alone$alone, alone$steps)
-  expect_lt(alone$steps, ck$steps / 10)
-  expect_lt(max(abs(alone$y - reference)), 1e-5)
+  expect_identical(substepped$substepped, substepped$steps)
+  expect_lt(substepped$steps, ck$steps / 10)
+  expect_lt(max(abs(substepped$y - reference)), 1e-5)
   # It converges on the same answer as its tolerance tightens.
   tight <- store_run(0.1, 1e-9, 2.0, store_pars, store_y)
   expect_lt(max(abs(tight$y - reference)), 1e-8)
 })
 
-testthat::test_that("each row records its slope and inner steps, landing on every stop", {
-  compile_alone_interface()
+testthat::test_that("each row records its input slope and substeps, landing on every stage and sample fraction", {
+  compile_substep_interface()
   r <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
   expect_true(r$sized)
   expect_true(r$ascending)
-  expect_true(r$stops_landed)
-  expect_gt(r$inner, 8L * r$alone)
+  expect_true(r$fractions_landed)
+  expect_gt(r$substeps, 8L * r$substepped)
 })
 
-testthat::test_that("an insertion that changes nothing keeps the slope of the step taken alone after it", {
-  compile_alone_interface()
+testthat::test_that("an insertion that changes nothing keeps the input slope of the substepped step after it", {
+  compile_substep_interface()
   stopped <- store_stopped_run(0.1, 1e-6, 0.7, 2.0, store_pars, store_y, FALSE)
   inserted <- store_stopped_run(0.1, 1e-6, 0.7, 2.0, store_pars, store_y, TRUE)
   expect_true(all(stopped$slope != 0))
@@ -395,11 +400,11 @@ testthat::test_that("an insertion that changes nothing keeps the slope of the st
   expect_identical(inserted$y, stopped$y)
 })
 
-testthat::test_that("the dense output reads the store from the predictor's inner steps", {
-  compile_alone_interface()
+testthat::test_that("the dense output reads the store from the predictor's substeps", {
+  compile_substep_interface()
   r <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
-  # The predictor over the last step, independently: the store alone under the
-  # uptake extrapolated by the recorded slope, by classical Runge-Kutta.
+  # The predictor over the last step, independently: the store under the uptake
+  # extrapolated along the recorded slope, by classical Runge-Kutta.
   y0 <- r$last_start
   t0 <- r$last_time
   h <- r$last_size
@@ -428,14 +433,14 @@ testthat::test_that("the dense output reads the store from the predictor's inner
   }
 })
 
-testthat::test_that("a store whose rates fail at every inner step stops the run, saying why", {
-  compile_alone_interface()
+testthat::test_that("a store whose rates fail at every substep stops the run, saying why", {
+  compile_substep_interface()
   expect_error(store_run(0.1, 1e-6, 2.0, store_pars, store_y, fail_after = 1.0),
-               "block alone fails its error test at the smallest step")
+               "subsystem fails its error test at the smallest substep")
 })
 
-testthat::test_that("a replay takes the run's inner steps, at the run's parameters to the bit", {
-  compile_alone_interface()
+testthat::test_that("a replay takes the run's substeps, at the run's parameters to the bit", {
+  compile_substep_interface()
   run <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
   same <- store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6, 0.1, "rkck")
   expect_identical(same$y, run$y)
@@ -446,17 +451,17 @@ testthat::test_that("a replay takes the run's inner steps, at the run's paramete
   expect_false(identical(away$y, run$y))
   expect_error(store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6,
                             0.1, "rodas"),
-               "cannot take a System's block alone")
+               "cannot substep a System's subsystem")
 })
 
-testthat::test_that("a walk at another scalar refuses a step that took the store alone", {
-  compile_alone_interface()
+testthat::test_that("a walk at another scalar refuses a step that substepped the store", {
+  compile_substep_interface()
   expect_error(store_tangent_walk(store_pars, store_y, 0.5, 1e-6, 0.1),
-               "cannot take a recorded step that took the System's block alone")
+               "cannot take a recorded step that substepped the System's subsystem")
 })
 
-testthat::test_that("the sweep through steps taken alone matches central differences of the replayed program", {
-  compile_alone_interface()
+testthat::test_that("the sweep through substepped steps matches central differences of the replayed program", {
+  compile_substep_interface()
   t_end <- 2.0
   tol <- 1e-6
   lambda_end <- c(0.4, -1.3, 0.7)
