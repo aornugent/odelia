@@ -663,8 +663,21 @@ private:
                    "not the step the run took; record the run adaptively, or "
                    "pin it finely enough that nothing is refused");
       }
-      solver.step_adjoint(active, rec[k].solved, rec[k - 1].time,
-                          rec[k].step_size, from,
+      // The run's k1, as the row says the run took it: carried from the sixth
+      // evaluation of the step below, in that step's row and at that
+      // evaluation's time, or derived afresh with no row. Afresh is what a run
+      // does at its start, after an insertion and after any re-seed, so a System
+      // that stands in a loaded value across rows has to supply it there itself.
+      const bool k1_carried = !std::isnan(rec[k].k1_time);
+      if (k1_carried && (k < 2 || rec[k - 1].insertion)) {
+        util::stop("solve_adjoint: recorded step " + util::to_string(k) +
+                   " says its first rates were carried from the step below, "
+                   "but row " + util::to_string(k - 1) + " is not a step");
+      }
+      const typename ode::Step<System>::carried_rates k1{rec[k - 1].solved[5],
+                                                         rec[k].k1_time};
+      solver.step_adjoint(active, rec[k].solved, k1_carried ? &k1 : nullptr,
+                          rec[k - 1].time, rec[k].step_size, from,
                           lambda, lambda_in, parameter_adjoint);
       // Swapped rather than moved from: a move leaves the buffer this step wrote
       // into empty, so the next step allocates one the same size again. Swapping
