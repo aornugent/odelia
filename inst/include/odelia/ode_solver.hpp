@@ -524,8 +524,11 @@ public:
     const auto sweep_down_to = [&](size_t lo) -> void {
       ode::be_at_step(system, rec, hi);
       // A range with no step in it cuts nothing, which is what two stops in a row
-      // gives.
-      if (lo < hi) {
+      // gives. Nor does a range with no state -- a run that starts empty and
+      // widens at a later insertion, as plant's invader does before its first
+      // cohort: a step with no state has no output, so it carries no adjoint and
+      // adds nothing to any parameter's.
+      if (lo < hi && lambda.width() > 0) {
         sweep_range(tape, rec, lambda, parameter_adjoint, lo, hi);
         ++swept;
       }
@@ -543,6 +546,14 @@ public:
       sweep_down_to(at);
       if (!insertion) {
         hi = at;
+        continue;
+      }
+      // An insertion that leaves the state empty -- one that introduced nothing
+      // into a run with no state yet, as a replay's earlier introductions do for
+      // an invader whose own come later -- has no output to transpose, and the
+      // state below it is empty too.
+      if (lambda.width() == 0) {
+        hi = at - 1;
         continue;
       }
       // The map that widened `at`, transposed at the width below it -- which is
