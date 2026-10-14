@@ -32,6 +32,8 @@ store_system <- '
       time = src.time;
       substep_below = src.substep_below;
       fail_after = src.fail_after;
+      pulses = src.pulses;
+      pulse_knots = src.pulse_knots;
       compute_rates();
     }
 
@@ -76,6 +78,16 @@ store_system <- '
     // substep_below of the water moving through it.
     odelia::ode::state_range subsystem() const requires WithSubsystem {
       return {1, 2};
+    }
+    std::vector<double> subsystem_knots(double from, double to) const
+      requires WithSubsystem {
+      std::vector<double> out;
+      for (double k : pulse_knots) {
+        if (k > from && k < to) {
+          out.push_back(k);
+        }
+      }
+      return out;
     }
     bool subsystem_weakly_coupled() const requires WithSubsystem {
       const double in1 = odelia::util::to_passive(inflow_at(time));
@@ -123,6 +135,10 @@ store_system <- '
     double substep_below = 0.0;
     // Past this time the store has NaN rates.
     double fail_after = 1e300;
+    // Pulses of inflow on top of the seasonal one, and where their series has
+    // knots.
+    const odelia::drivers::Function* pulses = nullptr;
+    std::vector<double> pulse_knots;
 
   private:
     template <class U> U at(const T& v) const {
@@ -132,11 +148,16 @@ store_system <- '
         return odelia::util::to_passive(v);
       }
     }
-    T inflow_at(double t) const { return s0 * (1.0 + 0.5 * std::sin(2.0 * M_PI * t)); }
+    double pulse_at(double t) const {
+      return pulses != nullptr ? std::max(0.0, pulses->evaluate(t)) : 0.0;
+    }
+    T inflow_at(double t) const {
+      return s0 * (1.0 + 0.5 * std::sin(2.0 * M_PI * t)) + pulse_at(t);
+    }
     template <class U>
     void store_rates(double t, const std::vector<U>& w, std::vector<U>& out) const {
       const U k = at<U>(K);
-      const U inflow = at<U>(s0) * (1.0 + 0.5 * std::sin(2.0 * M_PI * t));
+      const U inflow = at<U>(s0) * (1.0 + 0.5 * std::sin(2.0 * M_PI * t)) + pulse_at(t);
       out.resize(2);
       out[0] = inflow - k * w[0] * w[0];
       out[1] = k * w[0] * w[0] - k * w[1] * w[1];
@@ -171,6 +192,7 @@ compile_substep_interface <- function() {
     #include <algorithm>
     #include <cmath>
     #include <vector>
+    #include <odelia/drivers.hpp>
     #include <odelia/ode_solver.hpp>
     #include <odelia/tangent.hpp>
     ', store_system, '
@@ -280,6 +302,42 @@ compile_substep_interface <- function() {
       }
       return Rcpp::List::create(Rcpp::_["y"] = solver.state(),
                                 Rcpp::_["slope"] = slope);
+    }
+
+    // A run under pulses of inflow through (x, y) with `knots` those of the series,
+    // stopping at `stops`: where it lands, the times its steps end, whether each
+    // step substepped the store, and the times its substeps end.
+    // [[Rcpp::export]]
+    Rcpp::List store_pulsed_run(double share, double tol, std::vector<double> stops,
+                                std::vector<double> pars, std::vector<double> y0,
+                                std::vector<double> x, std::vector<double> y,
+                                std::vector<double> knots) {
+      const drivers::Function pulses(x, y);
+      StoreA s = store(pars, share);
+      s.pulses = &pulses;
+      s.pulse_knots = knots;
+      ode::Solver<StoreA> solver(s, control_at(tol));
+      solver.set_state(y0, 0.0);
+      solver.advance_adaptive(stops);
+      const std::vector<ode::instruction> program = solver.schedule();
+      std::vector<double> times, substep_ends;
+      std::vector<bool> substepped;
+      for (size_t k = 0; k < program.size(); ++k) {
+        times.push_back(program[k].time);
+        if (k > 0) {
+          substepped.push_back(program[k].subsystem.has_value());
+        }
+        if (k > 0 && program[k].subsystem) {
+          for (double end : program[k].subsystem->ends) {
+            substep_ends.push_back(program[k - 1].time + end * program[k].step_size);
+          }
+        }
+      }
+      return Rcpp::List::create(Rcpp::_["y"] = solver.state(),
+                                Rcpp::_["steps"] = (int) program.size() - 1,
+                                Rcpp::_["times"] = times,
+                                Rcpp::_["substepped"] = substepped,
+                                Rcpp::_["substep_ends"] = substep_ends);
     }
 
     // [[Rcpp::export]]
@@ -486,4 +544,65 @@ testthat::test_that("the sweep through substepped steps matches central differen
   })
   expect_equal(r$lambda / expected_state, rep(1, 3), tolerance = 1e-5)
   expect_equal(r$parameter_adjoint / expected_pars, rep(1, 5), tolerance = 1e-5)
+})
+
+# Pulses of inflow two hundredths wide, every quarter of a unit, through a
+# monotone cubic; its knots are those beside a non-zero value, where the cubic
+# changes.
+pulse_x <- seq(0, 2.5, by = 0.01)
+pulse_y <- ifelse(seq_along(pulse_x) %% 25 == 5, 300, 0)
+pulse_knots <- local({
+  nz <- pulse_y != 0
+  n <- length(nz)
+  pulse_x[nz | c(FALSE, nz[-n]) | c(nz[-1], FALSE)]
+})
+
+testthat::test_that("a substepped step spanning the inflow's knots takes its pulses, landing a substep on each", {
+  compile_substep_interface()
+  t_end <- 2.0
+  knots <- pulse_knots[pulse_knots < t_end]
+  # A store slow enough to hold each pulse as a rise in its level. A store that
+  # passes a pulse straight through (the stiff K = 1e4) puts a spike in what the
+  # population reads, which the population's stages miss however the store is
+  # integrated.
+  slow <- store_pars * c(1, 1, 1e-3, 1, 1)
+  reference <- store_pulsed_run(0.0, 1e-11, c(0, knots, t_end), slow, store_y,
+                                pulse_x, pulse_y, pulse_knots)$y
+  stopped <- store_pulsed_run(0.1, 1e-4, c(0, knots, t_end), slow, store_y,
+                              pulse_x, pulse_y, pulse_knots)
+  free <- store_pulsed_run(0.1, 1e-4, c(0, t_end), slow, store_y,
+                           pulse_x, pulse_y, pulse_knots)
+  # The run without stops spans knots and is as accurate as the run that stops
+  # at each.
+  expect_false(all(knots %in% free$times))
+  expect_lt(max(abs(stopped$y - reference)), 2e-4)
+  expect_lt(max(abs(free$y - reference)), 2e-4)
+  landed <- vapply(knots, function(k) any(abs(c(free$times, free$substep_ends) - k) < 1e-12), TRUE)
+  expect_true(all(landed))
+})
+
+testthat::test_that("a step spanning the inflow's knots substeps the store, however strongly it draws", {
+  compile_substep_interface()
+  t_end <- 1.0
+  knots <- pulse_knots[pulse_knots < t_end]
+  slow <- store_pars * c(1, 1, 1e-3, 1, 1)
+  # The share at zero, so no step is weakly coupled: those that span a knot
+  # substep the store all the same.
+  reference <- store_pulsed_run(0.0, 1e-11, c(0, knots, t_end), slow, store_y,
+                                pulse_x, pulse_y, pulse_knots)$y
+  stopped <- store_pulsed_run(0.0, 1e-6, c(0, knots, t_end), slow, store_y,
+                              pulse_x, pulse_y, pulse_knots)
+  free <- store_pulsed_run(0.0, 1e-6, c(0, t_end), slow, store_y,
+                           pulse_x, pulse_y, pulse_knots)
+  # Stopped at every knot, no step spans one and none substeps the store.
+  expect_false(any(stopped$substepped))
+  t <- free$times
+  spans <- vapply(seq_along(free$substepped), function(k)
+    any(knots > t[k] & knots < t[k + 1]), TRUE)
+  expect_true(any(spans))
+  expect_true(all(free$substepped[spans]))
+  landed <- vapply(knots, function(k) any(abs(c(t, free$substep_ends) - k) < 1e-12), TRUE)
+  expect_true(all(landed))
+  expect_lt(max(abs(stopped$y - reference)), 1e-5)
+  expect_lt(max(abs(free$y - reference)), 1e-5)
 })
