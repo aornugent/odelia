@@ -2229,7 +2229,7 @@ void test_dopri_records() {
         "dense output is bit for bit the same whether the run is recorded or not");
 }
 
-// --- The step-size rule is a switch (#64) -------------------------------------
+// --- The step-size rule is a switch -----------------------------------------
 
 void test_controller_switch() {
   using odelia::ode::Controller;
@@ -2238,35 +2238,35 @@ void test_controller_switch() {
   const std::vector<double> times{0.0, 20.0};
   odelia::ode::OdeControl control(1e-6, 1e-6, 1.0, 0.0, 1e-12, 1e9, 1e-6);
 
-  // The default is the gsl rule, and saying so changes nothing: bit-identical.
-  CallbackSystem a(lorenz_rhs, y0, 0.0);
-  odelia::ode::Solver<CallbackSystem> sa(a, control, Method::dopri);
-  sa.advance_adaptive(times);
-  odelia::ode::OdeControl explicit_gsl = control;
-  explicit_gsl.set_controller(Controller::gsl);
-  CallbackSystem b(lorenz_rhs, y0, 0.0);
-  odelia::ode::Solver<CallbackSystem> sb(b, explicit_gsl, Method::dopri);
-  sb.advance_adaptive(times);
-  check(control.get_controller() == Controller::gsl, "the default rule is gsl");
-  check(sa.state() == sb.state() && sa.times() == sb.times(),
-        "and naming it changes nothing, bit for bit");
-
-  // Hairer's rule reaches the same answer (over a horizon short enough that
-  // chaos does not separate two correct step sequences) with fewer rejected
-  // attempts over a long one.
+  // The default is Hairer's rule, and saying so changes nothing: bit-identical.
+  CallbackSystem c(lorenz_rhs, y0, 0.0);
+  odelia::ode::Solver<CallbackSystem> sc(c, control, Method::dopri);
+  sc.advance_adaptive(times);
   odelia::ode::OdeControl hairer = control;
   hairer.set_controller(Controller::hairer);
+  CallbackSystem b(lorenz_rhs, y0, 0.0);
+  odelia::ode::Solver<CallbackSystem> sb(b, hairer, Method::dopri);
+  sb.advance_adaptive(times);
+  check(control.get_controller() == Controller::hairer, "the default rule is hairer");
+  check(sc.state() == sb.state() && sc.times() == sb.times(),
+        "and naming it changes nothing, bit for bit");
+
+  // The gsl rule reaches the same answer (over a horizon short enough that
+  // chaos does not separate two correct step sequences) with more rejected
+  // attempts over a long one.
+  odelia::ode::OdeControl gsl = control;
+  gsl.set_controller(Controller::gsl);
   {
     CallbackSystem g(lorenz_rhs, y0, 0.0), hh(lorenz_rhs, y0, 0.0);
-    odelia::ode::Solver<CallbackSystem> sg(g, control, Method::dopri), sh(hh, hairer, Method::dopri);
+    odelia::ode::Solver<CallbackSystem> sg(g, gsl, Method::dopri), sh(hh, hairer, Method::dopri);
     sg.advance_adaptive(std::vector<double>{0.0, 2.0});
     sh.advance_adaptive(std::vector<double>{0.0, 2.0});
     check(max_abs_diff(sh.state(), sg.state()) < 1e-3,
           "the hairer rule integrates Lorenz to the same place at 1e-6");
   }
-  CallbackSystem c(lorenz_rhs, y0, 0.0);
-  odelia::ode::Solver<CallbackSystem> sc(c, hairer, Method::dopri);
-  sc.advance_adaptive(times);
+  CallbackSystem a(lorenz_rhs, y0, 0.0);
+  odelia::ode::Solver<CallbackSystem> sa(a, gsl, Method::dopri);
+  sa.advance_adaptive(times);
   check(sc.get_n_rejections() < sa.get_n_rejections() * 0.8,
         "with at least a fifth fewer rejected attempts");
   check(sc.get_system_ref().n_rhs <= sa.get_system_ref().n_rhs,
@@ -2274,6 +2274,26 @@ void test_controller_switch() {
   std::printf("       (gsl %zu steps + %zu rejections, hairer %zu + %zu)\n",
               sa.times().size() - 1, sa.get_n_rejections(),
               sc.times().size() - 1, sc.get_n_rejections());
+
+  // At an explicit stepper's stability limit the classical rule (no
+  // stabilisation) grows the step past the limit, is rejected, and repeats;
+  // the stabilised rule holds the step just inside it.
+  check(control.get_stabilisation() == 0.04, "the default stabilisation is dopri5.f's");
+  auto stiff = [](double t, const State& y, State& dydt) {
+    dydt[0] = -1000.0 * (y[0] - std::cos(t));
+  };
+  odelia::ode::OdeControl limit(1e-3, 1e-3, 1.0, 0.0, 1e-12, 10.0, 1e-6);
+  odelia::ode::OdeControl classical = limit;
+  classical.set_stabilisation(0.0);
+  CallbackSystem e(stiff, State{0.0}, 0.0), f(stiff, State{0.0}, 0.0);
+  odelia::ode::Solver<CallbackSystem> se(e, limit, Method::rkck), sf(f, classical, Method::rkck);
+  se.advance_adaptive(std::vector<double>{0.0, 10.0});
+  sf.advance_adaptive(std::vector<double>{0.0, 10.0});
+  check(se.get_n_rejections() * 10 < sf.get_n_rejections(),
+        "stabilised, a stiff problem at the stability limit rejects a tenth as often");
+  check(std::abs(se.state()[0] - sf.state()[0]) < 1e-3, "for the same answer");
+  std::printf("       (stiff, rkck at 1e-3: stabilised %zu rejections, classical %zu)\n",
+              se.get_n_rejections(), sf.get_n_rejections());
 
   // The two validity paths are shared: a non-finite estimate and a domain
   // refusal are rejections under either rule.
@@ -2288,6 +2308,59 @@ void test_controller_switch() {
   sd.advance_adaptive(std::vector<double>{0.0, 1.0});
   check(sd.state()[0] >= 0.0 && sd.state()[0] <= 1.0 && sd.get_n_rejections() > 0,
         "a domain refusal is a rejection under the hairer rule too");
+}
+
+// The hairer rule remembers the last step's error ratio. That memory must not
+// turn NaN on a state with no components, must not shrink an accepted step past
+// step_size_min, and must not outlive a reset.
+void test_controller_memory() {
+  using odelia::ode::Method;
+  const std::vector<double> none;
+  odelia::ode::OdeControl c;
+  c.adjust_step_size(0, 5, 0.1, none, none, none);
+  check(std::isfinite(c.get_ratio_prev()), "a step with no state leaves the memory finite");
+
+  // A run that starts empty and gains a cell steps on from the insertion, as it
+  // does under the classical rule.
+  const auto empty_start = [&](const odelia::ode::OdeControl& ctl) -> double {
+    Cells<double> cells(2.0, {});
+    odelia::ode::Solver<Cells<double>> s(cells, ctl, Method::dopri);
+    s.reset();
+    s.advance_adaptive(std::vector<double>{0.0, 0.5});
+    insert_cell(s);
+    try {
+      s.advance_adaptive(std::vector<double>{0.5, 1.0});
+    } catch (const std::exception&) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    return s.state()[0];
+  };
+  odelia::ode::OdeControl classical;
+  classical.set_stabilisation(0.0);
+  const double stabilised = empty_start(odelia::ode::OdeControl());
+  check(std::abs(stabilised - empty_start(classical)) < 1e-6,
+        "an empty start widened by an insertion runs on under the default rule");
+
+  // An accepted step at the edge, after a quiet one, shrinks by about 0.62.
+  odelia::ode::OdeControl edge(1e-6, 1e-6, 1.0, 0.0, 0.1, 10.0, 0.1);
+  const State y{1.0}, dydt{0.0}, at_edge{2e-6};
+  check(edge.adjust_step_size(1, 5, 0.1, y, at_edge, dydt) == 0.1,
+        "an accepted step does not shrink below step_size_min");
+
+  // A solver reused after reset() takes the steps a new one takes. The first
+  // step is larger than the rule's growth cap, so the memory is read.
+  const State y0{1.0, 1.0, 1.0};
+  odelia::ode::OdeControl control(1e-6, 1e-6, 1.0, 0.0, 1e-12, 10.0, 0.02);
+  const std::vector<double> times{0.0, 5.0};
+  CallbackSystem a(lorenz_rhs, y0, 0.0), b(lorenz_rhs, y0, 0.0);
+  odelia::ode::Solver<CallbackSystem> fresh(a, control, Method::dopri);
+  fresh.advance_adaptive(times);
+  odelia::ode::Solver<CallbackSystem> reused(b, control, Method::dopri);
+  reused.advance_adaptive(times);
+  reused.set_state(y0, 0.0);
+  reused.advance_adaptive(times);
+  check(reused.times() == fresh.times() && reused.state() == fresh.state(),
+        "a solver reused after reset() steps as a new one does, bit for bit");
 }
 
 } // namespace
@@ -2337,6 +2410,7 @@ int main() {
   test_dopri();
   test_dopri_records();
   test_controller_switch();
+  test_controller_memory();
   if (failures == 0) {
     std::printf("all checks passed\n");
     return 0;

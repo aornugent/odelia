@@ -10,11 +10,14 @@
 #' @param step_size_max Maximum allowed step size.
 #' @param step_size_initial Initial step size.
 #' @param controller Which rule turns the error estimate into the next step:
-#'   `"gsl"` (the default; accept below 1.1, grow only below 0.5, otherwise
-#'   keep the step) or `"hairer"` (accept at 1, rescale after every step, as
-#'   `deSolve` and Hairer's codes do). The default is kept for continuity of
-#'   step sequences; `"hairer"` makes far fewer rejected attempts and lets the
-#'   step track a smoothing solution (odelia#64).
+#'   `"hairer"` (the default; the error in the RMS norm over components,
+#'   accept at 1 and rescale after every step, as Hairer's codes and
+#'   `deSolve` do, damped by the previous step's error as `dopri5.f` is and
+#'   `deSolve`'s `rk` is not; see `set_stabilisation()`) or `"gsl"` (the
+#'   worst component's error, accept below 1.1, grow only below 0.5,
+#'   otherwise keep the step). `"gsl"` rejects many more attempts;
+#'   `"hairer"`'s RMS norm bounds each component more loosely when the state
+#'   is large and the error sits in a few components.
 #' @export
 OdeControl <- R6::R6Class(
   "OdeControl",
@@ -89,6 +92,21 @@ OdeControl <- R6::R6Class(
     #' @description The step-size rule in force.
     get_controller = function() {
       OdeControl_get_controller(self$ptr)
+    },
+
+    #' @description Set the `"hairer"` rule's stabilisation, `beta` in
+    #'   `dopri5.f`: 0.04 (the default) damps step growth while the error is
+    #'   rising, which keeps an explicit stepper off its stability limit; 0 is
+    #'   the classical rule, which takes fewer steps on smooth problems.
+    #' @param stabilisation A number in `[0, 0.2)`.
+    set_stabilisation = function(stabilisation) {
+      OdeControl_set_stabilisation(self$ptr, stabilisation)
+      invisible(self)
+    },
+
+    #' @description The `"hairer"` rule's stabilisation in force.
+    get_stabilisation = function() {
+      OdeControl_get_stabilisation(self$ptr)
     },
 
     #' @description Set initial step size.
