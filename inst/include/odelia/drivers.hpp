@@ -1,6 +1,7 @@
 #ifndef ODELIA_DRIVERS_H
 #define ODELIA_DRIVERS_H
 
+#include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -66,6 +67,27 @@ public:
 
   void set_extrapolate(bool e) { extrapolate = e; }
 
+  // The control points in (from, to) where the series changes from one cubic to
+  // the next: all but those inside a run of three equal values, flat on both sides.
+  std::vector<double> knots(double from, double to) const {
+    std::vector<double> out;
+    if (!is_variable) {
+      return out;
+    }
+    const std::vector<double>& x = variable.knots();
+    const std::vector<double>& y = variable.values();
+    for (auto i = static_cast<std::size_t>(
+           std::upper_bound(x.begin(), x.end(), from) - x.begin());
+         i < x.size() && x[i] < to; ++i) {
+      const bool flat =
+        i > 0 && i + 1 < x.size() && y[i - 1] == y[i] && y[i] == y[i + 1];
+      if (!flat) {
+        out.push_back(x[i]);
+      }
+    }
+    return out;
+  }
+
 private:
   interpolator::hermite_interpolator<double> variable;
   double constant = 0.0;
@@ -102,6 +124,11 @@ public:
   std::vector<double> evaluate_range(const std::string &driver_name,
                                      std::vector<double> x) const {
     return drivers.at(driver_name).evaluate_range(x, driver_name);
+  }
+
+  std::vector<double> knots(const std::string &driver_name, double from,
+                            double to) const {
+    return drivers.at(driver_name).knots(from, to);
   }
 
   // returns the name of each active driver - useful for R output

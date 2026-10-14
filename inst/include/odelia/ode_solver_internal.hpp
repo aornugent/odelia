@@ -172,12 +172,15 @@ public:
 
 private:
   // Whether this step substeps the System's subsystem, decided at its start and
-  // held across its retries. `u0` takes the subsystem's inputs there, and where
-  // it does, `input_slope` takes their slope since the last accepted step (zero
-  // where there is none) and the subsystem the tightest tolerance factor outside
-  // it.
+  // held across its retries: where the System reports it weakly coupled, or where
+  // the first attempt, to `step_end`, spans a knot of its forcing. Retries only
+  // shrink the step, so a step that takes the subsystem with the rest spans none.
+  // `u0` takes the subsystem's inputs there, and where it does, `input_slope`
+  // takes their slope since the last accepted step (zero where there is none)
+  // and the subsystem the tightest tolerance factor outside it.
   bool prepare_subsystem(System& system, std::vector<double>& factors,
-                         state_type& u0, std::vector<double>& input_slope);
+                         state_type& u0, std::vector<double>& input_slope,
+                         double step_end);
   void resize(size_t size_);
   void setup_dydt_in(System& system);
   void save_dydt_out_as_in();
@@ -569,10 +572,13 @@ template <class System>
 bool SolverInternal<System>::prepare_subsystem(System& system,
                                                std::vector<double>& factors,
                                                state_type& u0,
-                                               std::vector<double>& input_slope) {
+                                               std::vector<double>& input_slope,
+                                               double step_end) {
   if constexpr (HasSubsystem<System> && std::same_as<value_type, double>) {
     system.subsystem_inputs(u0);
-    if (method != Method::rkck || !system.subsystem_weakly_coupled()) {
+    if (method != Method::rkck ||
+        !(system.subsystem_weakly_coupled() ||
+          !system.subsystem_knots(time, step_end).empty())) {
       return false;
     }
     input_slope.assign(u0.size(), 0.0);
@@ -623,8 +629,8 @@ void SolverInternal<System>::step(System& system) {
 
   state_type u0;
   std::vector<double> input_slope;
-  const bool substep_subsystem =
-    prepare_subsystem(system, factors, u0, input_slope);
+  const bool substep_subsystem = prepare_subsystem(
+    system, factors, u0, input_slope, std::min(time + step_size, time_max));
 
   std::optional<subsystem_substeps> substeps;
   while (true) {

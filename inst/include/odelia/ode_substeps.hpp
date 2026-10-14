@@ -31,9 +31,21 @@ subsystem_substeps Step<System>::choose_substeps(
   // down to the solver's smallest step.
   OdeControl control(1e-4 * substep_tol, substep_tol, 1.0, 0.0, step_size_min / h,
                      1.0, 1.0);
+  // Every stage and sample fraction, and every knot of the forcing, so that no
+  // substep spans a knot.
+  std::vector<double> stops(stage_and_sample_fractions.begin(),
+                            stage_and_sample_fractions.end());
+  for (const double knot : system.subsystem_knots(time, time + h)) {
+    const double fraction = (knot - time) / h;
+    if (fraction > 0.0 && fraction < 1.0) {
+      stops.push_back(fraction);
+    }
+  }
+  std::sort(stops.begin(), stops.end());
+  stops.erase(std::unique(stops.begin(), stops.end()), stops.end());
   subsystem_substeps chosen{std::move(input_slope), {}};
   double from = 0.0, substep = 1.0;
-  for (const double fraction : stage_and_sample_fractions) {
+  for (const double fraction : stops) {
     while (from < fraction) {
       const double end = std::min(from + substep, fraction);
       take_substep(s, r, from, end, h, rates, next);

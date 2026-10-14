@@ -375,7 +375,9 @@ struct state_range {
 
 // A System with a subsystem: a range of its state whose rates read the rest only
 // through one input per component, so a step can integrate it in substeps of its
-// own under given inputs.
+// own under given inputs. `subsystem_knots(from, to)` gives the times in
+// (from, to) where the subsystem's forcing changes form; a step that spans one
+// substeps the subsystem, and its substeps land on each.
 template <typename System>
 concept HasSubsystem =
   requires(const System& s, double time,
@@ -383,6 +385,7 @@ concept HasSubsystem =
            std::vector<typename System::value_type>& out) {
   { s.subsystem() } -> std::same_as<state_range>;
   { s.subsystem_weakly_coupled() } -> std::same_as<bool>;
+  { s.subsystem_knots(time, time) } -> std::same_as<std::vector<double>>;
   s.subsystem_inputs(out);
   s.subsystem_rates(time, y, y, out);
 };
