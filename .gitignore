@@ -21,3 +21,4 @@ Meta
 # standalone C++ core check (tests/standalone)
 tests/standalone/*.o
 tests/standalone/r_free
+tests/standalone/propagator
