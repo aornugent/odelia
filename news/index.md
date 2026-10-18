@@ -1,5 +1,590 @@
 # Changelog
 
+## odelia 0.8.0
+
+**Hairer’s step-size rule is the default, stabilised as `dopri5.f` has
+it ([\#64](https://github.com/traitecoevo/odelia/issues/64)).**
+`OdeControl` now defaults to `Controller::hairer` (`"hairer"` in
+[`ode_solve()`](https://traitecoevo.github.io/odelia/reference/ode_solve.md)
+and `OdeControl$set_controller()`): the error in the RMS norm over
+components, accept at or below 1, and rescale after every accepted step,
+damped by the previous step’s error with `dopri5.f`’s `beta = 0.04`
+(`set_stabilisation()`, R: `OdeControl$set_stabilisation()`). The `gsl`
+rule’s dead band repeated a step that landed near the edge until it was
+rejected, and never grew a step whose error sat inside the band. On
+Lorenz to t = 100 at 1e-6 under Dormand–Prince, the gsl rule rejects 799
+attempts for 32000 evaluations; the default rejects 210 for 27600,
+against `deSolve` `ode45`’s 88 and 28200.
+
+The stabilisation matters at an explicit stepper’s stability limit.
+Without it (`set_stabilisation(0)`, the classical rule and `deSolve`’s
+`rk`), the step grows past the limit, is rejected and grows again: 310
+rejections where the stabilised rule makes 1 on a stiff scalar problem
+under Cash–Karp at 1e-3. It can also grow until the stages cancel and a
+step returns to where it began, with an error estimate small enough to
+accept, so the solution stalls short of the equilibrium it should reach.
+The classical rule takes fewer steps on smooth problems whose step is
+set by accuracy rather than stability, and plant uses it for that
+reason.
+
+The rule’s memory of the last step is the solution’s alone. `reset()`,
+and so `set_state()`, clears it, so a solver reused for a second run
+steps as a new one does. A step the solver refuses after the rule
+accepted it, or one cut short to land on a requested time, leaves it as
+it was. A state with no components reads as zero error, so a run that
+starts empty and widens at an insertion steps on from it. An accepted
+step, which the stabilisation can shrink, stops at `step_size_min`. A
+rejected step shrinks by `0.9 r^(-1/ord)`, slightly harder than
+`dopri5.f`’s stabilised exponent; the two agree at
+`set_stabilisation(0)`.
+
+A **minor** bump, because every adaptive step sequence changes.
+`set_controller(Controller::gsl)` restores the old sequences exactly.
+Because the RMS norm averages the error over components, a System with a
+large state whose error sits in a few components gets a looser bound on
+each component than the same tolerance gave under `gsl`, and should
+tighten its tolerance to keep the same accuracy.
+
+## odelia 0.7.5
+
+**A cubic read at an active position is one tape statement.**
+`hermite_spline<S>::eval` at an active query took the value and the
+slope through the span’s Horner loops and then added the query’s
+derivative, and every named intermediate on that path was a statement:
+eight per read. A model that integrates over a field reads it at every
+quadrature point, so in plant’s FF16 those reads were a large share of a
+sweep’s tape (plant#677). Inside the knots a cubic’s read is now one
+expression (`Span::value_at_query`), with the same operations in the
+same order, so the value and its derivative with respect to the position
+do not move; the quintic and the end extensions are unchanged. A knot’s
+partial is now one product taken from the root of that expression rather
+than a chain through the Horner steps, so an adjoint reaching the knot
+values agrees with before to rounding and not bit for bit (up to 1e-11
+relative through `natural_slopes`); a unit seed hides this, since then
+the two products are equal. A test in `test-spline-ad.R` reads at an
+active position inside a span, on an interior knot, on each end knot and
+past each end, under a seed other than one. It holds the value and the
+position derivative to the composed read bit for bit and the knot
+adjoints to it within rounding, checks the knot adjoints against central
+differences, and counts one statement for the interior read.
+
+A **patch** bump: no signature changes, and no value moves; a gradient
+through the knot values moves at rounding.
+
+## odelia 0.7.4
+
+**A Dormand-Prince run can now be recorded, replayed and swept
+([\#65](https://github.com/traitecoevo/odelia/issues/65)).** Only
+`method = "rkck"` recorded a run, and `"dopri"` refused a sweep and a
+replay, so a run that wanted dense output and a gradient could not take
+both from one stepper. Dormand-Prince is explicit like Cash-Karp, and
+everything the sweep does transfers; what it lacked was its own row and
+transpose. `DopriStep::step` now takes the row a step solves into, or
+loads from where it is handed a const one, and `DopriStep::step_adjoint`
+records one step and sweeps it once per seed on the Dormand-Prince
+tableau. The forward step and that recording build each stage through
+one set of kernels, so the sweep transposes the arithmetic the step
+performed, and a dopri run’s forward numbers are bit-identical to
+before. The two agree to the last place where the compiler does not
+contract `a * b + c` into a fused multiply-add; under clang’s default it
+does so for doubles and not through the adjoint scalar’s operators, and
+a stage state can then differ by an ulp. Cash-Karp’s kernels have always
+shared this, and the header comments now say so.
+
+The row stays six entries wide, not seven. Dormand-Prince makes the same
+six new evaluations a step as Cash-Karp: five stages, and the one at the
+state the step ends at, which first-same-as-last hands the next step as
+its first stage. That first stage is carried or derived afresh and never
+has an entry of its own under either stepper, so `step_record` keeps its
+shape and `solved[5]` still means the evaluation at the step’s end. The
+seventh evaluation is not recorded by a sweep, because the state the
+step ends at does not depend on it; only the error estimate and the
+dense output do.
+
+Every standalone sweep and replay test now runs under both steppers: a
+sweep against a central difference of the same steps, across an
+insertion, from an empty start and over empty steps; a subdivided row
+refused; a replay that keeps the rows it loaded; a carried first stage
+loaded at its own instant; and a re-seed that derives it afresh. A
+further standalone test replays a recorded adaptive Lorenz run bit for
+bit, sweeps it against a central difference in a parameter and an
+initial condition, counts six recorded rates a step, and checks that
+keeping the record leaves dense output unchanged bit for bit. The R
+tests of one step’s transpose, of the stage states the step and its
+recording build, and of whole-run sweeps loop over both steppers.
+
+**A recording replays only under the stepper that made it.** The two
+rows have one shape but not one meaning: entry i is each tableau’s own
+stage i + 2, and Dormand-Prince puts stages 4 to 6 at other times and
+states than Cash-Karp. A Cash-Karp recording replayed under
+Dormand-Prince, or the reverse, loaded half of every row at the wrong
+stage with every number finite. Each `step_record` now names its
+`Method`, and `advance_recorded` refuses a row the solver’s own stepper
+did not take. A program (`schedule()`) carries no rows and replays under
+either. `Solver::method()` reports the stepper a solver was built with.
+
+`$fit()` from R now replays under the solver’s own method, so a
+Dormand-Prince solver’s loss and gradient are Dormand-Prince’s. A
+`"rodas"` solver’s schedule is still replayed under `"rkck"`, since the
+Rosenbrock stepper cannot be swept. The R test that holds each stage
+state the recording builds to the one the step built is compiled with
+`-ffp-contract=off` and holds both steppers bit for bit: under
+contraction the Cash-Karp half passed only because its one input
+happened to show none.
+
+A **patch** bump. `solved_row` and `carried_rates` move from `Step` to
+namespace scope beside `step_record`, and `Method` moves from
+`ode_solver_internal.hpp` to `ode_interface.hpp`, which every consumer
+reaches through the solver; `step_record` gains a defaulted field, and
+no `Solver` signature changes. `"rodas"` still refuses a sweep and a
+replay.
+
+## odelia 0.7.3
+
+**A sweep crosses steps that have no state.** A run that starts empty
+and steps before its first insertion – plant’s invader, whose first
+cohort comes after the replay starts – recorded steps of width zero
+below the insertion, and the sweep transposed them, refusing the empty
+seed (“a seed must have at least one entry”). A step with no state has
+no output, so it carries no adjoint and adds nothing to any parameter’s;
+a range at width zero is now passed over, as a range with no step in it
+already was, and so is an insertion that leaves the state empty (a
+replay records the resident’s introductions for an invader with none of
+its own there). A standalone test steps twice with no state around an
+empty insertion, inserts a cell, and checks the sweep against a central
+difference. A **patch** bump: no sweep that ran before moves.
+
+## odelia 0.7.2
+
+**A replay that keeps its states now keeps the rows it loaded.**
+`advance_recorded(rec)` hands each stage the row an earlier run solved
+for, and a replay asked to keep its states recorded its own states
+beside an empty row, so a sweep of the replay’s recording re-derived at
+every stage what the replay had been told. The replay’s recording now
+carries the rows it loaded, and a sweep of it loads them the same way:
+the loaded values are exogenous to that sweep and carry no derivative.
+This is what a frozen-environment derivative is – plant’s invader
+against a recorded resident. The copy is the price of a recording that
+stands alone, and only a replay asked to keep its states pays it. A
+standalone test replays a run through a different parameter and checks
+that the replay’s recording holds the original’s rows and that its sweep
+matches a central difference of the replay to 1e-8.
+
+**And a sweep now takes each step’s first rates the way the run took
+them.** First-same-as-last hands a step the sixth evaluation of the step
+before, and the sweep re-derived it with no row, loading rows for the
+other five stages only; a System that places an inner solve from its
+row, or stands in a loaded field, re-solved or rebuilt at one stage in
+six, and the replay test above came back 0.9% low. Each step row now
+records where its first rates came from (`step_record::k1_time`): the
+time of the evaluation they were carried from, or NaN where the run
+derived them afresh – at its start, after an insertion, and after any
+`set_state_from_system()` between steps, which keeps no row. Where they
+were carried, the sweep loads the step below’s sixth row at that time,
+which is `fl(t + h)` and can be an ulp from the time the row below
+records (a replay, or a final step set onto its interval’s end); a
+System that checks the instant of what it loads, as plant’s Patch does,
+would otherwise refuse it. Where they were derived afresh the sweep
+derives them afresh, with no row, so a System that stands in a loaded
+value across an insertion supplies it there itself. Two more standalone
+tests check both: a carried row loaded at its own instant on a step that
+lands an ulp off, and a re-seed between steps that loads no row.
+
+**A pinned interval whose sum rounds short of its end is one step again
+([\#72](https://github.com/traitecoevo/odelia/issues/72)).**
+`advance_fixed` asked whether a sub-step was its interval’s last by
+adding it to the time, and `0.2 + (0.9 - 0.2)` is `0.8999999999999999`:
+the interval was crossed as a step short of 0.9 and an ulp-wide one onto
+it, recorded `subdivided`, and refused by any sweep or replay although
+nothing had been refused. A sub-step as wide as what remains of its
+interval is now final whatever its sum rounds to. An interval this
+affected now takes one step rather than two, so its values move in the
+last digits; a run whose sub-steps were refused is subdivided as before.
+A standalone test pins `{0, 0.2, 0.9, 1}` and checks that no row is
+subdivided, the sweep matches a central difference, and a replay lands
+where the run did.
+
+A **patch** bump. `step_record` gains a defaulted field,
+`Step::step_adjoint` takes the carried rates in place of a bare row (the
+one-step form without them is unchanged), and a replay that keeps no
+states is untouched. Every sweep changes where it takes a carried k1: in
+the row, for a System that solves for values, and at `fl(t + h)` rather
+than `t` for any System, which moves a time-dependent System’s gradient
+in the last digits.
+
+## odelia 0.7.1
+
+**A run that starts with no state at all can now be recorded and
+swept.** The solver fills the run’s first recorded row from the next
+seeding while that row’s state is empty, and a System whose state is
+empty for real – plant’s FF16 patch before its first cohort, with no
+environment state of its own – was re-filled from the seeding its first
+insertion makes. The run’s start was then recorded one cohort wide, the
+insertion row duplicated it, and `solve_adjoint` could not reconcile a
+one-cohort state with the zero cohorts the schedule implies at the
+start. Whether the first row has been filled is now a flag rather than a
+test of its length. `state_and_parameter_adjoints` then accepts an empty
+state, since the transpose of that first insertion is a map from the
+parameters alone; it refuses only where the state is empty and the
+System lists no parameters either. A standalone test sweeps a run from
+an empty start against a pinned central difference.
+
+A **patch** bump: no signature changes, and a run whose first state is
+non-empty records and sweeps exactly as before.
+
+## odelia 0.7.0
+
+**A recorded run can now be differentiated in reverse mode, so one solve
+yields the derivative with respect to every parameter at once.** Forward
+mode answers for one parameter per solve; reverse mode answers for all
+of them, but it must first record every operation the solve performed,
+and a run of several thousand adaptive steps performs far more of them
+than memory will hold. The solver stores its state at each accepted step
+and replays one step’s arithmetic at a time while the derivative is
+taken, so what is held is bounded by a single step rather than by the
+run. Memory then grows with the number of steps, which is cheap, rather
+than with the arithmetic, which is not.
+
+A value a submodel solved for rather than computed is lifted onto the
+record carrying a derivative obtained by other means — `implicit_value`
+and `record_with_derivatives` — which keeps an iterative solver’s own
+iterations out of the answer. What *selects* rather than *moves* (a step
+size, a knot position, an arm) stays a plain `double` and is replayed,
+because differentiating a selector manufactures a discontinuity the
+model does not have.
+
+**A forward pass can now REPLAY a recording instead of only taking
+one.** The store/load channel already picked its direction by the
+constness of what a walk handed over, and `step_adjoint` already handed
+a const row — but every forward entry point funnelled through one place
+that zeroed its scratch and passed it mutable, so nothing on the way
+forward could load. `Step::step`’s row parameter is templated, so a
+const row loads and a mutable one stores with no change to the body;
+`advance_recorded()` gains an overload taking a **recording** rather
+than a program, pairing each step with its own row so the two cannot be
+crossed. No new concept and no new name. `method='rodas'` refuses rather
+than silently re-deriving: the Rosenbrock stepper keeps no per-stage
+row.
+
+What this is for: a pass that must take the run’s answers rather than
+its own. The first consumer is plant’s invasion run, where an invader
+stands in a resident’s recorded field — exogenous to it, so its
+derivative is zero rather than severed.
+
+**⚠️ The recorded row is six long, not five, and that changes
+`step_record`.** Five of the six are a step’s stages; the sixth is the
+evaluation at the state the step ends at, which first-same-as-last hands
+the next step as its own k1. A sweep re-derives that one at the state it
+was handed and still reads only the first five. A forward replay cannot
+— re-deriving is the thing it replays to avoid — and a step whose k1 was
+re-derived is wrong at first order in `h`.
+
+The forward-mode scalar lives in `tangent.hpp`, apart from the
+reverse-mode machinery in `adjoint.hpp`, so a consumer wanting a
+directional derivative and no record is never handed vocabulary for one.
+`tangent.hpp` rejects a forward scalar nested above a reverse one at
+compile time: three kernels costing 31 statements flat cost 566 nested.
+
+`ode_fit.hpp` is removed; `compute_gradient` has no drop-in, and
+`vector_jacobian_product` plus `sweep.hpp` replace it in C++. The R
+fitting interface is kept on the new machinery:
+`$set_target(times, target, obs_indices)` and `$fit(ic, params)` return
+the same least-squares loss and gradient as before, now by one reverse
+sweep over a replay of `times`, for both the Lorenz and the leaf thermal
+examples. What goes is the `active` argument on the `Solver_*` bindings
+and the separate AD solver it made, since every solver can now fit. A
+System needs `set_recorded_state()` and `for_each_active()` to be swept.
+The System contract becomes C++20 concepts (`HasOdeTime`,
+`SolvesForValues`, `ChecksState`, `Rebindable`), and `rebind()` becomes
+`rebind_from()`.
+
+A pinned step the domain refused is crossed in several sub-steps (0.4.0)
+and recorded as one row of the interval, holding the last sub-step’s
+solved values; one Runge–Kutta step of that interval is not the step the
+run took, and a sweep of it gave a derivative forty orders of magnitude
+off with every number finite. The row now carries `subdivided`, and
+`solve_adjoint` and a replay refuse it by name. `solve_adjoint` also
+refuses one batch handed as both seed and accumulator, which the width
+check let through whenever the state and parameter counts matched. The
+variadic `implicit_value` returned rows that included an input’s
+pre-existing adjoint; they are now the theorem’s alone.
+
+Only `method = "rkck"` records a run: `"dopri"` and `"rodas"` refuse a
+sweep or a replay rather than re-deriving one.
+
+A consumer that `LinkingTo` odelia now compiles as C++20
+(`CXX_STD = CXX20`) and must set the same two XAD defines as
+`src/Makevars`, `-DXAD_NO_THREADLOCAL -DXAD_USE_STRONG_INLINE`: the
+storage class of the active tape does not change the symbol’s name, so a
+translation unit built without them reaches the same tape through the
+other storage class.
+
+A **minor** bump: `rebind()` becomes `rebind_from()`, the trait probes
+become concepts, `ode_fit.hpp` and the `active` argument on the
+`Solver_*` bindings go, and `step_record` changes shape, so a System or
+a consumer that touched any of those recompiles differently. 0.6.0,
+0.6.1 and 0.6.2 shipped between this change’s first draft and its merge;
+the reverse-mode machinery sits on top of all three.
+
+## odelia 0.6.2
+
+**Resizing a solver no longer costs the square of the state length when
+RODAS is not the stepper (plant#656).** `SolverInternal::resize()`
+resizes every stepper the solver holds, and `RodasStep::resize()`
+zero-filled its two dense n×n buffers (`J`, `W`) each time, whatever the
+method. A consumer that changes its state length often paid that on
+every change: plant grows its state at each cohort introduction, so a
+run over n unknowns cost O(n²) per introduction for a stepper it never
+calls. The buffers are now sized on RODAS’s first step at a new length,
+and `W` without a fill, since every step overwrites it. Results are
+bit-identical; only allocation moved. In plant, `run_mutant()` over 51
+FF16 mutants against one resident fell from 45 s to 0.72 s (63×), now
+cheaper per mutant than running them one at a time, and a three-species
+FF16 resident run from 0.76 s to 0.37 s.
+
+A **patch** bump: no signature changes, and the same results for every
+method.
+
+## odelia 0.6.1
+
+**A fixed point, its stability, and how it moves with every parameter,
+without integrating to it
+([\#39](https://github.com/traitecoevo/odelia/issues/39)).**
+`SteadyState<System>` in `ode_steady_state.hpp` solves `f(y*) = 0` by
+damped Newton with an Armijo line search, reusing the implicit stepper’s
+Jacobian and dense LU; `sensitivity()` is the implicit-function-theorem
+`dy*/dθ = −(df/dy)⁻¹ (df/dθ)` from the same factorisation, one linear
+solve per parameter and no pass through the transient; `eigenvalues()`
+and `spectral_abscissa()` read attraction off `df/dy` (Hessenberg
+reduction, then Francis double-shift QR, in `ode_linalg.hpp`). `df/dθ`
+is `Jacobian::compute_params()`, the forward sweep that already gives
+`df/dy` with its unit seed on a parameter instead of a state component;
+the System names those parameters through `ad_parameters()`, a vector of
+pointers in a fixed order, which is the hook the reverse-mode work
+([\#59](https://github.com/traitecoevo/odelia/issues/59)) uses for the
+same purpose. Newton finds any root, so `solve_with_warmup()` is the
+call that seeks an attractor: it integrates the transient first, RODAS
+for a stiff system, when Newton from the given guess does not converge
+*or converges to a root that is not attracting*, the trivial equilibrium
+of a demographic model being the usual case. A Newton step that is not
+finite or does not reduce the residual at any fraction down to
+`min_lambda` stops the solve unconverged rather than being taken;
+`sensitivity()` and the stability queries refuse until a solve has
+converged. Fixed-point attractors of autonomous systems only; a system
+that declares `ode_autonomous()` is not asked for `df/dt`, and
+`time_dependence()` reports it for one that does not.
+
+**The same from R:
+[`ode_steady_state()`](https://traitecoevo.github.io/odelia/reference/ode_steady_state.md).**
+A right-hand side in the shape
+[`ode_solve()`](https://traitecoevo.github.io/odelia/reference/ode_solve.md)
+takes, `func(t, y, parms)`, is solved to its fixed point by the same
+Newton on the callback System of 0.6.0, with the Jacobian from `jacfunc`
+or forward differences; the result carries the Jacobian, its eigenvalues
+and the stability verdict, and `warmup = <span>` integrates the
+transient past a repelling root. There is no AD through R code, so the
+sensitivity `dy*/dp` is a central difference of `func` in each numeric
+element of `parms`, two evaluations per parameter, put through the
+implicit function theorem with the returned Jacobian in R. A function
+written for `deSolve` or
+[`rootSolve::steady()`](https://rdrr.io/pkg/rootSolve/man/steady.html)
+runs unchanged.
+
+**The `ad_parameters()` contract is that the rates read each parameter
+live.** A quantity the constructor derived from a parameter carries no
+tangent, so that parameter’s sensitivity column is zero with no error.
+`check_parameters()` compares the AD columns with a central difference
+taken through `rebind()`, which rebuilds the System and so does see the
+derived quantity; a breach reads as a discrepancy of order one, an
+honest System as finite-difference noise.
+
+Asserted on a two-state system with a closed-form equilibrium (`dy*/dθ`
+within 1e-8 of the closed form and 1e-6 of central differences of the
+re-solved equilibrium, eigenvalues within 1e-9 of their analytic
+values), on a logistic system whose trivial root Newton reaches from a
+small guess and whose interior attractor the warm start then finds, on a
+cached-parameter System that `check_parameters()` flags, and on the QR
+routine itself across complex pairs, a companion matrix, a Jordan block
+and 4×4 and 6×6 cyclic permutations, all to 1e-14.
+
+A **patch** bump: a new header, additive, no solver signature changed,
+so nothing that `LinkingTo` odelia recompiles differently.
+
+## odelia 0.6.0
+
+**A right-hand side written in R can be solved by the same steppers
+([\#62](https://github.com/traitecoevo/odelia/issues/62)).**
+[`ode_solve()`](https://traitecoevo.github.io/odelia/reference/ode_solve.md)
+is shaped like
+[`deSolve::ode()`](https://rdrr.io/pkg/deSolve/man/ode.html), so a
+function written for it runs unchanged, with any stepper, and returns a
+matrix with a `time` column; `OdeSolver` underneath is driven a step at
+a time and lets a caller change the state between steps, at a different
+length if need be, which is what a consumer with events needs.
+[`domain_error()`](https://traitecoevo.github.io/odelia/reference/domain_error.md)
+called anywhere below a callback leaves it and has the step rejected and
+retried smaller, the
+[\#55](https://github.com/traitecoevo/odelia/issues/55) bargain reached
+from R; any other error reaches R as itself.
+[`ode_counts()`](https://traitecoevo.github.io/odelia/reference/ode_counts.md)
+reports what a solve cost in right-hand-side evaluations and Jacobian
+formations, which for a right-hand side that is itself a large
+computation is the whole cost of the integration.
+
+The thing that steps a run-time callable is `CallbackSystem` in the
+R-free core (`ode_callback_system.hpp`), a System over `std::function`s,
+exercised as plain C++ in `tests/standalone/`; the R adapter in `src/`
+is the few lines that wrap `Rcpp::Function`s, and a Python binding would
+be the same lines over a `py::function`. Evaluation is lazy, so the
+three places the solver sets a state without wanting its rates cost
+nothing.
+
+**A third stepper, Dormand–Prince 5(4), with dense output of its own
+order ([\#24](https://github.com/traitecoevo/odelia/issues/24)).**
+`method = "dopri"` is the pair behind `deSolve`’s `ode45`, and what it
+has over Cash–Karp is a free fourth-order continuous extension from its
+own stages: `Solver::advance_collect(times, dense = TRUE)` (R:
+`OdeSolver$advance_collect()`, and the default in
+[`ode_solve()`](https://traitecoevo.github.io/odelia/reference/ode_solve.md)
+under `"dopri"`) lets the controller choose its steps and reads the
+requested times off the step that spans each, so ten thousand output
+rows cost the same integration as two, at the step’s own accuracy —
+asserted on a quartic, which the interpolant reproduces to rounding, and
+on Lorenz, where dense rows sit within 5e-7 of landed rows at 1e-8.
+Under the other two steppers the interpolant is cubic Hermite on the
+step’s endpoints, one order short (40–100× the integration error on
+Lorenz, measured), so with those
+[`ode_solve()`](https://traitecoevo.github.io/odelia/reference/ode_solve.md)
+defaults to `dense = FALSE`, which lands a step on every requested time
+as `ode45` does. The solver also exposes `interpolate()`,
+`get_step_size()` / `set_step_size()`, a bounded single
+`step(time_max)`, a rejection counter and a mid-step flag.
+
+**Three additions to the core open the implicit stepper to a callback
+system and cost every RODAS user less.** A System may supply its own
+Jacobian through an optional `ode_jacobian(y, t, dydt, J)` hook, taken
+in preference to the AD route when both exist (`fd_jacobian()` is the
+one-line finite-difference body for a system with no `rebind()`); a
+System may declare `ode_autonomous()` and is then not asked for a
+`df/dt` term, which was one extra evaluation per step; and the Jacobian
+and `df/dt` formed at a step’s start are kept across a retry of the same
+step rather than evaluated again for the same numbers. RODAS also now
+declares first-same-as-last, since the derivative it computes at the new
+point is exactly the next step’s start — it had been recomputed on every
+step. A singular W is a step rejection rather than a fatal. All of this
+is additive and bit-identical for a system that declares nothing new,
+asserted by `test-rodas.R` unchanged; per accepted RODAS step the budget
+is six evaluations, plus one for `df/dt` unless autonomous, plus the
+Jacobian once.
+
+**Measured against deSolve with the same R right-hand side**, installed
+build, median of seven. Per call the two are the same: on Lorenz 0.95 µs
+here, 1.03 µs there, the R function itself 0.6 µs of each — what remains
+is R’s. What differs is how many calls a fine output grid costs. Lorenz
+to t = 100 at 1e-6 with 10001 rows:
+[`ode_solve()`](https://traitecoevo.github.io/odelia/reference/ode_solve.md)
+27 ms for 32011 evaluations, `deSolve::ode(method = "ode45")` 57 ms for
+60002, `lsoda` 31 ms for 22729, so 2.1× `ode45` and level with `lsoda`;
+against a 1e-12 reference over the first two time units the three err by
+5.8e-5, 5.6e-6 (its landed steps over-resolve) and 1.3e-4. With 1001
+rows all three take 25–27 ms: the integration itself, not the output, is
+then the cost. Compiled Lorenz through `Lorenz_Solver` takes 1 ms, a
+hundred times faster than any of them. Stiff Van der Pol (ε = 1e-4, t =
+2): RODAS through R 823 steps and 7449 evaluations, the explicit
+steppers above 10000, deSolve `radau` 364 and 3279; odelia and radau
+agree to 5e-6.
+
+**The step-size rule is a switch, with today’s rule the default
+([\#64](https://github.com/traitecoevo/odelia/issues/64)).**
+`OdeControl` gains `set_controller()`: `"gsl"` is the rule odelia has
+always had (GSL’s standard control: accept below 1.1, grow only below
+0.5, otherwise keep the step), `"hairer"` is the classical rule of
+`dopri5.f` (without its Lund stabilisation term) and deSolve (RMS error
+norm, accept at 1, rescale after every step, no growth right after a
+rejection). The dead band in the gsl rule makes it ride the acceptance
+edge: on Lorenz to t = 100 it rejects 794 attempts where the hairer rule
+rejects 491 and does the same 4700 attempts and 28200 evaluations
+deSolve’s `ode45` does. The default stays gsl because changing it
+changes every adaptive step sequence plant takes;
+`ode_solve(controller = )` and `OdeControl$set_controller()` opt in now,
+and the family can flip the default with plant re-baselined.
+
+**A finite-difference Jacobian’s small-component floor is 1e-5, not 1
+and not the absolute tolerance.** `fd_jacobian()` perturbs component j
+by `rel_step * max(|y_j|, y_floor)`. With the floor at 1 a component of
+size 1e-5 was perturbed by a tenth of itself: on Robertson’s kinetics
+RODAS took 19000 steps where 436 do (435 with the analytic Jacobian;
+radau takes 144, being fifth order with Newton). With the floor at the
+absolute tolerance, the first fix tried, a tolerance of 1e-10 makes the
+perturbation 1e-16 and the difference vanishes in the subtraction (a
+unit derivative came back as 0, measured). The default is now
+`rodas.f`’s 1e-5 everywhere (`jac_fd_floor`). A component sitting on the
+upper edge of its domain, whose upward perturbation the right-hand side
+refuses, is perturbed downwards instead: the Jacobian does not depend on
+the step size, so retrying smaller could never have helped.
+[`ode_solve()`](https://traitecoevo.github.io/odelia/reference/ode_solve.md)
+also bounds the step by the span of `times` rather than the control’s
+plant-sized default of 10, which on the same problem was costing a
+thousand steps between t = 10 and t = 10⁴.
+
+A **minor** bump: new capability to pin against, headers changed
+additively, no consumer’s floor moves (nothing in the family uses RODAS
+or the new stepper yet).
+
+## odelia 0.5.1
+
+**The spline reads as fast as 0.4.0’s again, with the same numbers.** On
+a graded knot grid, 0.5.0 found a query’s span by binary search, where
+0.4.0 guessed from the mean spacing and stepped from there
+([\#21](https://github.com/traitecoevo/odelia/issues/21)). plant’s
+adaptive light field is graded and read in height order, so the search
+made its FF16 runs 17% slower than on 0.4.0. `hermite_spline` now uses
+the guess-and-step lookup again, which returns exactly the span the
+search did: 2.55 million reads on random graded grids, knots and their
+neighbouring doubles included, are bit-identical. The front end’s
+unchecked `operator()` also skips the initialisation check, as 0.4.0’s
+did.
+
+Against plant on 0.4.0, interleaved: FF16 full lifetime 0.106 to 0.102
+s, K93 0.036 to 0.035 s, and TF24 6 years 2.35 to 2.31 s.
+
+## odelia 0.5.0
+
+**The spline’s backend becomes a cubic Hermite that can take a slope at
+each knot; the front end does not change, and neither do its numbers.**
+A model that integrates over crowns knows the derivative at each knot as
+well as the value, and the global natural spline had no way to accept
+it. `spline.hpp` now holds `hermite_spline<S>`, a local cubic Hermite
+built from a value and a slope per knot. `interpolator.hpp` keeps every
+call the family makes — `init(x, y)`, `eval` with its out-of-domain
+refusal, `deriv`, `min`/`max`, `set_extrapolate`, `r_eval` — on
+`hermite_interpolator<S>` (was `basic_interpolator<S>`), which derives
+from the backend so a caller that has slopes reaches `init(x, y, m)`,
+`value_and_slope`, `set_nodes`/`set_data` and `refine`.
+
+A caller with values alone gets the natural cubic spline’s own knot
+slopes (`natural_slopes`), and a Hermite read through those slopes is
+the natural spline on every span, so `init(x, y)` reads the curve it
+read before: `test-drivers.R` and `test-spline.R` are unchanged, and
+phylloptim 0.8.1 compiled against this release makes the same number of
+solver evaluations at the same speed (82.3 per solve, 3.0–3.1 µs,
+interleaved against 0.4.0), with outputs equal to rounding (worst 2e-10
+absolute on its golden grid, from evaluating the same cubic in a
+different order). With supplied slopes the Hermite reproduces a cubic
+exactly and a read reaches four knots rather than all of them, which is
+what keeps an adjoint through it O(1). `monotone_slopes`
+(Fritsch–Carlson) is there for a caller that needs an interpolant that
+never leaves its data’s range.
+
+`value_with_slope<T>` pairs a value with its slope so the two cannot be
+handed over separately and paired wrongly; `util::to_passive` strips
+every derivative layer from a scalar.
+
+A **minor** bump: breaking only for a consumer that named
+`basic_interpolator<S>` or `spline::basic_spline<S>` directly. Split out
+of the reverse-mode change
+([\#59](https://github.com/traitecoevo/odelia/issues/59)).
+
 ## odelia 0.4.0
 
 **Step rejection now works when the integration is pinned to fixed times

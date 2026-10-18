@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">odelia</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.4.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.8.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -21,6 +21,7 @@
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles"><li><a class="dropdown-item" href="../articles/parameter-fitting.html">Parameter fitting with automatic differentiation</a></li>
     <li><a class="dropdown-item" href="../articles/leaf-thermal.html">Building your own model with external drivers</a></li>
+    <li><a class="dropdown-item" href="../articles/reverse-mode.html">Reverse mode: one solve, every parameter</a></li>
   </ul></li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
@@ -57,8 +58,7 @@
 
 <div class="section">
 <h3 id="public-methods">Public methods<a class="anchor" aria-label="anchor" href="#public-methods"></a></h3>
-
-<ul><li><p><a href="#method-OdeControl-new"><code>OdeControl$new()</code></a></p></li>
+<p></p><ul><li><p><a href="#method-OdeControl-initialize"><code>OdeControl$new()</code></a></p></li>
 <li><p><a href="#method-OdeControl-get_controls"><code>OdeControl$get_controls()</code></a></p></li>
 <li><p><a href="#method-OdeControl-set_controls"><code>OdeControl$set_controls()</code></a></p></li>
 <li><p><a href="#method-OdeControl-set_tol_abs"><code>OdeControl$set_tol_abs()</code></a></p></li>
@@ -67,26 +67,32 @@
 <li><p><a href="#method-OdeControl-set_a_dydt"><code>OdeControl$set_a_dydt()</code></a></p></li>
 <li><p><a href="#method-OdeControl-set_step_size_min"><code>OdeControl$set_step_size_min()</code></a></p></li>
 <li><p><a href="#method-OdeControl-set_step_size_max"><code>OdeControl$set_step_size_max()</code></a></p></li>
+<li><p><a href="#method-OdeControl-set_controller"><code>OdeControl$set_controller()</code></a></p></li>
+<li><p><a href="#method-OdeControl-get_controller"><code>OdeControl$get_controller()</code></a></p></li>
+<li><p><a href="#method-OdeControl-set_stabilisation"><code>OdeControl$set_stabilisation()</code></a></p></li>
+<li><p><a href="#method-OdeControl-get_stabilisation"><code>OdeControl$get_stabilisation()</code></a></p></li>
 <li><p><a href="#method-OdeControl-set_step_size_initial"><code>OdeControl$set_step_size_initial()</code></a></p></li>
 <li><p><a href="#method-OdeControl-clone"><code>OdeControl$clone()</code></a></p></li>
-</ul></div><p></p><hr><a id="method-OdeControl-new"></a><div class="section">
-<h3 id="method-new-">Method <code>new()</code><a class="anchor" aria-label="anchor" href="#method-new-"></a></h3>
+</ul></div><p></p><hr><a id="method-OdeControl-initialize"></a><div class="section">
+<h3 id="odecontrol-new-"><code>OdeControl$new()</code><a class="anchor" aria-label="anchor" href="#odecontrol-new-"></a></h3>
 <p>Initialize an `OdeControl` instance.</p><div class="section">
 <h4 id="usage">Usage<a class="anchor" aria-label="anchor" href="#usage"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va"><a href="../reference/OdeControl.html">OdeControl</a></span><span class="op">$</span><span class="fu">new</span><span class="op">(</span><span class="op">)</span></span></code></pre></div><p></p></div>
 </div>
 
+</div>
 
-</div><p></p><hr><a id="method-OdeControl-get_controls"></a><div class="section">
-<h3 id="method-get-controls-">Method <code>get_controls()</code><a class="anchor" aria-label="anchor" href="#method-get-controls-"></a></h3>
+<p></p><hr><a id="method-OdeControl-get_controls"></a><div class="section">
+<h3 id="odecontrol-get-controls-"><code>OdeControl$get_controls()</code><a class="anchor" aria-label="anchor" href="#odecontrol-get-controls-"></a></h3>
 <p>Get current solver control settings.</p><div class="section">
 <h4 id="usage-1">Usage<a class="anchor" aria-label="anchor" href="#usage-1"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">get_controls</span><span class="op">(</span><span class="op">)</span></span></code></pre></div><p></p></div>
 </div>
 
+</div>
 
-</div><p></p><hr><a id="method-OdeControl-set_controls"></a><div class="section">
-<h3 id="method-set-controls-">Method <code>set_controls()</code><a class="anchor" aria-label="anchor" href="#method-set-controls-"></a></h3>
+<p></p><hr><a id="method-OdeControl-set_controls"></a><div class="section">
+<h3 id="odecontrol-set-controls-"><code>OdeControl$set_controls()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-controls-"></a></h3>
 <p>Set all solver control settings at once.</p><div class="section">
 <h4 id="usage-2">Usage<a class="anchor" aria-label="anchor" href="#usage-2"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_controls</span><span class="op">(</span></span>
@@ -98,49 +104,41 @@
 <span>  <span class="va">step_size_max</span>,</span>
 <span>  <span class="va">step_size_initial</span></span>
 <span><span class="op">)</span></span></code></pre></div><p></p></div>
-</div>
-
-<div class="section">
+</div><p></p><div class="section">
 <h4 id="arguments">Arguments<a class="anchor" aria-label="anchor" href="#arguments"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>tol_abs</code></dt>
 <dd><p>Absolute tolerance.</p></dd>
 
-
-<dt><code>tol_rel</code></dt>
+      <dt><code>tol_rel</code></dt>
 <dd><p>Relative tolerance.</p></dd>
 
-
-<dt><code>a_y</code></dt>
+      <dt><code>a_y</code></dt>
 <dd><p>State scaling coefficient.</p></dd>
 
-
-<dt><code>a_dydt</code></dt>
+      <dt><code>a_dydt</code></dt>
 <dd><p>Derivative scaling coefficient.</p></dd>
 
-
-<dt><code>step_size_min</code></dt>
+      <dt><code>step_size_min</code></dt>
 <dd><p>Minimum allowed step size.</p></dd>
 
-
-<dt><code>step_size_max</code></dt>
+      <dt><code>step_size_max</code></dt>
 <dd><p>Maximum allowed step size.</p></dd>
 
-
-<dt><code>step_size_initial</code></dt>
+      <dt><code>step_size_initial</code></dt>
 <dd><p>Initial step size.</p></dd>
 
 
 </dl><p></p></div>
 </div>
 
-</div><p></p><hr><a id="method-OdeControl-set_tol_abs"></a><div class="section">
-<h3 id="method-set-tol-abs-">Method <code>set_tol_abs()</code><a class="anchor" aria-label="anchor" href="#method-set-tol-abs-"></a></h3>
+</div>
+
+<p></p><hr><a id="method-OdeControl-set_tol_abs"></a><div class="section">
+<h3 id="odecontrol-set-tol-abs-"><code>OdeControl$set_tol_abs()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-tol-abs-"></a></h3>
 <p>Set absolute tolerance.</p><div class="section">
 <h4 id="usage-3">Usage<a class="anchor" aria-label="anchor" href="#usage-3"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_tol_abs</span><span class="op">(</span><span class="va">tol_abs</span><span class="op">)</span></span></code></pre></div><p></p></div>
-</div>
-
-<div class="section">
+</div><p></p><div class="section">
 <h4 id="arguments-1">Arguments<a class="anchor" aria-label="anchor" href="#arguments-1"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>tol_abs</code></dt>
 <dd><p>Absolute tolerance.</p></dd>
@@ -149,14 +147,14 @@
 </dl><p></p></div>
 </div>
 
-</div><p></p><hr><a id="method-OdeControl-set_tol_rel"></a><div class="section">
-<h3 id="method-set-tol-rel-">Method <code>set_tol_rel()</code><a class="anchor" aria-label="anchor" href="#method-set-tol-rel-"></a></h3>
+</div>
+
+<p></p><hr><a id="method-OdeControl-set_tol_rel"></a><div class="section">
+<h3 id="odecontrol-set-tol-rel-"><code>OdeControl$set_tol_rel()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-tol-rel-"></a></h3>
 <p>Set relative tolerance.</p><div class="section">
 <h4 id="usage-4">Usage<a class="anchor" aria-label="anchor" href="#usage-4"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_tol_rel</span><span class="op">(</span><span class="va">tol_rel</span><span class="op">)</span></span></code></pre></div><p></p></div>
-</div>
-
-<div class="section">
+</div><p></p><div class="section">
 <h4 id="arguments-2">Arguments<a class="anchor" aria-label="anchor" href="#arguments-2"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>tol_rel</code></dt>
 <dd><p>Relative tolerance.</p></dd>
@@ -165,14 +163,14 @@
 </dl><p></p></div>
 </div>
 
-</div><p></p><hr><a id="method-OdeControl-set_a_y"></a><div class="section">
-<h3 id="method-set-a-y-">Method <code>set_a_y()</code><a class="anchor" aria-label="anchor" href="#method-set-a-y-"></a></h3>
+</div>
+
+<p></p><hr><a id="method-OdeControl-set_a_y"></a><div class="section">
+<h3 id="odecontrol-set-a-y-"><code>OdeControl$set_a_y()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-a-y-"></a></h3>
 <p>Set state scaling coefficient.</p><div class="section">
 <h4 id="usage-5">Usage<a class="anchor" aria-label="anchor" href="#usage-5"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_a_y</span><span class="op">(</span><span class="va">a_y</span><span class="op">)</span></span></code></pre></div><p></p></div>
-</div>
-
-<div class="section">
+</div><p></p><div class="section">
 <h4 id="arguments-3">Arguments<a class="anchor" aria-label="anchor" href="#arguments-3"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>a_y</code></dt>
 <dd><p>State scaling coefficient.</p></dd>
@@ -181,14 +179,14 @@
 </dl><p></p></div>
 </div>
 
-</div><p></p><hr><a id="method-OdeControl-set_a_dydt"></a><div class="section">
-<h3 id="method-set-a-dydt-">Method <code>set_a_dydt()</code><a class="anchor" aria-label="anchor" href="#method-set-a-dydt-"></a></h3>
+</div>
+
+<p></p><hr><a id="method-OdeControl-set_a_dydt"></a><div class="section">
+<h3 id="odecontrol-set-a-dydt-"><code>OdeControl$set_a_dydt()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-a-dydt-"></a></h3>
 <p>Set derivative scaling coefficient.</p><div class="section">
 <h4 id="usage-6">Usage<a class="anchor" aria-label="anchor" href="#usage-6"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_a_dydt</span><span class="op">(</span><span class="va">a_dydt</span><span class="op">)</span></span></code></pre></div><p></p></div>
-</div>
-
-<div class="section">
+</div><p></p><div class="section">
 <h4 id="arguments-4">Arguments<a class="anchor" aria-label="anchor" href="#arguments-4"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>a_dydt</code></dt>
 <dd><p>Derivative scaling coefficient.</p></dd>
@@ -197,14 +195,14 @@
 </dl><p></p></div>
 </div>
 
-</div><p></p><hr><a id="method-OdeControl-set_step_size_min"></a><div class="section">
-<h3 id="method-set-step-size-min-">Method <code>set_step_size_min()</code><a class="anchor" aria-label="anchor" href="#method-set-step-size-min-"></a></h3>
+</div>
+
+<p></p><hr><a id="method-OdeControl-set_step_size_min"></a><div class="section">
+<h3 id="odecontrol-set-step-size-min-"><code>OdeControl$set_step_size_min()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-step-size-min-"></a></h3>
 <p>Set minimum step size.</p><div class="section">
 <h4 id="usage-7">Usage<a class="anchor" aria-label="anchor" href="#usage-7"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_step_size_min</span><span class="op">(</span><span class="va">step_size_min</span><span class="op">)</span></span></code></pre></div><p></p></div>
-</div>
-
-<div class="section">
+</div><p></p><div class="section">
 <h4 id="arguments-5">Arguments<a class="anchor" aria-label="anchor" href="#arguments-5"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>step_size_min</code></dt>
 <dd><p>Minimum allowed step size.</p></dd>
@@ -213,14 +211,14 @@
 </dl><p></p></div>
 </div>
 
-</div><p></p><hr><a id="method-OdeControl-set_step_size_max"></a><div class="section">
-<h3 id="method-set-step-size-max-">Method <code>set_step_size_max()</code><a class="anchor" aria-label="anchor" href="#method-set-step-size-max-"></a></h3>
+</div>
+
+<p></p><hr><a id="method-OdeControl-set_step_size_max"></a><div class="section">
+<h3 id="odecontrol-set-step-size-max-"><code>OdeControl$set_step_size_max()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-step-size-max-"></a></h3>
 <p>Set maximum step size.</p><div class="section">
 <h4 id="usage-8">Usage<a class="anchor" aria-label="anchor" href="#usage-8"></a></h4>
 <p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_step_size_max</span><span class="op">(</span><span class="va">step_size_max</span><span class="op">)</span></span></code></pre></div><p></p></div>
-</div>
-
-<div class="section">
+</div><p></p><div class="section">
 <h4 id="arguments-6">Arguments<a class="anchor" aria-label="anchor" href="#arguments-6"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>step_size_max</code></dt>
 <dd><p>Maximum allowed step size.</p></dd>
@@ -229,15 +227,76 @@
 </dl><p></p></div>
 </div>
 
-</div><p></p><hr><a id="method-OdeControl-set_step_size_initial"></a><div class="section">
-<h3 id="method-set-step-size-initial-">Method <code>set_step_size_initial()</code><a class="anchor" aria-label="anchor" href="#method-set-step-size-initial-"></a></h3>
-<p>Set initial step size.</p><div class="section">
-<h4 id="usage-9">Usage<a class="anchor" aria-label="anchor" href="#usage-9"></a></h4>
-<p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_step_size_initial</span><span class="op">(</span><span class="va">step_size_initial</span><span class="op">)</span></span></code></pre></div><p></p></div>
 </div>
 
-<div class="section">
+<p></p><hr><a id="method-OdeControl-set_controller"></a><div class="section">
+<h3 id="odecontrol-set-controller-"><code>OdeControl$set_controller()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-controller-"></a></h3>
+<p>Set the step-size rule, `"gsl"` or `"hairer"`.</p><div class="section">
+<h4 id="usage-9">Usage<a class="anchor" aria-label="anchor" href="#usage-9"></a></h4>
+<p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_controller</span><span class="op">(</span><span class="va">controller</span><span class="op">)</span></span></code></pre></div><p></p></div>
+</div><p></p><div class="section">
 <h4 id="arguments-7">Arguments<a class="anchor" aria-label="anchor" href="#arguments-7"></a></h4>
+<p></p><div class="arguments"><dl><dt><code>controller</code></dt>
+<dd><p>Which rule turns the error estimate into the next step:
+`"hairer"` (the default; the error in the RMS norm over components,
+accept at 1 and rescale after every step, as Hairer's codes and
+`deSolve` do, damped by the previous step's error as `dopri5.f` is and
+`deSolve`'s `rk` is not; see `set_stabilisation()`) or `"gsl"` (the
+worst component's error, accept below 1.1, grow only below 0.5,
+otherwise keep the step). `"gsl"` rejects many more attempts;
+`"hairer"`'s RMS norm bounds each component more loosely when the state
+is large and the error sits in a few components.</p></dd>
+
+
+</dl><p></p></div>
+</div>
+
+</div>
+
+<p></p><hr><a id="method-OdeControl-get_controller"></a><div class="section">
+<h3 id="odecontrol-get-controller-"><code>OdeControl$get_controller()</code><a class="anchor" aria-label="anchor" href="#odecontrol-get-controller-"></a></h3>
+<p>The step-size rule in force.</p><div class="section">
+<h4 id="usage-10">Usage<a class="anchor" aria-label="anchor" href="#usage-10"></a></h4>
+<p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">get_controller</span><span class="op">(</span><span class="op">)</span></span></code></pre></div><p></p></div>
+</div>
+
+</div>
+
+<p></p><hr><a id="method-OdeControl-set_stabilisation"></a><div class="section">
+<h3 id="odecontrol-set-stabilisation-"><code>OdeControl$set_stabilisation()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-stabilisation-"></a></h3>
+<p>Set the `"hairer"` rule's stabilisation, `beta` in
+  `dopri5.f`: 0.04 (the default) damps step growth while the error is
+  rising, which keeps an explicit stepper off its stability limit; 0 is
+  the classical rule, which takes fewer steps on smooth problems.</p><div class="section">
+<h4 id="usage-11">Usage<a class="anchor" aria-label="anchor" href="#usage-11"></a></h4>
+<p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_stabilisation</span><span class="op">(</span><span class="va">stabilisation</span><span class="op">)</span></span></code></pre></div><p></p></div>
+</div><p></p><div class="section">
+<h4 id="arguments-8">Arguments<a class="anchor" aria-label="anchor" href="#arguments-8"></a></h4>
+<p></p><div class="arguments"><dl><dt><code>stabilisation</code></dt>
+<dd><p>A number in `[0, 0.2)`.</p></dd>
+
+
+</dl><p></p></div>
+</div>
+
+</div>
+
+<p></p><hr><a id="method-OdeControl-get_stabilisation"></a><div class="section">
+<h3 id="odecontrol-get-stabilisation-"><code>OdeControl$get_stabilisation()</code><a class="anchor" aria-label="anchor" href="#odecontrol-get-stabilisation-"></a></h3>
+<p>The `"hairer"` rule's stabilisation in force.</p><div class="section">
+<h4 id="usage-12">Usage<a class="anchor" aria-label="anchor" href="#usage-12"></a></h4>
+<p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">get_stabilisation</span><span class="op">(</span><span class="op">)</span></span></code></pre></div><p></p></div>
+</div>
+
+</div>
+
+<p></p><hr><a id="method-OdeControl-set_step_size_initial"></a><div class="section">
+<h3 id="odecontrol-set-step-size-initial-"><code>OdeControl$set_step_size_initial()</code><a class="anchor" aria-label="anchor" href="#odecontrol-set-step-size-initial-"></a></h3>
+<p>Set initial step size.</p><div class="section">
+<h4 id="usage-13">Usage<a class="anchor" aria-label="anchor" href="#usage-13"></a></h4>
+<p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">set_step_size_initial</span><span class="op">(</span><span class="va">step_size_initial</span><span class="op">)</span></span></code></pre></div><p></p></div>
+</div><p></p><div class="section">
+<h4 id="arguments-9">Arguments<a class="anchor" aria-label="anchor" href="#arguments-9"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>step_size_initial</code></dt>
 <dd><p>Initial step size.</p></dd>
 
@@ -245,15 +304,15 @@
 </dl><p></p></div>
 </div>
 
-</div><p></p><hr><a id="method-OdeControl-clone"></a><div class="section">
-<h3 id="method-clone-">Method <code>clone()</code><a class="anchor" aria-label="anchor" href="#method-clone-"></a></h3>
-<p>The objects of this class are cloneable with this method.</p><div class="section">
-<h4 id="usage-10">Usage<a class="anchor" aria-label="anchor" href="#usage-10"></a></h4>
-<p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">clone</span><span class="op">(</span>deep <span class="op">=</span> <span class="cn">FALSE</span><span class="op">)</span></span></code></pre></div><p></p></div>
 </div>
 
-<div class="section">
-<h4 id="arguments-8">Arguments<a class="anchor" aria-label="anchor" href="#arguments-8"></a></h4>
+<p></p><hr><a id="method-OdeControl-clone"></a><div class="section">
+<h3 id="odecontrol-clone-"><code>OdeControl$clone()</code><a class="anchor" aria-label="anchor" href="#odecontrol-clone-"></a></h3>
+<p>The objects of this class are cloneable with this method.</p><div class="section">
+<h4 id="usage-14">Usage<a class="anchor" aria-label="anchor" href="#usage-14"></a></h4>
+<p></p><div class="r"><div class="sourceCode"><pre><code><span><span class="va">OdeControl</span><span class="op">$</span><span class="fu">clone</span><span class="op">(</span>deep <span class="op">=</span> <span class="cn">FALSE</span><span class="op">)</span></span></code></pre></div><p></p></div>
+</div><p></p><div class="section">
+<h4 id="arguments-10">Arguments<a class="anchor" aria-label="anchor" href="#arguments-10"></a></h4>
 <p></p><div class="arguments"><dl><dt><code>deep</code></dt>
 <dd><p>Whether to make a deep clone.</p></dd>
 
@@ -262,6 +321,7 @@
 </div>
 
 </div>
+
 
     </div>
 

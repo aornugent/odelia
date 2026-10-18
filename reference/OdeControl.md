@@ -12,7 +12,7 @@ R6 wrapper for ODE solver control settings
 
 ### Public methods
 
-- [`OdeControl$new()`](#method-OdeControl-new)
+- [`OdeControl$new()`](#method-OdeControl-initialize)
 
 - [`OdeControl$get_controls()`](#method-OdeControl-get_controls)
 
@@ -30,13 +30,21 @@ R6 wrapper for ODE solver control settings
 
 - [`OdeControl$set_step_size_max()`](#method-OdeControl-set_step_size_max)
 
+- [`OdeControl$set_controller()`](#method-OdeControl-set_controller)
+
+- [`OdeControl$get_controller()`](#method-OdeControl-get_controller)
+
+- [`OdeControl$set_stabilisation()`](#method-OdeControl-set_stabilisation)
+
+- [`OdeControl$get_stabilisation()`](#method-OdeControl-get_stabilisation)
+
 - [`OdeControl$set_step_size_initial()`](#method-OdeControl-set_step_size_initial)
 
 - [`OdeControl$clone()`](#method-OdeControl-clone)
 
 ------------------------------------------------------------------------
 
-### Method `new()`
+### `OdeControl$new()`
 
 Initialize an \`OdeControl\` instance.
 
@@ -46,7 +54,7 @@ Initialize an \`OdeControl\` instance.
 
 ------------------------------------------------------------------------
 
-### Method `get_controls()`
+### `OdeControl$get_controls()`
 
 Get current solver control settings.
 
@@ -56,7 +64,7 @@ Get current solver control settings.
 
 ------------------------------------------------------------------------
 
-### Method `set_controls()`
+### `OdeControl$set_controls()`
 
 Set all solver control settings at once.
 
@@ -104,7 +112,7 @@ Set all solver control settings at once.
 
 ------------------------------------------------------------------------
 
-### Method `set_tol_abs()`
+### `OdeControl$set_tol_abs()`
 
 Set absolute tolerance.
 
@@ -120,7 +128,7 @@ Set absolute tolerance.
 
 ------------------------------------------------------------------------
 
-### Method `set_tol_rel()`
+### `OdeControl$set_tol_rel()`
 
 Set relative tolerance.
 
@@ -136,7 +144,7 @@ Set relative tolerance.
 
 ------------------------------------------------------------------------
 
-### Method `set_a_y()`
+### `OdeControl$set_a_y()`
 
 Set state scaling coefficient.
 
@@ -152,7 +160,7 @@ Set state scaling coefficient.
 
 ------------------------------------------------------------------------
 
-### Method `set_a_dydt()`
+### `OdeControl$set_a_dydt()`
 
 Set derivative scaling coefficient.
 
@@ -168,7 +176,7 @@ Set derivative scaling coefficient.
 
 ------------------------------------------------------------------------
 
-### Method `set_step_size_min()`
+### `OdeControl$set_step_size_min()`
 
 Set minimum step size.
 
@@ -184,7 +192,7 @@ Set minimum step size.
 
 ------------------------------------------------------------------------
 
-### Method `set_step_size_max()`
+### `OdeControl$set_step_size_max()`
 
 Set maximum step size.
 
@@ -200,7 +208,70 @@ Set maximum step size.
 
 ------------------------------------------------------------------------
 
-### Method `set_step_size_initial()`
+### `OdeControl$set_controller()`
+
+Set the step-size rule, \`"gsl"\` or \`"hairer"\`.
+
+#### Usage
+
+    OdeControl$set_controller(controller)
+
+#### Arguments
+
+- `controller`:
+
+  Which rule turns the error estimate into the next step: \`"hairer"\`
+  (the default; the error in the RMS norm over components, accept at 1
+  and rescale after every step, as Hairer's codes and \`deSolve\` do,
+  damped by the previous step's error as \`dopri5.f\` is and
+  \`deSolve\`'s \`rk\` is not; see \`set_stabilisation()\`) or \`"gsl"\`
+  (the worst component's error, accept below 1.1, grow only below 0.5,
+  otherwise keep the step). \`"gsl"\` rejects many more attempts;
+  \`"hairer"\`'s RMS norm bounds each component more loosely when the
+  state is large and the error sits in a few components.
+
+------------------------------------------------------------------------
+
+### `OdeControl$get_controller()`
+
+The step-size rule in force.
+
+#### Usage
+
+    OdeControl$get_controller()
+
+------------------------------------------------------------------------
+
+### `OdeControl$set_stabilisation()`
+
+Set the \`"hairer"\` rule's stabilisation, \`beta\` in \`dopri5.f\`:
+0.04 (the default) damps step growth while the error is rising, which
+keeps an explicit stepper off its stability limit; 0 is the classical
+rule, which takes fewer steps on smooth problems.
+
+#### Usage
+
+    OdeControl$set_stabilisation(stabilisation)
+
+#### Arguments
+
+- `stabilisation`:
+
+  A number in \`\[0, 0.2)\`.
+
+------------------------------------------------------------------------
+
+### `OdeControl$get_stabilisation()`
+
+The \`"hairer"\` rule's stabilisation in force.
+
+#### Usage
+
+    OdeControl$get_stabilisation()
+
+------------------------------------------------------------------------
+
+### `OdeControl$set_step_size_initial()`
 
 Set initial step size.
 
@@ -216,7 +287,7 @@ Set initial step size.
 
 ------------------------------------------------------------------------
 
-### Method `clone()`
+### `OdeControl$clone()`
 
 The objects of this class are cloneable with this method.
 
