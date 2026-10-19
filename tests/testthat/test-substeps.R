@@ -188,29 +188,29 @@ compile_substep_interface <- function() {
       return ctl;
     }
 
-    StoreA store(const std::vector<double>& p, double share) {
+    StoreA store(const std::vector<double>& p, double substep_below) {
       StoreA s(p[0], p[1], p[2], p[3], p[4]);
-      s.substep_below = share;
+      s.substep_below = substep_below;
       return s;
     }
 
     std::vector<ode::instruction> program_of(const std::vector<double>& pars,
                                              const std::vector<double>& y0,
                                              double t_end, double tol,
-                                             double share) {
-      ode::Solver<StoreA> solver(store(pars, share), control_at(tol));
+                                             double substep_below) {
+      ode::Solver<StoreA> solver(store(pars, substep_below), control_at(tol));
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
       return solver.schedule();
     }
 
     // [[Rcpp::export]]
-    Rcpp::List store_run(double share, double tol, double t_end,
+    Rcpp::List store_run(double substep_below, double tol, double t_end,
                          std::vector<double> pars, std::vector<double> y0,
                          double fail_after = 1e300) {
       const std::vector<double> fractions{1.0 / 5.0, 0.3, 3.0 / 5.0, 7.0 / 8.0,
                                           1.0};
-      StoreA s = store(pars, share);
+      StoreA s = store(pars, substep_below);
       s.fail_after = fail_after;
       ode::Solver<StoreA> solver(s, control_at(tol));
       solver.set_keep_states(true);
@@ -236,7 +236,7 @@ compile_substep_interface <- function() {
         }
       }
       // A replay of the recording, its rows loaded, repeats the run.
-      ode::Solver<StoreA> replay(store(pars, share), control_at(tol));
+      ode::Solver<StoreA> replay(store(pars, substep_below), control_at(tol));
       replay.set_state(y0, 0.0);
       replay.advance_recorded(solver.recording());
       return Rcpp::List::create(
@@ -253,11 +253,11 @@ compile_substep_interface <- function() {
     // lands, the times its steps end, whether each step substepped the store, and
     // the times its substeps end.
     // [[Rcpp::export]]
-    Rcpp::List store_pulsed_run(double share, double tol, std::vector<double> stops,
+    Rcpp::List store_pulsed_run(double substep_below, double tol, std::vector<double> stops,
                                 std::vector<double> pars, std::vector<double> y0,
                                 std::vector<double> x, std::vector<double> y) {
       const drivers::Function pulses(x, y, drivers::Slopes::monotone);
-      StoreA s = store(pars, share);
+      StoreA s = store(pars, substep_below);
       s.pulses = &pulses;
       ode::Solver<StoreA> solver(s, control_at(tol));
       solver.set_state(y0, 0.0);
@@ -286,13 +286,13 @@ compile_substep_interface <- function() {
     // The program of a pulsed run, replayed with its substeps dropped, which a step
     // spanning a knot refuses.
     // [[Rcpp::export]]
-    void store_pulsed_replay_without_substeps(double share, double tol,
+    void store_pulsed_replay_without_substeps(double substep_below, double tol,
                                               std::vector<double> pars,
                                               std::vector<double> y0,
                                               std::vector<double> x,
                                               std::vector<double> y) {
       const drivers::Function pulses(x, y, drivers::Slopes::monotone);
-      StoreA s = store(pars, share);
+      StoreA s = store(pars, substep_below);
       s.pulses = &pulses;
       ode::Solver<StoreA> run(s, control_at(tol));
       run.set_state(y0, 0.0);
@@ -324,10 +324,10 @@ compile_substep_interface <- function() {
     Rcpp::List store_replay(std::vector<double> program_pars,
                             std::vector<double> pars, std::vector<double> y0,
                             std::vector<double> y0_program, double t_end,
-                            double tol, double share, std::string method) {
+                            double tol, double substep_below, std::string method) {
       const std::vector<ode::instruction> program =
-        program_of(program_pars, y0_program, t_end, tol, share);
-      ode::Solver<StoreA> replay(store(pars, share), control_at(tol),
+        program_of(program_pars, y0_program, t_end, tol, substep_below);
+      ode::Solver<StoreA> replay(store(pars, substep_below), control_at(tol),
                                  method == "rodas" ? ode::Method::rodas
                                                    : ode::Method::rkck);
       replay.set_state(y0, 0.0);
@@ -345,12 +345,12 @@ compile_substep_interface <- function() {
     // in the parameters: where it lands, and its derivative there.
     // [[Rcpp::export]]
     Rcpp::List store_tangent_replay(std::vector<double> pars, std::vector<double> y0,
-                                    double t_end, double tol, double share,
+                                    double t_end, double tol, double substep_below,
                                     std::vector<double> direction) {
       const std::vector<ode::instruction> program =
-        program_of(pars, y0, t_end, tol, share);
+        program_of(pars, y0, t_end, tol, substep_below);
       using tangent = ode::tangent_scalar<>;
-      auto active = store(pars, share).rebind_from<tangent>();
+      auto active = store(pars, substep_below).rebind_from<tangent>();
       std::vector<tangent*> p = active.ad_parameters();
       for (size_t j = 0; j < p.size(); ++j) {
         ode::seed_direction(*p[j], direction[j]);
@@ -371,12 +371,12 @@ compile_substep_interface <- function() {
     // substep the store refuses.
     // [[Rcpp::export]]
     Rcpp::List store_grid_replay(std::vector<double> pars, std::vector<double> y0,
-                                 double t_end, double tol, double share) {
-      std::vector<ode::instruction> grid = program_of(pars, y0, t_end, tol, share);
+                                 double t_end, double tol, double substep_below) {
+      std::vector<ode::instruction> grid = program_of(pars, y0, t_end, tol, substep_below);
       for (ode::instruction& row : grid) {
         row = {row.time, std::numeric_limits<double>::quiet_NaN()};
       }
-      ode::Solver<StoreA> replay(store(pars, share), control_at(tol));
+      ode::Solver<StoreA> replay(store(pars, substep_below), control_at(tol));
       replay.set_state(y0, 0.0);
       replay.advance_recorded(grid);
       return Rcpp::List::create(Rcpp::_["y"] = replay.state());
@@ -385,8 +385,8 @@ compile_substep_interface <- function() {
     // [[Rcpp::export]]
     Rcpp::List store_adjoint(std::vector<double> pars, std::vector<double> y0,
                              double t_end, std::vector<double> lambda_end,
-                             double tol, double share) {
-      ode::Solver<StoreA> run(store(pars, share), control_at(tol));
+                             double tol, double substep_below) {
+      ode::Solver<StoreA> run(store(pars, substep_below), control_at(tol));
       run.set_keep_states(true);
       run.set_state(y0, 0.0);
       run.advance_adaptive({0.0, t_end});
@@ -406,7 +406,7 @@ compile_substep_interface <- function() {
 store_pars <- c(1.0, 0.8, 1e4, 200, 0.3)
 store_y <- c(1.0, 0.5, 0.5)
 
-testthat::test_that("with the share at zero, every step is the plain System's", {
+testthat::test_that("with substep_below at zero, every step is the plain System's", {
   compile_substep_interface()
   off <- store_run(0.0, 1e-6, 0.5, store_pars, store_y)
   plain <- store_plain_run(1e-6, 0.5, store_pars, store_y)
@@ -466,7 +466,7 @@ testthat::test_that("a grid of a run's times is refused where a step would subst
   compile_substep_interface()
   expect_error(store_grid_replay(store_pars, store_y, 0.5, 1e-6, 0.1),
                "replay the run's program")
-  # With the share at zero no step substeps, and the grid is replayed.
+  # With substep_below at zero no step substeps, and the grid is replayed.
   off <- store_run(0.0, 1e-6, 0.5, store_pars, store_y)
   expect_equal(store_grid_replay(store_pars, store_y, 0.5, 1e-6, 0.0)$y, off$y,
                tolerance = 1e-12)
@@ -555,7 +555,7 @@ testthat::test_that("a step spanning the inflow's knots substeps the store, howe
   t_end <- 1.0
   knots <- pulse_knots[pulse_knots < t_end]
   slow <- store_pars * c(1, 1, 1e-3, 1, 1)
-  # The share at zero, so no step is weakly coupled: those that span a knot
+  # substep_below at zero, so no step is weakly coupled: those that span a knot
   # substep the store all the same.
   reference <- store_pulsed_run(0.0, 1e-11, c(0, knots, t_end), slow, store_y,
                                 pulse_x, pulse_y)$y
