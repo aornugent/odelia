@@ -1,3 +1,9 @@
+## odelia 0.8.1
+
+**A walk over a recording can store its own solves over a copy of each row.** `advance_recorded(rec)` hands each stage the row the recorded run solved into, const, so a System loads every value the run solved for. A System that stands in part of the row and solves for the rest -- plant's invader, which takes the resident's field and solves its own leaf -- could not record what it solved, so its sweep loaded the resident's solves. `advance_recorded(rec, true)` copies each row and hands the stages the copy to store into: a System reads what the run left there and writes its own solves over the rest, and a walk that keeps its states records the copy. The copy outlives the step, so what a System stood in stays readable until the next step, as a recorded row does. A standalone test, under both explicit steppers, walks a recording through another parameter: the walk makes the program replay's own choices bit for bit, each evaluation is handed the run's row first, its recording holds its own choices, and a sweep of it matches a central difference of such walks.
+
+A **patch** bump: `advance_recorded(rec)` is unchanged.
+
 ## odelia 0.8.0
 
 **Hairer's step-size rule is the default, stabilised as `dopri5.f` has it (#64).** `OdeControl` now defaults to `Controller::hairer` (`"hairer"` in `ode_solve()` and `OdeControl$set_controller()`): the error in the RMS norm over components, accept at or below 1, and rescale after every accepted step, damped by the previous step's error with `dopri5.f`'s `beta = 0.04` (`set_stabilisation()`, R: `OdeControl$set_stabilisation()`). The `gsl` rule's dead band repeated a step that landed near the edge until it was rejected, and never grew a step whose error sat inside the band. On Lorenz to t = 100 at 1e-6 under Dormand–Prince, the gsl rule rejects 799 attempts for 32000 evaluations; the default rejects 210 for 27600, against `deSolve` `ode45`'s 88 and 28200.

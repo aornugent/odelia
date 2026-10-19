@@ -156,9 +156,10 @@ public:
   void step(System& system, double time_max_);
   void step_to(System& system, double time_max_);
   // `reached` is the time a recording says this step ended at; NaN accumulates.
-  // `replay`, where a recording is being walked, is that step's own solved row.
+  // `replay`, where a recording is being walked, is that step's own solved row:
+  // loaded, or with `seed` copied for the stages to store over.
   void step_by(System& system, double step_size, double reached,
-               const solved_row<System>* replay = nullptr);
+               const solved_row<System>* replay = nullptr, bool seed = false);
   void step_euler(System& system, double time_max_);
 
   void set_time_max(double time_max_);
@@ -213,11 +214,12 @@ private:
   //
   // `replay` is the row an earlier run wrote, where a caller is replaying one:
   // the stages then load it instead of solving again, and nothing is cleared
-  // because nothing is written.
+  // because nothing is written. With `seed` they store into a copy of it.
   void stepper_step(System& system, double time_, double step_size,
                     state_type& y_, state_type& yerr_,
                     const state_type& dydt_in_, state_type& dydt_out_,
-                    const solved_row<System>* replay = nullptr) {
+                    const solved_row<System>* replay = nullptr,
+                    bool seed = false) {
     // Each stepper's last evaluation is at the state the step ends at, at this
     // time, which is what first-same-as-last carries on with dydt_out.
     dydt_out_time = time_ + step_size;
@@ -227,7 +229,17 @@ private:
       // and only the one that is accepted is committed -- which is what makes
       // "a rejected attempt writes the same slot as its retry" nothing anyone has
       // to arrange.
-      if (replay != nullptr) {
+      if (replay != nullptr && seed) {
+        // A System reads what the recorded run left in the row and stores what
+        // it solves itself. The copy outlives the step, as a recorded row does,
+        // so what a System stood in stays readable until the next step.
+        seeded_row_ = *replay;
+        explicit_stepper.step(system, seeded_row_, time_, step_size, y_, yerr_,
+                              dydt_in_, dydt_out_);
+        if (keep_states_) {
+          solved_scratch_ = seeded_row_;
+        }
+      } else if (replay != nullptr) {
         explicit_stepper.step(system, *replay, time_, step_size, y_, yerr_,
                               dydt_in_, dydt_out_);
         // A replay that keeps its states keeps the rows it loaded too, so its
@@ -343,6 +355,8 @@ private:
   // The step being attempted writes what it solves for here, and an accepted step
   // moves it onto its row.
   solved_row<System> solved_scratch_;
+  // The row a seeded walk's last step stored into.
+  solved_row<System> seeded_row_;
 
   state_type y;        // Vector of current system state
   state_type yerr;     // Vector of error estimates
@@ -827,7 +841,8 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
 template <class System>
 void SolverInternal<System>::step_by(System& system, double step_size,
                                      double reached,
-                                     const solved_row<System>* replay) {
+                                     const solved_row<System>* replay,
+                                     bool seed) {
   if (!util::is_finite(step_size)) {
     util::stop("step_size must be finite!");
   }
@@ -837,7 +852,8 @@ void SolverInternal<System>::step_by(System& system, double step_size,
   in_step = true;
   have_prev = false; // a fixed step leaves no adaptive step to interpolate in
   setup_dydt_in(system);
-  stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay);
+  stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay,
+               seed);
   save_dydt_out_as_in();
 
   // The time the run reached, where a recording says what it was, rather than
