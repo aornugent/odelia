@@ -206,9 +206,17 @@ public:
 
 private:
   // Whether a step from the current time to `step_end` substeps the System's
-  // subsystem: under Cash-Karp, where the step spans a knot of its forcing or
-  // the System reports it weakly coupled.
+  // subsystem: under Cash-Karp, where the step spans a knot of its forcing, or,
+  // where the control allows, where it is past Cash-Karp's stability limit on
+  // it or follows a step that substepping would have let grow.
   bool substeps_subsystem(const System& system, double step_end) const;
+  // Whether Cash-Karp's error on the subsystem limited the step just accepted
+  // more than the rest's error and the coupling error of substepping: the one
+  // the step measured where it substepped, and otherwise half the step times
+  // how far the inputs at t + h missed the line along the input slope.
+  bool substepping_pays(const System& system, const state_type& u0,
+                        const std::vector<double>& input_slope, double h,
+                        bool substepped) const;
   bool spans_subsystem_knot(const System& system, double step_end) const;
   void refuse_substeps_unless_rkck(const subsystem_substeps* substeps) const {
     if (substeps != nullptr && method != Method::rkck) {
@@ -389,6 +397,8 @@ private:
     double step_size;
   };
   std::optional<last_inputs> last_inputs_;
+  // substepping_pays for the last accepted adaptive step.
+  bool substepping_paid_ = false;
 };
 
 template <class System>
@@ -405,6 +415,8 @@ void SolverInternal<System>::reset(System& system) {
   prev_schedule.clear();
   step_size_last = control.step_size_initial;
   control.reset_memory();
+  stepper.subsystem_stiffness = 0.0;
+  substepping_paid_ = false;
   time_max = std::numeric_limits<double>::infinity();
   in_step = false;
   have_prev = false;
@@ -632,13 +644,11 @@ void SolverInternal<System>::step(System& system) {
     system.subsystem_inputs(u0);
     substep_subsystem =
       substeps_subsystem(system, std::min(time + step_size, time_max));
-    if (substep_subsystem) {
-      input_slope.assign(u0.size(), 0.0);
-      if (last_inputs_ && last_inputs_->inputs.size() == u0.size()) {
-        for (size_t q = 0; q < u0.size(); ++q) {
-          input_slope[q] =
-            (u0[q] - last_inputs_->inputs[q]) / last_inputs_->step_size;
-        }
+    input_slope.assign(u0.size(), 0.0);
+    if (last_inputs_ && last_inputs_->inputs.size() == u0.size()) {
+      for (size_t q = 0; q < u0.size(); ++q) {
+        input_slope[q] =
+          (u0[q] - last_inputs_->inputs[q]) / last_inputs_->step_size;
       }
     }
   }
@@ -757,6 +767,10 @@ void SolverInternal<System>::step(System& system) {
       time_prev = time_orig;
       have_prev = true;
       save_dydt_out_as_in();
+      if constexpr (HasSubsystem<System>) {
+        substepping_paid_ = substepping_pays(system, u0, input_slope, step_size,
+                                             substeps.has_value());
+      }
       push_step(system, {time, step_size, false, std::move(substeps)});
       if constexpr (HasSubsystem<System>) {
         last_inputs_ = last_inputs{std::move(u0), step_size};
@@ -951,10 +965,35 @@ bool SolverInternal<System>::substeps_subsystem(const System& system,
                                                 double step_end) const {
   if constexpr (HasSubsystem<System>) {
     return spans_subsystem_knot(system, step_end) ||
-      (method == Method::rkck && system.subsystem_weakly_coupled());
+      (method == Method::rkck && control.substep_subsystem &&
+       (substepping_paid_ ||
+        (step_end - time) * stepper.subsystem_stiffness > stepper.stability_limit));
   } else {
     return false;
   }
+}
+
+template <class System>
+bool SolverInternal<System>::substepping_pays(const System& system,
+                                              const state_type& u0,
+                                              const std::vector<double>& input_slope,
+                                              double h, bool substepped) const {
+  const auto [first, n] = system.subsystem();
+  double rest = 0.0, cash_karp = 0.0, coupling = 0.0;
+  for (size_t i = 0; i < y.size(); ++i) {
+    const double level = control.errlevel(y[i], dydt_out[i], h);
+    if (i < first || i >= first + n) {
+      rest = std::max(rest, std::abs(yerr[i]) / level);
+      continue;
+    }
+    const size_t q = i - first;
+    cash_karp = std::max(
+      cash_karp, std::abs(stepper.subsystem_cash_karp_error[q]) / level);
+    const double miss = substepped ? yerr[i] :
+      0.5 * h * (stepper.inputs_at_end_stage[q] - u0[q] - h * input_slope[q]);
+    coupling = std::max(coupling, std::abs(miss) / level);
+  }
+  return cash_karp > std::max(rest, coupling);
 }
 
 template <class System>

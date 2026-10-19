@@ -3,6 +3,7 @@
 #define ODELIA_ODE_STEP_RKCK_HPP_
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <vector>
 #include <cstddef>
@@ -25,6 +26,14 @@ public:
 
   void resize(size_t size_);
   size_t order() const;
+  // How stiff the System's subsystem is at the end of the last step: its rates'
+  // change over its state's change, from the stage at t + h to the end.
+  double subsystem_stiffness = 0.0;
+  // The last step's Cash-Karp error on the subsystem, whether or not it
+  // substepped, and the subsystem's inputs at its stage at t + h.
+  state_type subsystem_cash_karp_error, inputs_at_end_stage;
+  // Cash-Karp's solution is stable for h times a real rate down to -3.735.
+  static constexpr double stability_limit = 3.735;
   // `solved` is the row this step is about to create: what its rate evaluations
   // solve for goes in, in solved_row's order, and nothing is asked of the System
   // about where it is.
@@ -187,6 +196,8 @@ private:
   size_t size;
   std::vector<state_type> k{6};
   state_type ytmp;
+  // The subsystem's part of the stage at t + h.
+  state_type subsystem_at_end_stage;
 
   // Cash carp constants, from GSL.
   static constexpr double ah[5] = {1.0 / 5.0, 0.3, 3.0 / 5.0, 1.0, 7.0 / 8.0};
@@ -198,6 +209,9 @@ private:
     std::sort(out.begin(), out.end());
     return out;
   }();
+  // The stage at t + h, by its index in ah.
+  static constexpr int stage_at_end = static_cast<int>(
+    std::find(std::begin(ah), std::end(ah), 1.0) - std::begin(ah));
   static const double b21;
   static const double b3[];
   static const double b4[];
@@ -252,6 +266,14 @@ void Step<System>::step(System& system,
     } else {
       ode::derivs(system, at, into, stage_time(i, time, h));
     }
+    if constexpr (HasSubsystem<System>) {
+      if (i == stage_at_end + 1) {
+        const auto [first, n] = system.subsystem();
+        const auto from = at.begin() + static_cast<std::ptrdiff_t>(first);
+        subsystem_at_end_stage.assign(from, from + static_cast<std::ptrdiff_t>(n));
+        system.subsystem_inputs(inputs_at_end_stage);
+      }
+    }
   };
 
   std::copy(dydt_in.begin(), dydt_in.end(), k[0].begin());
@@ -283,6 +305,22 @@ void Step<System>::step(System& system,
   step_error(k, h, yerr);
   // A substepped subsystem takes its error from the coupling.
   if constexpr (HasSubsystem<System>) {
+    const auto [first, n] = system.subsystem();
+    double rates = 0.0, states = 0.0;
+    for (size_t q = 0; q < n; ++q) {
+      const double rate = util::to_passive(dydt_out[first + q]) -
+        util::to_passive(k[stage_at_end + 1][first + q]);
+      const double state = util::to_passive(y[first + q]) -
+        util::to_passive(subsystem_at_end_stage[q]);
+      rates += rate * rate;
+      states += state * state;
+    }
+    // Two equal states measure nothing; the last measure stands.
+    if (states > 0.0) {
+      subsystem_stiffness = std::sqrt(rates / states);
+    }
+    const auto from = yerr.begin() + static_cast<std::ptrdiff_t>(first);
+    subsystem_cash_karp_error.assign(from, from + static_cast<std::ptrdiff_t>(n));
     if (!subsystem_error.empty()) {
       std::copy(subsystem_error.begin(), subsystem_error.end(),
                 yerr.begin() +
@@ -602,8 +640,6 @@ std::vector<double> Step<System>::take_substepped_step(
 
   // Corrector: the subsystem again over the same substeps, its inputs on the
   // line from u0 to those at the stage at t + h. Its end is the step's.
-  constexpr auto stage_at_end = static_cast<std::size_t>(
-    std::find(std::begin(ah), std::end(ah), 1.0) - std::begin(ah));
   const std::vector<S>& inputs_at_end = stage_inputs[stage_at_end];
   std::vector<S> end(subsystem.size);
   integrate_substeps(subsystem.first, substeps.ends, h, y0, k,

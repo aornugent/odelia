@@ -28,7 +28,6 @@ store_system <- '
       w1 = T(odelia::util::to_passive(src.w1));
       w2 = T(odelia::util::to_passive(src.w2));
       time = src.time;
-      substep_below = src.substep_below;
       fail_after = src.fail_after;
       pulses = src.pulses;
       compute_rates();
@@ -74,23 +73,13 @@ store_system <- '
       return it;
     }
 
-    // The store, from index 1, substepped where the uptake is under
-    // substep_below of the water moving through it.
+    // The store, from index 1.
     odelia::ode::state_range subsystem() const requires WithSubsystem {
       return {1, 2};
     }
     std::vector<double> subsystem_knots(double from, double to) const
       requires WithSubsystem {
       return pulses != nullptr ? pulses->knots(from, to) : std::vector<double>{};
-    }
-    bool subsystem_weakly_coupled() const requires WithSubsystem {
-      const double in1 = odelia::util::to_passive(inflow_at(time));
-      const double k = odelia::util::to_passive(K);
-      const double p1 = odelia::util::to_passive(w1), p2 = odelia::util::to_passive(w2);
-      const double v1 = std::abs(odelia::util::to_passive(u1));
-      const double v2 = std::abs(odelia::util::to_passive(u2));
-      const double moving = in1 + 2.0 * k * p1 * p1 + k * p2 * p2 + v1 + v2;
-      return (v1 + v2) / moving < substep_below;
     }
     void subsystem_inputs(std::vector<T>& u) const requires WithSubsystem {
       u = {u1, u2};
@@ -107,7 +96,6 @@ store_system <- '
       }
     }
 
-    double substep_below = 0.0;
     // Past this time the store has NaN rates.
     double fail_after = 1e300;
     // Pulses of inflow on top of the seasonal one.
@@ -188,29 +176,27 @@ compile_substep_interface <- function() {
       return ctl;
     }
 
-    StoreA store(const std::vector<double>& p, double substep_below) {
+    StoreA store(const std::vector<double>& p) {
       StoreA s(p[0], p[1], p[2], p[3], p[4]);
-      s.substep_below = substep_below;
       return s;
     }
 
     std::vector<ode::instruction> program_of(const std::vector<double>& pars,
                                              const std::vector<double>& y0,
-                                             double t_end, double tol,
-                                             double substep_below) {
-      ode::Solver<StoreA> solver(store(pars, substep_below), control_at(tol));
+                                             double t_end, double tol) {
+      ode::Solver<StoreA> solver(store(pars), control_at(tol));
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
       return solver.schedule();
     }
 
     // [[Rcpp::export]]
-    Rcpp::List store_run(double substep_below, double tol, double t_end,
+    Rcpp::List store_run(double tol, double t_end,
                          std::vector<double> pars, std::vector<double> y0,
                          double fail_after = 1e300) {
       const std::vector<double> fractions{1.0 / 5.0, 0.3, 3.0 / 5.0, 7.0 / 8.0,
                                           1.0};
-      StoreA s = store(pars, substep_below);
+      StoreA s = store(pars);
       s.fail_after = fail_after;
       ode::Solver<StoreA> solver(s, control_at(tol));
       solver.set_keep_states(true);
@@ -236,7 +222,7 @@ compile_substep_interface <- function() {
         }
       }
       // A replay of the recording, its rows loaded, repeats the run.
-      ode::Solver<StoreA> replay(store(pars, substep_below), control_at(tol));
+      ode::Solver<StoreA> replay(store(pars), control_at(tol));
       replay.set_state(y0, 0.0);
       replay.advance_recorded(solver.recording());
       return Rcpp::List::create(
@@ -253,11 +239,11 @@ compile_substep_interface <- function() {
     // lands, the times its steps end, whether each step substepped the store, and
     // the times its substeps end.
     // [[Rcpp::export]]
-    Rcpp::List store_pulsed_run(double substep_below, double tol, std::vector<double> stops,
+    Rcpp::List store_pulsed_run(double tol, std::vector<double> stops,
                                 std::vector<double> pars, std::vector<double> y0,
                                 std::vector<double> x, std::vector<double> y) {
       const drivers::Function pulses(x, y, drivers::Slopes::monotone);
-      StoreA s = store(pars, substep_below);
+      StoreA s = store(pars);
       s.pulses = &pulses;
       ode::Solver<StoreA> solver(s, control_at(tol));
       solver.set_state(y0, 0.0);
@@ -286,13 +272,13 @@ compile_substep_interface <- function() {
     // The program of a pulsed run, replayed with its substeps dropped, which a step
     // spanning a knot refuses.
     // [[Rcpp::export]]
-    void store_pulsed_replay_without_substeps(double substep_below, double tol,
+    void store_pulsed_replay_without_substeps(double tol,
                                               std::vector<double> pars,
                                               std::vector<double> y0,
                                               std::vector<double> x,
                                               std::vector<double> y) {
       const drivers::Function pulses(x, y, drivers::Slopes::monotone);
-      StoreA s = store(pars, substep_below);
+      StoreA s = store(pars);
       s.pulses = &pulses;
       ode::Solver<StoreA> run(s, control_at(tol));
       run.set_state(y0, 0.0);
@@ -324,10 +310,10 @@ compile_substep_interface <- function() {
     Rcpp::List store_replay(std::vector<double> program_pars,
                             std::vector<double> pars, std::vector<double> y0,
                             std::vector<double> y0_program, double t_end,
-                            double tol, double substep_below, std::string method) {
+                            double tol, std::string method) {
       const std::vector<ode::instruction> program =
-        program_of(program_pars, y0_program, t_end, tol, substep_below);
-      ode::Solver<StoreA> replay(store(pars, substep_below), control_at(tol),
+        program_of(program_pars, y0_program, t_end, tol);
+      ode::Solver<StoreA> replay(store(pars), control_at(tol),
                                  method == "rodas" ? ode::Method::rodas
                                                    : ode::Method::rkck);
       replay.set_state(y0, 0.0);
@@ -345,12 +331,12 @@ compile_substep_interface <- function() {
     // in the parameters: where it lands, and its derivative there.
     // [[Rcpp::export]]
     Rcpp::List store_tangent_replay(std::vector<double> pars, std::vector<double> y0,
-                                    double t_end, double tol, double substep_below,
+                                    double t_end, double tol,
                                     std::vector<double> direction) {
       const std::vector<ode::instruction> program =
-        program_of(pars, y0, t_end, tol, substep_below);
+        program_of(pars, y0, t_end, tol);
       using tangent = ode::tangent_scalar<>;
-      auto active = store(pars, substep_below).rebind_from<tangent>();
+      auto active = store(pars).rebind_from<tangent>();
       std::vector<tangent*> p = active.ad_parameters();
       for (size_t j = 0; j < p.size(); ++j) {
         ode::seed_direction(*p[j], direction[j]);
@@ -371,12 +357,12 @@ compile_substep_interface <- function() {
     // substep the store refuses.
     // [[Rcpp::export]]
     Rcpp::List store_grid_replay(std::vector<double> pars, std::vector<double> y0,
-                                 double t_end, double tol, double substep_below) {
-      std::vector<ode::instruction> grid = program_of(pars, y0, t_end, tol, substep_below);
+                                 double t_end, double tol) {
+      std::vector<ode::instruction> grid = program_of(pars, y0, t_end, tol);
       for (ode::instruction& row : grid) {
         row = {row.time, std::numeric_limits<double>::quiet_NaN()};
       }
-      ode::Solver<StoreA> replay(store(pars, substep_below), control_at(tol));
+      ode::Solver<StoreA> replay(store(pars), control_at(tol));
       replay.set_state(y0, 0.0);
       replay.advance_recorded(grid);
       return Rcpp::List::create(Rcpp::_["y"] = replay.state());
@@ -385,8 +371,8 @@ compile_substep_interface <- function() {
     // [[Rcpp::export]]
     Rcpp::List store_adjoint(std::vector<double> pars, std::vector<double> y0,
                              double t_end, std::vector<double> lambda_end,
-                             double tol, double substep_below) {
-      ode::Solver<StoreA> run(store(pars, substep_below), control_at(tol));
+                             double tol) {
+      ode::Solver<StoreA> run(store(pars), control_at(tol));
       run.set_keep_states(true);
       run.set_state(y0, 0.0);
       run.advance_adaptive({0.0, t_end});
@@ -405,11 +391,14 @@ compile_substep_interface <- function() {
 
 store_pars <- c(1.0, 0.8, 1e4, 200, 0.3)
 store_y <- c(1.0, 0.5, 0.5)
+# Drainage K = 10: a store inside Cash-Karp's stability limit, whose coupling
+# error exceeds Cash-Karp's own on it, so substepping it would not pay.
+slow <- store_pars * c(1, 1, 1e-3, 1, 1)
 
-testthat::test_that("with substep_below at zero, every step is the plain System's", {
+testthat::test_that("where substepping would not pay, every step is the plain System's", {
   compile_substep_interface()
-  off <- store_run(0.0, 1e-6, 0.5, store_pars, store_y)
-  plain <- store_plain_run(1e-6, 0.5, store_pars, store_y)
+  off <- store_run(1e-6, 0.5, slow, store_y)
+  plain <- store_plain_run(1e-6, 0.5, slow, store_y)
   expect_identical(off$substepped, 0L)
   expect_identical(off$steps, plain$steps)
   expect_identical(off$y, plain$y)
@@ -419,21 +408,31 @@ testthat::test_that("substepped, the stiff store lets the population take long s
   compile_substep_interface()
   reference <- store_plain_run(1e-12, 2.0, store_pars, store_y)$y
   ck <- store_plain_run(1e-6, 2.0, store_pars, store_y)
-  substepped <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
-  # Cash-Karp is held to its stability boundary by the store's drainage; every
-  # step that substeps the store takes substeps of its own instead.
+  substepped <- store_run(1e-6, 2.0, store_pars, store_y)
+  # Cash-Karp is held to its stability limit by the store's drainage; a step
+  # past it takes substeps of the store instead.
   expect_gt(ck$steps, 1000L)
-  expect_identical(substepped$substepped, substepped$steps)
+  expect_gt(substepped$substepped, substepped$steps / 2)
   expect_lt(substepped$steps, ck$steps / 10)
   expect_lt(max(abs(substepped$y - reference)), 1e-5)
   # It converges on the same answer as its tolerance tightens.
-  tight <- store_run(0.1, 1e-9, 2.0, store_pars, store_y)
+  tight <- store_run(1e-9, 2.0, store_pars, store_y)
   expect_lt(max(abs(tight$y - reference)), 1e-8)
+})
+
+testthat::test_that("a store the population takes nothing from keeps substepping", {
+  compile_substep_interface()
+  # With no uptake the predictor and the corrector end at the same state, which
+  # measures no stiffness; the last measure stands.
+  no_uptake <- store_pars * c(1, 1, 1, 1, 0)
+  ck <- store_plain_run(1e-4, 2.0, no_uptake, store_y)
+  substepped <- store_run(1e-4, 2.0, no_uptake, store_y)
+  expect_lt(substepped$steps, ck$steps / 10)
 })
 
 testthat::test_that("each row records its input slope and substeps, landing on every stage fraction", {
   compile_substep_interface()
-  r <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
+  r <- store_run(1e-6, 2.0, store_pars, store_y)
   expect_true(r$sized)
   expect_true(r$ascending)
   expect_true(r$fractions_landed)
@@ -443,44 +442,44 @@ testthat::test_that("each row records its input slope and substeps, landing on e
 
 testthat::test_that("a store whose rates fail at every substep stops the run, saying why", {
   compile_substep_interface()
-  expect_error(store_run(0.1, 1e-6, 2.0, store_pars, store_y, fail_after = 1.0),
+  expect_error(store_run(1e-6, 2.0, store_pars, store_y, fail_after = 1.0),
                "subsystem fails its error test at the smallest substep")
 })
 
 testthat::test_that("a replay takes the run's substeps, at the run's parameters to the bit", {
   compile_substep_interface()
-  run <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
-  same <- store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6, 0.1, "rkck")
+  run <- store_run(1e-6, 2.0, store_pars, store_y)
+  same <- store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6, "rkck")
   expect_identical(same$y, run$y)
   expect_true(same$same_steps)
   moved <- store_pars * c(1, 1, 1.01, 1, 1)
-  away <- store_replay(store_pars, moved, store_y, store_y, 2.0, 1e-6, 0.1, "rkck")
+  away <- store_replay(store_pars, moved, store_y, store_y, 2.0, 1e-6, "rkck")
   expect_true(away$same_steps)
   expect_false(identical(away$y, run$y))
   expect_error(store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6,
-                            0.1, "rodas"),
+                            "rodas"),
                "taken only by method='rkck'")
 })
 
 testthat::test_that("a grid of a run's times is refused where a step would substep the store", {
   compile_substep_interface()
-  expect_error(store_grid_replay(store_pars, store_y, 0.5, 1e-6, 0.1),
+  expect_error(store_grid_replay(store_pars, store_y, 0.5, 1e-6),
                "replay the run's program")
-  # With substep_below at zero no step substeps, and the grid is replayed.
-  off <- store_run(0.0, 1e-6, 0.5, store_pars, store_y)
-  expect_equal(store_grid_replay(store_pars, store_y, 0.5, 1e-6, 0.0)$y, off$y,
+  # Where substepping would not pay no step substeps, and the grid is replayed.
+  off <- store_run(1e-6, 0.5, slow, store_y)
+  expect_equal(store_grid_replay(slow, store_y, 0.5, 1e-6)$y, off$y,
                tolerance = 1e-12)
 })
 
 testthat::test_that("a tangent replay takes the run's substeps, its value the run's to the bit", {
   compile_substep_interface()
   direction <- c(0, 0, 1, 0, 0)
-  r <- store_tangent_replay(store_pars, store_y, 2.0, 1e-6, 0.1, direction)
-  run <- store_run(0.1, 1e-6, 2.0, store_pars, store_y)
+  r <- store_tangent_replay(store_pars, store_y, 2.0, 1e-6, direction)
+  run <- store_run(1e-6, 2.0, store_pars, store_y)
   expect_identical(r$y, run$y)
   e <- 1e-4 * store_pars[3]
   replay <- function(pars) {
-    store_replay(store_pars, pars, store_y, store_y, 2.0, 1e-6, 0.1, "rkck")$y
+    store_replay(store_pars, pars, store_y, store_y, 2.0, 1e-6, "rkck")$y
   }
   expected <- (replay(store_pars + e * direction) -
                replay(store_pars - e * direction)) / (2 * e)
@@ -492,12 +491,12 @@ testthat::test_that("the sweep through substepped steps matches central differen
   t_end <- 2.0
   tol <- 1e-6
   lambda_end <- c(0.4, -1.3, 0.7)
-  r <- store_adjoint(store_pars, store_y, t_end, lambda_end, tol, 0.1)
+  r <- store_adjoint(store_pars, store_y, t_end, lambda_end, tol)
   expect_identical(r$recorded_rates, 6L * r$n_steps)
 
   eps <- 1e-4
   replay <- function(pars, y0) {
-    store_replay(store_pars, pars, y0, store_y, t_end, tol, 0.1, "rkck")$y
+    store_replay(store_pars, pars, y0, store_y, t_end, tol, "rkck")$y
   }
   expected_state <- sapply(seq_along(store_y), function(j) {
     e <- eps * store_y[j]
@@ -526,42 +525,16 @@ pulse_knots <- local({
   pulse_x[nz | c(FALSE, nz[-n]) | c(nz[-1], FALSE)]
 })
 
-testthat::test_that("a substepped step spanning the inflow's knots takes its pulses, landing a substep on each", {
-  compile_substep_interface()
-  t_end <- 2.0
-  knots <- pulse_knots[pulse_knots < t_end]
-  # A store slow enough to hold each pulse as a rise in its level. A store that
-  # passes a pulse straight through (the stiff K = 1e4) puts a spike in what the
-  # population reads, which the population's stages miss however the store is
-  # integrated.
-  slow <- store_pars * c(1, 1, 1e-3, 1, 1)
-  reference <- store_pulsed_run(0.0, 1e-11, c(0, knots, t_end), slow, store_y,
-                                pulse_x, pulse_y)$y
-  stopped <- store_pulsed_run(0.1, 1e-4, c(0, knots, t_end), slow, store_y,
-                              pulse_x, pulse_y)
-  free <- store_pulsed_run(0.1, 1e-4, c(0, t_end), slow, store_y,
-                           pulse_x, pulse_y)
-  # The run without stops spans knots and is as accurate as the run that stops
-  # at each.
-  expect_false(all(knots %in% free$times))
-  expect_lt(max(abs(stopped$y - reference)), 2e-4)
-  expect_lt(max(abs(free$y - reference)), 2e-4)
-  landed <- vapply(knots, function(k) any(abs(c(free$times, free$substep_ends) - k) < 1e-12), TRUE)
-  expect_true(all(landed))
-})
-
-testthat::test_that("a step spanning the inflow's knots substeps the store, however strongly it draws", {
+testthat::test_that("a step spanning the inflow's knots substeps the store, landing a substep on each", {
   compile_substep_interface()
   t_end <- 1.0
   knots <- pulse_knots[pulse_knots < t_end]
-  slow <- store_pars * c(1, 1, 1e-3, 1, 1)
-  # substep_below at zero, so no step is weakly coupled: those that span a knot
-  # substep the store all the same.
-  reference <- store_pulsed_run(0.0, 1e-11, c(0, knots, t_end), slow, store_y,
+  # The slow store holds each pulse as a rise in its level.
+  reference <- store_pulsed_run(1e-11, c(0, knots, t_end), slow, store_y,
                                 pulse_x, pulse_y)$y
-  stopped <- store_pulsed_run(0.0, 1e-6, c(0, knots, t_end), slow, store_y,
+  stopped <- store_pulsed_run(1e-6, c(0, knots, t_end), slow, store_y,
                               pulse_x, pulse_y)
-  free <- store_pulsed_run(0.0, 1e-6, c(0, t_end), slow, store_y,
+  free <- store_pulsed_run(1e-6, c(0, t_end), slow, store_y,
                            pulse_x, pulse_y)
   # Stopped at every knot, no step spans one and none substeps the store.
   expect_false(any(stopped$substepped))
@@ -572,10 +545,12 @@ testthat::test_that("a step spanning the inflow's knots substeps the store, howe
   expect_true(all(free$substepped[spans]))
   landed <- vapply(knots, function(k) any(abs(c(t, free$substep_ends) - k) < 1e-12), TRUE)
   expect_true(all(landed))
-  expect_lt(max(abs(stopped$y - reference)), 1e-5)
-  expect_lt(max(abs(free$y - reference)), 1e-5)
+  # Within the tolerance in the solver's norm, |error| / (1 + |y|).
+  error <- function(y) max(abs(y - reference) / (1 + abs(reference)))
+  expect_lt(error(stopped$y), 1e-6)
+  expect_lt(error(free$y), 1e-6)
   # A replay that lost those substeps is refused at the first step across a knot.
-  expect_error(store_pulsed_replay_without_substeps(0.0, 1e-6, slow, store_y,
+  expect_error(store_pulsed_replay_without_substeps(1e-6, slow, store_y,
                                                     pulse_x, pulse_y),
                "carries no substeps")
 })
