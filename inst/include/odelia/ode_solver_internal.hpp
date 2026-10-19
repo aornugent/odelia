@@ -162,9 +162,10 @@ public:
   void step_to(System& system, double time_max_);
   // A step of `row`'s size, over its substeps where it has them, to the time a
   // recording says it ended at (a NaN time accumulates). `replay`, where a
-  // recording is being walked, is that step's own solved row.
+  // recording is being walked, is that step's own solved row: loaded, or with
+  // `store_copy` copied for the stages to store over.
   void step_by(System& system, const instruction& row,
-               const solved_row<System>* replay = nullptr);
+               const solved_row<System>* replay = nullptr, bool store_copy = false);
   void step_euler(System& system, double time_max_);
 
   void set_time_max(double time_max_);
@@ -239,7 +240,7 @@ private:
   //
   // `replay` is the row an earlier run wrote, where a caller is replaying one:
   // the stages then load it instead of solving again, and nothing is cleared
-  // because nothing is written.
+  // because nothing is written. With `store_copy` they store into a copy of it.
   //
   // `substeps`, Cash-Karp's only, are the step's substeps of the System's
   // subsystem, and `inputs` the subsystem's inputs at the step's start.
@@ -248,7 +249,7 @@ private:
                     const state_type& dydt_in_, state_type& dydt_out_,
                     const solved_row<System>* replay = nullptr,
                     const subsystem_substeps* substeps = nullptr,
-                    const state_type& inputs = {}) {
+                    const state_type& inputs = {}, bool store_copy = false) {
     refuse_substeps_unless_rkck(substeps);
     // Each stepper's last evaluation is at the state the step ends at, at this
     // time, which is what first-same-as-last carries on with dydt_out.
@@ -259,7 +260,17 @@ private:
       // and only the one that is accepted is committed -- which is what makes
       // "a rejected attempt writes the same slot as its retry" nothing anyone has
       // to arrange.
-      if (replay != nullptr) {
+      if (replay != nullptr && store_copy) {
+        // A System reads what the recorded run left in the row and stores what
+        // it solves itself. The copy lasts until the next step, as a recorded
+        // row does.
+        row_copy_ = *replay;
+        explicit_stepper.step(system, row_copy_, time_, step_size, y_, yerr_,
+                              dydt_in_, dydt_out_, extra...);
+        if (keep_states_) {
+          solved_scratch_ = row_copy_;
+        }
+      } else if (replay != nullptr) {
         explicit_stepper.step(system, *replay, time_, step_size, y_, yerr_,
                               dydt_in_, dydt_out_, extra...);
         // A replay that keeps its states keeps the rows it loaded too, so its
@@ -375,6 +386,8 @@ private:
   // The step being attempted writes what it solves for here, and an accepted step
   // moves it onto its row.
   solved_row<System> solved_scratch_;
+  // The row the last step of a pass on copied rows stored into.
+  solved_row<System> row_copy_;
 
   state_type y;        // Vector of current system state
   state_type yerr;     // Vector of error estimates
@@ -921,7 +934,8 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
 // says. advance_recorded() drives a replay through it, one recorded step each.
 template <class System>
 void SolverInternal<System>::step_by(System& system, const instruction& row,
-                                     const solved_row<System>* replay) {
+                                     const solved_row<System>* replay,
+                                     bool store_copy) {
   const double step_size = row.step_size;
   if (!util::is_finite(step_size)) {
     util::stop("step_size must be finite!");
@@ -949,7 +963,7 @@ void SolverInternal<System>::step_by(System& system, const instruction& row,
     }
   }
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay,
-               row.subsystem ? &*row.subsystem : nullptr, u0);
+               row.subsystem ? &*row.subsystem : nullptr, u0, store_copy);
   save_dydt_out_as_in();
 
   // The time the run reached, where a recording says what it was, rather than

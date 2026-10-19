@@ -235,7 +235,13 @@ public:
   // ⚠️ `rec[k].solved` is what the stages of the step that REACHED `rec[k].time`
   // solved, which is the same pairing `solve_adjoint` walks. Off by one here and
   // every stage loads its neighbour's answer, finitely.
-  void advance_recorded(std::span<const ode::step_record<System>> rec)
+  //
+  // With `store_copy`, each step's stages store into a copy of its row instead: a
+  // System reads what the recorded run left there and solves for the rest
+  // itself. plant's invader reads the recorded light environment and solves
+  // its own leaf this way.
+  void advance_recorded(std::span<const ode::step_record<System>> rec,
+                        bool store_copy = false)
   {
     if (rec.empty())
     {
@@ -291,7 +297,7 @@ public:
                    "with the recording's method, or replay schedule(), which "
                    "carries no rows, to solve the stages afresh");
       }
-      solver.step_by(system, rec[k], &rec[k].solved);
+      solver.step_by(system, rec[k], &rec[k].solved, store_copy);
       if (collect)
       {
         history.push_back(system);

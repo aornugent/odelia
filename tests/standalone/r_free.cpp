@@ -1263,6 +1263,8 @@ namespace {
 struct solved_choice { double s = 0.0; bool kept = false; double t = 0.0; };
 int chooser_mispaired_loads = 0;
 int chooser_loads = 0;
+// Stores into a row that already held a choice: a pass on copied rows'.
+int chooser_stores_over_choices = 0;
 
 template <typename T = double>
 struct Chooser {
@@ -1288,7 +1290,10 @@ struct Chooser {
     y[0] = *it++; time = t; compute_rates(); return it;
   }
   void set_recorded_state(const std::vector<T>& s, double t) { set_ode_state(s.begin(), t); }
-  void store_solved(solved_choice& s) { into = &s; from = nullptr; }
+  void store_solved(solved_choice& s) {
+    if (s.kept) ++chooser_stores_over_choices;
+    into = &s; from = nullptr;
+  }
   void load_solved(const solved_choice& s) {
     from = s.kept ? &s : nullptr; into = nullptr;
     if (s.kept) ++chooser_loads;
@@ -1371,6 +1376,65 @@ void test_replay_keeps_the_rows_it_loaded(odelia::ode::Method m) {
         "and the run's own sweep is the run's");
   std::printf("       (replay sweep %.10g, difference %.10g, e^5 %.10g; run %.10g against e^2 %.10g)\n",
               dp_replay[0][0], fd, std::exp(5.0), dp_run[0][0], std::exp(2.0));
+}
+
+// A pass on copied rows over the same recording at r = 5: each stage is handed a copy of
+// the run's row and stores over it, so the walk makes its own choices on the
+// run's steps -- the program replay's, bit for bit -- and records them, and a
+// sweep of that recording loads them.
+void test_a_pass_on_copied_rows_stores_its_own_values(odelia::ode::Method m) {
+  Chooser<double> a(2.0);
+  odelia::ode::Solver<Chooser<double>> run(a, odelia::ode::OdeControl(), m);
+  run.set_keep_states(true);
+  run.reset();
+  run.advance_adaptive(std::vector<double>{0.0, 1.0});
+  const auto rec = run.recording();
+
+  Chooser<double> p(5.0);
+  odelia::ode::Solver<Chooser<double>> by_program(p, odelia::ode::OdeControl(), m);
+  by_program.advance_recorded(run.schedule());
+  check(by_program.state()[0] < std::exp(5.0) - 1.0,
+        "on the run's steps, r = 5 choosing for itself slows past the threshold");
+
+  chooser_loads = 0;
+  chooser_stores_over_choices = 0;
+  Chooser<double> b(5.0);
+  odelia::ode::Solver<Chooser<double>> stores(b, odelia::ode::OdeControl(), m);
+  stores.set_keep_states(true);
+  stores.reset();
+  stores.advance_recorded(rec, true);
+  check(stores.state()[0] == by_program.state()[0],
+        "a pass on copied rows makes its own choices, as the program replay does, bit for bit");
+  check(chooser_loads == 0, "and loads none");
+  check(chooser_stores_over_choices == static_cast<int>(6 * (rec.size() - 1)),
+        "each of a step's six evaluations is handed the run's row first");
+  const auto rec2 = stores.recording();
+  check(rec2.size() == rec.size(), "the pass's recording has the run's rows");
+  bool own = true, differs = false;
+  for (size_t k = 1; k < rec.size(); ++k) {
+    for (size_t s = 0; s < rec[k].solved.size(); ++s) {
+      own = own && rec2[k].solved[s].kept;
+      differs = differs || rec2[k].solved[s].s != rec[k].solved[s].s;
+    }
+  }
+  check(own && differs, "and each row holds the walk's own choices, not the run's");
+
+  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
+  odelia::ode::adjoint_rows dp(1, 1);
+  chooser_mispaired_loads = 0;
+  stores.solve_adjoint(lambda, dp);
+  check(chooser_mispaired_loads == 0, "the sweep loads every row at the instant it was made at");
+  const auto stores_at = [&](double r_) -> double {
+    Chooser<double> c(r_);
+    odelia::ode::Solver<Chooser<double>> s(c, odelia::ode::OdeControl(), m);
+    s.advance_recorded(rec, true);
+    return s.state()[0];
+  };
+  const double h = 1e-6;
+  const double fd = (stores_at(5.0 + h) - stores_at(5.0 - h)) / (2 * h);
+  check(std::fabs(dp[0][0] - fd) < 1e-8 * std::fabs(fd),
+        "a sweep of the pass's recording is its central difference");
+  std::printf("       (sweep %.10g, difference %.10g)\n", dp[0][0], fd);
 }
 
 // The two explicit steppers' rows have one shape and different meanings: entry
@@ -2396,6 +2460,7 @@ int main() {
   for_each_explicit_stepper(test_sweep_from_an_empty_start);
   for_each_explicit_stepper(test_sweep_across_empty_steps);
   for_each_explicit_stepper(test_replay_keeps_the_rows_it_loaded);
+  for_each_explicit_stepper(test_a_pass_on_copied_rows_stores_its_own_values);
   test_replay_under_the_other_stepper_is_refused();
   for_each_explicit_stepper(test_carried_k1_keeps_its_own_instant);
   for_each_explicit_stepper(test_reseed_derives_k1_afresh);
