@@ -70,8 +70,8 @@ public:
     stages(y, k, h, ytmp,
            [&](int i, const state_type& at, state_type& into) -> void {
              if constexpr (SolvesForValues<System>) {
-               ode::derivs(system, at, into, stage_time(i, time, h),
-                           solved[i - 1]);
+               ode::derivs(system, at, into, stage_time(i, time, h), solved,
+                           i - 1);
              } else {
                ode::derivs(system, at, into, stage_time(i, time, h));
              }
@@ -81,7 +81,7 @@ public:
     step_end(y0, k, h, y);
     // The seventh evaluation, in the row's sixth slot: see solved_row.
     if constexpr (SolvesForValues<System>) {
-      ode::derivs(system, y, k[6], time + h, solved[5]);
+      ode::derivs(system, y, k[6], time + h, solved, end_slot);
     } else {
       ode::derivs(system, y, k[6], time + h);
     }
@@ -291,7 +291,7 @@ void DopriStep<System>::step_adjoint(active_system<System>& active,
     bool k1_loaded = false;
     if constexpr (SolvesForValues<System>) {
       if (k1 != nullptr) {
-        ode::derivs(sys, y_start, rate[0], k1->time, k1->row);
+        ode::derivs(sys, y_start, rate[0], k1->time, k1->row, end_slot);
         k1_loaded = true;
       }
     }
@@ -304,7 +304,7 @@ void DopriStep<System>::step_adjoint(active_system<System>& active,
                std::vector<scalar>& into) -> void {
              if constexpr (SolvesForValues<System>) {
                ode::derivs(sys, at, into, stage_time(i, time, h),
-                           std::as_const(solved[i - 1]));
+                           std::as_const(solved), i - 1);
              } else {
                ode::derivs(sys, at, into, stage_time(i, time, h));
              }
