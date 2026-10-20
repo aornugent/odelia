@@ -698,7 +698,7 @@ private:
                    " says its first rates were carried from the step below, "
                    "but row " + util::to_string(k - 1) + " is not a step");
       }
-      const ode::carried_rates<System> k1{rec[k - 1].solved[5], rec[k].k1_time};
+      const ode::carried_rates<System> k1{rec[k - 1].solved, rec[k].k1_time};
       solver.step_adjoint(active, rec[k].solved, k1_carried ? &k1 : nullptr,
                           rec[k - 1].time, rec[k].step_size, from,
                           lambda, lambda_in, parameter_adjoint,
