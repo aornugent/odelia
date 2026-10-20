@@ -143,12 +143,16 @@ compile_substep_interface <- function() {
   ensure_ode_interface_loaded()
 
   odelia_so <- .odelia_test_cache$odelia_so
+  # Without contraction, because the tests below hold a replay at another
+  # scalar to the run bit for bit (see compile_step_adjoint_interface).
   withr::local_envvar(
     PKG_CPPFLAGS = odelia_cppflags(odelia_include_dir()),
+    PKG_CXXFLAGS = "-ffp-contract=off",
     PKG_LIBS = shQuote(normalizePath(odelia_so, winslash = "/", mustWork = TRUE))
   )
   Rcpp::sourceCpp(code = paste0('
     // [[Rcpp::plugins(cpp20)]]
+    // Built with -ffp-contract=off (see compile_substep_interface).
     #include <Rcpp.h>
     #include <algorithm>
     #include <cmath>
