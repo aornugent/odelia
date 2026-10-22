@@ -135,7 +135,7 @@ public:
   // Insertion rows are left out, and this is the one place that decides so. An
   // insertion shares its time with the row below it, so a caller pinning these
   // times would be handed one twice -- and the two callers that pin them
-  // (a schedule written back into Parameters, and a replay driven interval by
+  // (a schedule written back into Parameters, and a run pinned interval by
   // interval) both apply their own insertions. get_times and get_step_sizes are
   // this list split in two rather than two more walks that could disagree.
   std::vector<schedule_row> steps_taken() const {
@@ -678,7 +678,7 @@ void SolverInternal<System>::step(System& system) {
     std::string invalid_reason;
     try {
       // A step that substeps the subsystem chooses its substeps, then takes them
-      // as a replay does.
+      // as a pinned run does.
       if constexpr (HasSubsystem<System>) {
         if (substep_subsystem) {
           substeps = stepper.choose_substeps(system, time, step_size, y, dydt_in,
@@ -823,7 +823,7 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
   in_step = true;
   have_prev = false; // a pinned step may be subdivided; no single interpolant
   // The interval, which is what the recording holds however many sub-steps the
-  // retry below takes to cross it: a replay reproduces the caller's times from
+  // retry below takes to cross it: a pinned run reproduces the caller's times from
   // this row, and a shrunken sub-step is a detail of how this run got there.
   const double step_size = time_max - time;
   setup_dydt_in(system);
@@ -833,7 +833,7 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
     if (substeps_subsystem(system, time_max)) {
       util::stop("A step to t = " + util::format_double(time_max) +
                  " from t = " + util::format_double(time) + " would substep "
-                 "the System's subsystem, which a grid of times cannot; replay "
+                 "the System's subsystem, which a grid of times cannot; step "
                  "the run's schedule, its sizes and substeps with its times");
     }
   }
@@ -946,7 +946,7 @@ void SolverInternal<System>::step_by(System& system, const schedule_row& row,
       util::stop("The step from t = " + util::format_double(time) + " of size " +
                  util::format_double(step_size) + " spans a knot of the "
                  "subsystem's forcing, so the run substepped it, and this row "
-                 "carries no substeps; replay the run's schedule with them");
+                 "carries no substeps; step the run's schedule with them");
     }
   }
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay,

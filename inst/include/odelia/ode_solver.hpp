@@ -173,7 +173,7 @@ public:
   // A row marked an insertion is followed by the System's own state map, applied
   // here. A schedule that says where its insertions are is one a walk can execute
   // without a segment loop wrapped around it -- and it is the same map the sweep
-  // transposes, so a tangent replayed through here traverses exactly the function
+  // transposes, so a tangent run through here traverses exactly the function
   // under test rather than a second spelling of it.
   void advance_schedule(const std::vector<ode::schedule_row>& schedule)
   {
@@ -288,7 +288,8 @@ public:
                    "it: entry " + util::to_string(k) + " was taken by method='" +
                    method_name(rec[k].method) + "' and this solver steps by "
                    "method='" + method_name(method()) + "'. Build the solver "
-                   "with the recording's method, or replay steps_taken(), which "
+                   "with the recording's method, or step steps_taken() with "
+                   "advance_schedule(), which "
                    "carries no rows, to solve the stages afresh");
       }
       solver.step_by(system, rec[k], &rec[k].solved);

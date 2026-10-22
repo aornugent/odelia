@@ -236,7 +236,7 @@ struct subsystem_substeps {
 // schedule of steps without saying so.
 //
 // `subsystem` holds a step's substeps where it substepped the System's subsystem
-// (see HasSubsystem); a replay and the sweep take them as recorded.
+// (see HasSubsystem); a pinned run and the sweep take them as recorded.
 struct schedule_row {
   double time;
   double step_size;
@@ -311,11 +311,11 @@ struct step_record : schedule_row {
   // tableaux put stages 4..6 at different times and states. A replay under the
   // other stepper would load every one of those at the wrong stage, finitely, so
   // replay refuses it; a schedule (steps_taken()) carries no rows and
-  // replays under either.
+  // runs under either.
   Method method = Method::rkck;
 
   // A pinned step that was refused and crossed its interval in several sub-steps.
-  // The row still holds the interval, which is what a replay of the caller's times
+  // The row still holds the interval, which is what a run on the caller's times
   // needs, but its solved values are the LAST sub-step's and one Runge-Kutta
   // step of the interval is not the step the run took. A sweep or a replay of
   // such a row would be wrong at every entry with every number finite, so both

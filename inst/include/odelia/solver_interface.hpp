@@ -138,7 +138,7 @@ inline Rcpp::List Solver_get_history_impl(SEXP solver_xp) {
 // A least-squares loss against observations of the state, and its exact gradient
 // with respect to the System's parameters and/or its initial state.
 //
-// The forward pass replays `schedule` -- the reference run's own step times -- at
+// The forward pass steps `schedule` -- the reference run's own step times -- at
 // the parameters and initial state given, keeping its states, so the loss is a
 // function of those inputs alone and not of a step-size controller that would
 // move with them. The loss is sum over observations i and state components j of
@@ -209,7 +209,7 @@ inline Rcpp::List Solver_loss_and_gradient_impl(
 
   // Under the solver's own stepper where that stepper can be swept, so the loss
   // is of the integrator the caller chose. RODAS cannot, so a stiff solver's
-  // schedule is replayed under Cash-Karp.
+  // schedule is stepped under Cash-Karp.
   const ode::Method method = solver->method() == ode::Method::rodas
                                ? ode::Method::rkck : solver->method();
   ode::Solver<SystemType> replay(sys, solver->control(), method);
@@ -221,7 +221,7 @@ inline Rcpp::List Solver_loss_and_gradient_impl(
   // One row per scheduled step, or a step was subdivided and its row no longer
   // describes one Runge-Kutta step -- which the sweep would transpose as one.
   if (rec.size() != n_times) {
-    Rcpp::stop("the replay did not take the schedule's steps one row each, so it "
+    Rcpp::stop("the run did not take the schedule's steps one row each, so it "
                "cannot be swept");
   }
 

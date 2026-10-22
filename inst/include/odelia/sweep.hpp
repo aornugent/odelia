@@ -18,10 +18,10 @@ namespace odelia {
 namespace ode {
 
 // The state a segment's first step ran from, and the time it ran at: the insertion
-// row's own. It is replayed rather than read off that row because applying the map
+// row's own. It is recomputed rather than read off that row because applying the map
 // is what leaves the System at the segment's width, and a caller reading this state
-// wants to run from it. What the row holds is then what the replay is checked
-// against.
+// wants to run from it. What the row holds is then what the recomputed state is
+// checked against.
 template <class System>
 double state_at_segment(System& system,
                         std::span<const step_record<System>> rec,
@@ -64,12 +64,12 @@ double state_at_segment(System& system,
 //
 // Returns the recording's suffix behind a head row the caller owns. The
 // head's time is the solver's own rather than the row's, which is what lets a
-// caller replay a perturbed state at that time. It replaces row `first`, so a
+// caller run from a perturbed state at that time. It replaces row `first`, so a
 // walk resuming after an insertion names that insertion's row and a walk starting
 // at the beginning names row 0, and neither has to say which of them still owes a
 // state map.
 //
-// The step sizes are replayed as recorded (see schedule_row): a walk that chose its
+// The step sizes are taken as recorded (see schedule_row): a walk that chose its
 // own would be differentiating a controller the model does not contain.
 template <class Record>
 std::vector<schedule_row> schedule_from(std::span<const Record> rec,
