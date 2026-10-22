@@ -214,7 +214,7 @@ public:
       }
       else
       {
-        solver.step_by(system, program[k].step_size, program[k].time);
+        solver.step_by(system, program[k]);
       }
       if (collect)
       {
@@ -291,7 +291,7 @@ public:
                    "with the recording's method, or replay schedule(), which "
                    "carries no rows, to solve the stages afresh");
       }
-      solver.step_by(system, rec[k].step_size, rec[k].time, &rec[k].solved);
+      solver.step_by(system, rec[k], &rec[k].solved);
       if (collect)
       {
         history.push_back(system);
@@ -701,7 +701,8 @@ private:
       const ode::carried_rates<System> k1{rec[k - 1].solved[5], rec[k].k1_time};
       solver.step_adjoint(active, rec[k].solved, k1_carried ? &k1 : nullptr,
                           rec[k - 1].time, rec[k].step_size, from,
-                          lambda, lambda_in, parameter_adjoint);
+                          lambda, lambda_in, parameter_adjoint,
+                          rec[k].subsystem ? &*rec[k].subsystem : nullptr);
       // Swapped rather than moved from: a move leaves the buffer this step wrote
       // into empty, so the next step allocates one the same size again. Swapping
       // hands it the row above's, which the sweep refills rather than regrows.

@@ -328,6 +328,9 @@ struct OdeControl {
   bool last_step_size_shrank;
   Controller controller = Controller::hairer;
   double stabilisation = 0.04;
+  // Whether a Cash-Karp step that spans no knot of a System's subsystem's
+  // forcing may substep it (see SolverInternal::substeps_subsystem).
+  bool substep_subsystem = true;
   bool last_rejected = false; // hairer: no growth on the step after a rejection
   double ratio_prev = 1e-4;   // hairer: the last accepted step's error ratio
 };

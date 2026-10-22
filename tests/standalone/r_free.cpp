@@ -1418,7 +1418,8 @@ void test_replay_under_the_other_stepper_is_refused() {
 // evaluates last at 0.8999999999999999. The sweep has to load that row at that
 // instant, not at the 0.9 the row below records.
 void test_carried_k1_keeps_its_own_instant(odelia::ode::Method m) {
-  const double nan = std::numeric_limits<double>::quiet_NaN();
+  // constexpr: GCC 13 crashes compiling the instructions below from a const local.
+  constexpr double nan = std::numeric_limits<double>::quiet_NaN();
   const std::vector<odelia::ode::instruction> program{
       {0.0, nan}, {0.2, 0.2}, {0.9, 0.7}, {1.0, 0.1}};
   const double t_end = 0.2 + 0.7;

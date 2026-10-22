@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <span>
 #include <array>
+#include <optional>
 #include <vector>
 #include <odelia/ode_util.hpp>
 #include <odelia/tangent.hpp>
@@ -201,6 +202,14 @@ concept SolvesForValues =
     s.end_solved();
   };
 
+// How a step integrated the System's subsystem in substeps: the slope its inputs
+// were extrapolated along, and where each substep ends, as fractions of the step.
+struct subsystem_substeps {
+  std::vector<double> input_slope;
+  std::vector<double> ends;
+  bool operator==(const subsystem_substeps&) const = default;
+};
+
 // One instruction of a program: what carries the state from one boundary to the
 // next. A step reaches `time`, by `step_size` where a run pinned it and by whatever
 // the controller chooses where that is NaN. A insertion applies the System's own
@@ -221,10 +230,14 @@ concept SolvesForValues =
 // The first entry is where a program starts, which no instruction reached: a step
 // of NaN size. `insertion` is last and defaults, so a grid written {time, NaN} is a
 // program of steps without saying so.
+//
+// `subsystem` holds a step's substeps where it substepped the System's subsystem
+// (see HasSubsystem); a replay and the sweep take them as recorded.
 struct instruction {
   double time;
   double step_size;
   bool insertion = false;
+  std::optional<subsystem_substeps> subsystem{};
 };
 
 // Integration method: the explicit Cash-Karp RKCK 4(5) stepper (default), the
@@ -355,6 +368,30 @@ concept Sweepable =
     a.for_each_active([](active_scalar<double>&) {});
     a.set_recorded_state(y, t);
   };
+
+// Components [first, first + size) of a System's state.
+struct state_range {
+  std::size_t first;
+  std::size_t size;
+};
+
+// A System with a subsystem: a range of its state whose rates read the rest only
+// through one input per component, so a Cash-Karp step can integrate it in
+// substeps of its own under given inputs. A step substeps it where the step is
+// past Cash-Karp's stability limit on it, where Cash-Karp's error on it set the
+// size of the step before (both unless OdeControl::substep_subsystem is off), or
+// where the step spans one of `subsystem_knots(from, to)`, the times in
+// (from, to) where its forcing changes form; its substeps then land on each knot.
+template <typename System>
+concept HasSubsystem =
+  requires(const System& s, double time,
+           const std::vector<typename System::value_type>& y,
+           std::vector<typename System::value_type>& out) {
+  { s.subsystem() } -> std::same_as<state_range>;
+  { s.subsystem_knots(time, time) } -> std::same_as<std::vector<double>>;
+  s.subsystem_inputs(out);
+  s.subsystem_rates(time, y, y, out);
+};
 
 // Opt-in domain check. A system may declare
 //
