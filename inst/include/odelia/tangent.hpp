@@ -42,12 +42,12 @@ concept CarriesDirection = xad::ExprTraits<S>::isForward;
 // Everything about them is a pass-through except which scalars they accept.
 //
 // That is the whole reason they are named. One accessor spells this AND an
-// adjoint scalar's accumulator, so on an adjoint scalar the same statement seeds
+// adjoint scalar's accumulator, so on an adjoint scalar the same statement sets
 // a slot no forward pass reads, or reads one no sweep has written -- and neither
 // raises anything, because both are the accessor doing exactly what it says.
 template <typename S>
   requires CarriesDirection<S>
-void seed_direction(S& x, double direction) {
+void set_direction(S& x, double direction) {
   xad::derivative(x) = direction;
 }
 

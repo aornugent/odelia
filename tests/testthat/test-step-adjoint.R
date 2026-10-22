@@ -93,16 +93,16 @@ compile_step_adjoint_interface <- function() {
       // The six stage states of the recording, ascending, then the start state
       // the step puts the system back to.
       stage_log.clear();
-      const odelia::ode::adjoint_rows seeds =
-        odelia::ode::adjoint_rows::one_row(lambda_out);
-      odelia::ode::adjoint_rows swept;
-      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_batch adjoints =
+        odelia::ode::adjoint_batch::one(lambda_out);
+      odelia::ode::adjoint_batch swept;
+      odelia::ode::adjoint_batch rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
-      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, seeds, swept, rows);
-      const std::vector<double> lambda_in = swept.to_rows()[0];
-      const std::vector<double> parameter_adjoint = rows.to_rows()[0];
+      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, adjoints, swept, rows);
+      const std::vector<double> lambda_in = swept.to_vectors()[0];
+      const std::vector<double> parameter_adjoint = rows.to_vectors()[0];
       Rcpp::List recorded(6);
       for (int j = 0; j < 6; ++j) recorded[j] = stage_log[j];
 
@@ -138,16 +138,16 @@ compile_step_adjoint_interface <- function() {
       stepper.step(system, solved, time, step_size, y_end, yerr, dydt_in,
                    dydt_out);
 
-      const odelia::ode::adjoint_rows seeds =
-        odelia::ode::adjoint_rows::one_row(lambda_out);
-      odelia::ode::adjoint_rows swept;
-      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_batch adjoints =
+        odelia::ode::adjoint_batch::one(lambda_out);
+      odelia::ode::adjoint_batch swept;
+      odelia::ode::adjoint_batch rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
-      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, seeds, swept, rows);
-      const std::vector<double> lambda_in = swept.to_rows()[0];
-      const std::vector<double> parameter_adjoint = rows.to_rows()[0];
+      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, adjoints, swept, rows);
+      const std::vector<double> lambda_in = swept.to_vectors()[0];
+      const std::vector<double> parameter_adjoint = rows.to_vectors()[0];
 
       return Rcpp::List::create(Rcpp::_["y_end"] = y_end,
                                 Rcpp::_["lambda_in"] = lambda_in);
@@ -279,16 +279,16 @@ compile_step_adjoint_on <- function(rebind_body) {
       odelia::ode::Step<Decay> stepper;
       stepper.resize(1);
       std::vector<double> y(1, 1.0), lambda_out(1, 1.0);
-      const odelia::ode::adjoint_rows seeds =
-        odelia::ode::adjoint_rows::one_row(lambda_out);
-      odelia::ode::adjoint_rows swept;
-      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_batch adjoints =
+        odelia::ode::adjoint_batch::one(lambda_out);
+      odelia::ode::adjoint_batch swept;
+      odelia::ode::adjoint_batch rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
       const odelia::ode::solved_row<Decay> solved{};
-      stepper.step_adjoint(active, solved, 0.0, 0.1, y, seeds, swept, rows);
-      return swept.to_rows()[0];
+      stepper.step_adjoint(active, solved, 0.0, 0.1, y, adjoints, swept, rows);
+      return swept.to_vectors()[0];
     }
   ', rebind_body))
 }

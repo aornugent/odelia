@@ -10,7 +10,7 @@ adaptive step control and any of its steppers: the explicit Dormand--Prince
 own order), the explicit Cash--Karp 4(5) pair, or the implicit RODAS4(3)
 Rosenbrock stepper for stiff problems. The solver is
 driven a step at a time (or to a sequence of times), and the state can be
-re-seeded between steps -- at a different length if need be -- which is
+reset between steps -- at a different length if need be -- which is
 what a consumer with events needs.
 
 The right-hand side `rhs(t, y)` returns the rates as a numeric vector the
@@ -238,7 +238,7 @@ interpolant, `FALSE` to land a step on each; see `advance_collect()`.}
 \if{latex}{\out{\hypertarget{method-OdeSolver-times}{}}}
 \subsection{\code{OdeSolver$times()}}{
   Times of every accepted step since the last
-  `set_state()`, starting with the time it was seeded at.
+  `set_state()`, starting with the time it was set at.
   \subsection{Usage}{
     \if{html}{\out{<div class="r">}}
     \preformatted{OdeSolver$times()}
@@ -250,7 +250,7 @@ interpolant, `FALSE` to land a step on each; see `advance_collect()`.}
 \if{html}{\out{<a id="method-OdeSolver-set_state"></a>}}
 \if{latex}{\out{\hypertarget{method-OdeSolver-set_state}{}}}
 \subsection{\code{OdeSolver$set_state()}}{
-  Re-seed the state and time. `y` may have a different
+  Reset the state and time. `y` may have a different
   length from before. Resets the step size to the control's initial
   value and the recorded times; evaluates `rhs` once; clears the
   effect of an error in a callback.

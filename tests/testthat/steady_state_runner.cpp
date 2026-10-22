@@ -36,7 +36,7 @@
 //   dy1*/d(r,K,m) = (2 y0*/c) dy0*/d(r,K,m),   dy1*/dc = -y0*^2 / c^2
 //
 // CachedSystem, which breaks the ad_parameters() contract on purpose: its rate
-// reads k = a*b, computed once in the constructor, so seeding a or b in place
+// reads k = a*b, computed once in the constructor, so setting a direction on a or b in place
 // reaches nothing. y' = k - y; y* = a*b; dy*/da = b, dy*/db = a, which the AD
 // sensitivity reports as 0 and 0. check_parameters() must say so.
 
@@ -106,7 +106,7 @@ public:
   }
 
   // Pointers to the differentiable parameters, in a fixed order, so the
-  // forward-mode parameter Jacobian df/dtheta can seed their tangents (and a
+  // forward-mode parameter Jacobian df/dtheta can set their directions (and a
   // reverse-mode sweep can accumulate adjoints for them: the same hook, #59).
   std::vector<T*> ad_parameters() { return { &a, &b, &c }; }
 

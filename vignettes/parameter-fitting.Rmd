@@ -69,7 +69,7 @@ ad_runner$set_target(times, target_vals, obs_index)
 
 The `$loss_and_gradient()` method solves the system for a given parameter vector and returns
 both the loss and its exact gradient. Underneath, it replays the schedule in
-`times` step for step while keeping one record per step, seeds the adjoint at
+`times` step for step while keeping one record per step, sets the adjoint at
 each observed index with the residual against the target, and sweeps the
 recording backwards once, which yields the derivative with respect to every
 parameter (and, when asked, every initial condition) from that single pass. The

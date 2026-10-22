@@ -343,7 +343,7 @@ compile_substep_interface <- function() {
       auto active = store(pars).rebind<tangent>();
       std::vector<tangent*> p = active.ad_parameters();
       for (size_t j = 0; j < p.size(); ++j) {
-        ode::seed_direction(*p[j], direction[j]);
+        ode::set_direction(*p[j], direction[j]);
       }
       ode::Solver<Store<tangent, true>> replay(active, control_at(tol));
       replay.set_collect(false);
@@ -380,13 +380,13 @@ compile_substep_interface <- function() {
       run.set_keep_states(true);
       run.set_state(y0, 0.0);
       run.advance_adaptive({0.0, t_end});
-      ode::adjoint_rows lambda = ode::adjoint_rows::one_row(lambda_end);
-      ode::adjoint_rows rows(1, pars.size());
+      ode::adjoint_batch lambda = ode::adjoint_batch::one(lambda_end);
+      ode::adjoint_batch rows(1, pars.size());
       run.clear_recorded_rates();
       run.sweep_adjoint(lambda, rows);
       return Rcpp::List::create(
-        Rcpp::_["lambda"] = lambda.to_rows()[0],
-        Rcpp::_["parameter_adjoint"] = rows.to_rows()[0],
+        Rcpp::_["lambda"] = lambda.to_vectors()[0],
+        Rcpp::_["parameter_adjoint"] = rows.to_vectors()[0],
         Rcpp::_["n_steps"] = (int) run.recording().size() - 1,
         Rcpp::_["recorded_rates"] = (int) run.recorded_rates());
     }

@@ -20,7 +20,7 @@ static Rcpp::XPtr<RSolver> get_rsolver(SEXP xp) {
   return Rcpp::XPtr<RSolver>(xp);
 }
 
-// Constructing the solver evaluates rhs once, at (t0, y0), to seed itself.
+// Constructing the solver evaluates rhs once, at (t0, y0), to start.
 // With a non-NULL `parms` the callbacks are called as f(t, y, parms).
 // [[Rcpp::export]]
 SEXP RSolver_new(Rcpp::Function rhs, Rcpp::Nullable<Rcpp::Function> jac,
@@ -94,7 +94,7 @@ Rcpp::NumericVector RSolver_times(SEXP solver_xp) {
   return Rcpp::wrap(get_rsolver(solver_xp)->times());
 }
 
-// Re-seed the state, at any length: the system is resized to y first, then the
+// Reset the state, at any length: the system is resized to y first, then the
 // solver reset onto it. Resets the step size to the control's initial value and
 // the recorded times; costs one rhs evaluation.
 // [[Rcpp::export]]

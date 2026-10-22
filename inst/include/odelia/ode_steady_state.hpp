@@ -300,11 +300,11 @@ public:
   // and a central difference of f taken through rebind(). The difference
   // perturbs a parameter on a copy of the System and then *rebuilds* the System
   // from that copy's values, so anything the constructor derives from the
-  // parameter is derived afresh; the AD column, which seeds the parameter in
-  // place, sees none of that. A System whose rates read every parameter live
-  // agrees to finite-difference accuracy (~1e-6 at the default step); one with
-  // a cached derived quantity returns a discrepancy of order one. Costs two
-  // rebinds and two rate evaluations per parameter.
+  // parameter is derived afresh; the AD column, which sets the parameter's
+  // direction in place, sees none of that. A System whose rates read every
+  // parameter live agrees to finite-difference accuracy (~1e-6 at the default
+  // step); one with a cached derived quantity returns a discrepancy of order
+  // one. Costs two rebinds and two rate evaluations per parameter.
   double check_parameters(const System& system, double rel_step = 1e-6) {
     if (!solved) {
       util::stop("check_parameters() needs a converged solve() first.");

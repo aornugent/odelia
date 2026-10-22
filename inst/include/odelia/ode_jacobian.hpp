@@ -34,7 +34,7 @@
 // The AD route also yields the parameter Jacobian d(dydt)/dtheta, used by the
 // implicit-function-theorem steady-state sensitivity in ode_steady_state.hpp:
 // the same forward sweep on the same rebound System, differing only in where
-// the unit tangent seed is placed. It needs the rebound System (a hook knows
+// the unit direction is placed. It needs the rebound System (a hook knows
 // nothing about parameters) and the System's `ad_parameters()` hook naming
 // them, so it is gated on `params_supported` below.
 
@@ -65,13 +65,13 @@ public:
 };
 
 // Detect a `std::vector<scalar*> ad_parameters()` hook: pointers to the
-// system's differentiable parameters, in a fixed order, used to seed parameter
+// system's differentiable parameters, in a fixed order, used to set parameter
 // tangents for the forward-mode parameter Jacobian df/dtheta. The same hook,
 // with the same shape, names the parameters a reverse-mode sweep accumulates
 // adjoints for (adjoint.hpp), so a System declares them once. A system that
 // omits it simply cannot have its parameter sensitivity taken (gated below).
 //
-// Contract: the rates must read each named parameter *live*. The seed is placed
+// Contract: the rates must read each named parameter *live*. The direction is set
 // on the parameter after the rebound System is built, so a quantity the
 // constructor derived from it (a product, a rate scaled by it, a hyperparameter)
 // carries no tangent, and that parameter's column of df/dtheta comes back as
@@ -131,7 +131,7 @@ public:
   // Whether the parameter Jacobian df/dtheta is additionally available: needs
   // the AD route (a rebound System to differentiate on; a hook says nothing
   // about parameters) plus an `ad_parameters()` hook on that System exposing
-  // pointers to the differentiable parameters to seed.
+  // pointers to the differentiable parameters to set directions on.
   static constexpr bool params_supported =
       ad_supported && has_ad_parameters<tangent_system_type>::value;
 
@@ -144,7 +144,7 @@ public:
   // Compute J = d f / d y at (y, t), written row-major into `J` (size n*n),
   // J[row * n + col] = d f_row / d y_col. `dydt` is f(t, y), handed through to
   // a hook that can use it. Parameters are held fixed (on the AD route they are
-  // seeded with zero tangent), so J is the state Jacobian only.
+  // set to a zero direction), so J is the state Jacobian only.
   //
   // The system is taken mutable because a hook may need to evaluate it (finite
   // differences do), and the stepper already holds it that way.
@@ -167,12 +167,12 @@ public:
 
       J.assign(size * size, value_type(0.0));
       for (size_t col = 0; col < size; ++col) {
-        seed_direction(v[col], 1.0);
+        set_direction(v[col], 1.0);
         ode::derivs(tangent_system, v, dydt_ad, t);
         for (size_t row = 0; row < size; ++row) {
           J[row * size + col] = derivative_along(dydt_ad[row]);
         }
-        seed_direction(v[col], 0.0);
+        set_direction(v[col], 0.0);
       }
     }
   }
@@ -182,7 +182,7 @@ public:
   // d f_row / d theta_col. `n_params` is set to the number of parameters the
   // System exposes via ad_parameters().
   //
-  // Same forward-mode sweep as compute()'s AD route, but the tangent seed is
+  // Same forward-mode sweep as compute()'s AD route, but the direction is
   // placed on a *parameter* of the rebound System rather than a state
   // component: state carries zero derivative, one parameter carries unit
   // derivative per column, so the output tangent is exactly that parameter's
@@ -207,7 +207,7 @@ public:
     }
 
     // Pointers into the rebound System's own parameter storage; valid for the
-    // lifetime of `tangent_system`. Seeding a tangent here propagates through
+    // lifetime of `tangent_system`. Setting a direction here propagates through
     // compute_rates(), and only through it: see the contract at
     // has_ad_parameters.
     std::vector<tangent_type*> params = tangent_system.ad_parameters();
@@ -215,12 +215,12 @@ public:
     Jp.assign(size * n_params, value_type(0.0));
 
     for (size_t col = 0; col < n_params; ++col) {
-      seed_direction(*params[col], 1.0);
+      set_direction(*params[col], 1.0);
       ode::derivs(tangent_system, v, dydt_ad, t);
       for (size_t row = 0; row < size; ++row) {
         Jp[row * n_params + col] = derivative_along(dydt_ad[row]);
       }
-      seed_direction(*params[col], 0.0);
+      set_direction(*params[col], 0.0);
     }
   }
 
@@ -289,7 +289,7 @@ void fd_jacobian(System& system,
 // Finite-difference partial derivative of the RHS with respect to time,
 // d f / d t at (y, t), against `dydt` = f(t, y) already in hand. The System
 // stores time as a plain double (not the scalar type), so this term cannot be
-// seeded through the rebound System; a one-sided difference is used. It is (near) zero
+// set through the rebound System; a one-sided difference is used. It is (near) zero
 // for autonomous systems, and a system that declares ode_autonomous() is not
 // asked for it at all (see ode_step_rodas.hpp). Uses value_type arithmetic
 // throughout, so it tapes correctly under an outer adjoint fit.

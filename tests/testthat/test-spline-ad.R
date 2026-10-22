@@ -84,7 +84,7 @@ compile_spline_ad_interface <- function() {
         return g;
       }
 
-      // A read at an ACTIVE position, seeded with w: the value, its derivative
+      // A read at an ACTIVE position, with w as its adjoint: the value, its derivative
       // with respect to the position and to each knot value, and the statements
       // the read alone put on the tape. composed takes the value and slope at the
       // passive position and carries the query through the slope in a statement
@@ -209,8 +209,8 @@ testthat::test_that("hermite_spline<ad> read at an active position", {
   y <- sin(0.4 * x) + 0.1 * x
 
   # Inside a span, on an interior knot, on each end knot, and past each end,
-  # where the end span's line is extended. The seed is not one, because a unit
-  # seed hides how a knot's partial is associated.
+  # where the end span's line is extended. The adjoint is not one, because a unit
+  # adjoint hides how a knot's partial is associated.
   w <- 0.3
   for (q in c(3.3, 0.37, 2.5, 0, 9, -0.5, 9.75)) {
     r <- spline_active_query(x, y, q, w, composed = FALSE)
