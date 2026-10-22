@@ -1,5 +1,5 @@
 # Tests for the two ways a value computed away from the tape gets onto it:
-# record_with_derivatives, which takes the derivatives as supplied numbers, and
+# supply_derivatives, which takes the derivatives as supplied numbers, and
 # implicit_value, which derives them from a residual through the implicit
 # function theorem and records the result through the first.
 #
@@ -91,7 +91,7 @@ compile_implicit_value_interface <- function() {
     // never touched. Nothing here relates `value` to u or v, so the derivatives
     // that come back can only be the supplied ones.
     // [[Rcpp::export]]
-    Rcpp::List record_with_derivatives_gradient(double value, double du,
+    Rcpp::List supply_derivatives_gradient(double value, double du,
                                                 double dv) {
       tape_type tape;
       adouble u(1.5), v(-0.25);
@@ -105,8 +105,8 @@ compile_implicit_value_interface <- function() {
       // libstdc++ (which ships that constructor early) and not on libc++.
       const std::vector<odelia::input_and_derivative<adouble>> rows{{u, du},
                                                                     {v, dv}};
-      const odelia::record_report report =
-          odelia::record_with_derivatives<adouble>(value, rows, y);
+      const odelia::supply_report report =
+          odelia::supply_derivatives<adouble>(value, rows, y);
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
       tape.computeAdjoints();
@@ -138,7 +138,7 @@ compile_implicit_value_interface <- function() {
 
       const double u0 = 1.5, v0 = -0.25;
       adouble root;
-      odelia::record_report on_root{true, 0, ""};
+      odelia::supply_report on_root{true, 0, ""};
       try {
         root = odelia::implicit_value<adouble>(
             p, residual_slope, [&](const adouble& y) -> adouble {
@@ -150,13 +150,13 @@ compile_implicit_value_interface <- function() {
         // went because its one consumer turned the report into the same refusal
         // this exception becomes. Caught so the checks below can read which.
         root = adouble(p);
-        on_root = odelia::record_report{false, 0, e.what()};
+        on_root = odelia::supply_report{false, 0, e.what()};
       }
       adouble y;
       const std::vector<odelia::input_and_derivative<adouble>> on_root_rows{
           {root, dy_dp}};
-      const odelia::record_report on_y =
-          odelia::record_with_derivatives<adouble>(7.5, on_root_rows, y);
+      const odelia::supply_report on_y =
+          odelia::supply_derivatives<adouble>(7.5, on_root_rows, y);
       tape.registerOutput(y);
       xad::derivative(y) = 1.0;
       tape.computeAdjoints();
@@ -189,10 +189,10 @@ compile_implicit_value_interface <- function() {
     }', verbose = FALSE)
 }
 
-testthat::test_that("record_with_derivatives returns the value and carries what it was given", {
+testthat::test_that("supply_derivatives returns the value and carries what it was given", {
   compile_implicit_value_interface()
 
-  got <- record_with_derivatives_gradient(4.75, 2.0, -3.5)
+  got <- supply_derivatives_gradient(4.75, 2.0, -3.5)
 
   # Each term is an input minus its own passive copy, which is zero in value, so
   # what comes back is the number handed in rather than one near it.
@@ -207,7 +207,7 @@ testthat::test_that("record_with_derivatives returns the value and carries what 
   # one that was bad: a value carrying part of its rows is a channel gone missing
   # with every number still finite. The VALUE is handed back either way, because
   # whether a caller can go on without the rows is the caller's to decide.
-  bad <- record_with_derivatives_gradient(4.75, NaN, 1.0)
+  bad <- supply_derivatives_gradient(4.75, NaN, 1.0)
   testthat::expect_false(bad$whole)
   testthat::expect_match(bad$why, "is not finite")
   testthat::expect_true(bad$identical)

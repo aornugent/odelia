@@ -103,7 +103,7 @@ testthat::test_that("lorenz system runs and produces expected results", {
 
 })
 
-# $fit() against a reference run observed at eleven output times: the reverse sweep
+# $loss_and_gradient() against a reference run observed at eleven output times: the reverse sweep
 # is taken one interval between observations at a time, so several observations
 # are what exercise it. Refereed against a central difference of the loss.
 lorenz_fit_setup <- function() {
@@ -133,21 +133,21 @@ lorenz_central_difference <- function(f, x) {
 testthat::test_that("lorenz fit's initial-state gradient matches a central difference", {
   fitter <- lorenz_fit_setup()
   ic <- c(1.1, 0.9, 1.05)
-  res <- fitter$fit(ic = ic)
+  res <- fitter$loss_and_gradient(initial_state = ic)
   expect_length(res$gradient, 3)
-  fd <- lorenz_central_difference(function(y) fitter$fit(ic = y)$loss, ic)
+  fd <- lorenz_central_difference(function(y) fitter$loss_and_gradient(initial_state = y)$loss, ic)
   expect_equal(res$gradient, fd, tolerance = 1e-6)
-  expect_equal(fitter$fit(ic = c(1, 1, 1))$loss, 0, tolerance = 1e-20)
+  expect_equal(fitter$loss_and_gradient(initial_state = c(1, 1, 1))$loss, 0, tolerance = 1e-20)
 })
 
 testthat::test_that("lorenz fit's parameter gradient matches a central difference", {
   fitter <- lorenz_fit_setup()
   p <- c(11, 27, 2.5)
-  res <- fitter$fit(params = p)
+  res <- fitter$loss_and_gradient(params = p)
   expect_length(res$gradient, 3)
-  fd <- lorenz_central_difference(function(q) fitter$fit(params = q)$loss, p)
+  fd <- lorenz_central_difference(function(q) fitter$loss_and_gradient(params = q)$loss, p)
   expect_equal(res$gradient, fd, tolerance = 1e-6)
   # Both at once: parameters first, then the initial state.
-  both <- fitter$fit(ic = c(1.1, 0.9, 1.05), params = p)
+  both <- fitter$loss_and_gradient(initial_state = c(1.1, 0.9, 1.05), params = p)
   expect_length(both$gradient, 6)
 })

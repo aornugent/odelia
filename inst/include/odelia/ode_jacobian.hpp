@@ -22,7 +22,7 @@
 //      cleanly as FReal<AReal<double>> when the solver itself is being
 //      differentiated by an outer adjoint fit -- the tangent layer never contends
 //      with the outer tape. Rebinding requires the System to expose
-//        template <class U> Self<U> rebind_from() const;
+//        template <class U> Self<U> rebind() const;
 //      which returns a copy of itself with the scalar type swapped to U
 //      (parameters carried over via xad::value + U(...)) -- the same double->AD
 //      rebind the gradient driver uses.
@@ -116,7 +116,7 @@ public:
   using tangent_system_type = typename rebound_system<System, tangent_type>::type;
 
   // Whether the forward-AD route is instantiable and usable for this System.
-  // Requires (a) a rebind_from() hook, (b) a scalar that does not already carry
+  // Requires (a) a rebind() hook, (b) a scalar that does not already carry
   // an adjoint (see value_is_adjoint), and (c) that the tangent System can be
   // built from the current scalar type.
   static constexpr bool ad_supported =
@@ -159,7 +159,7 @@ public:
       // reflected (cheap: a small value copy). Its scalar is the tangent type;
       // its parameters carry zero derivative.
       tangent_system_type tangent_system =
-          system.template rebind_from<tangent_type>();
+          system.template rebind<tangent_type>();
 
       for (size_t j = 0; j < size; ++j) {
         v[j] = tangent_type(y[j]);
@@ -197,10 +197,10 @@ public:
                       double t, std::vector<value_type>& Jp,
                       size_t& n_params) {
     static_assert(params_supported,
-                  "compute_params requires rebind_from() and an ad_parameters() "
+                  "compute_params requires rebind() and an ad_parameters() "
                   "hook on the rebound System");
     tangent_system_type tangent_system =
-        system.template rebind_from<tangent_type>();
+        system.template rebind<tangent_type>();
 
     for (size_t j = 0; j < size; ++j) {
       v[j] = tangent_type(y[j]);
@@ -231,7 +231,7 @@ private:
 };
 
 // Forward-difference Jacobian of the right-hand side, for a system that has no
-// rebind_from() to differentiate through: the one-line body of an ode_jacobian() hook
+// rebind() to differentiate through: the one-line body of an ode_jacobian() hook
 // on such a system. One evaluation per column, at y + h_j e_j with
 // h_j = rel_step * max(|y_j|, y_floor), against the `dydt` already known at y,
 // written row-major like Jacobian::compute(). The system is left on the last

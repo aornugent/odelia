@@ -85,15 +85,15 @@ struct DomainError : std::runtime_error {
 // nothing finer has a component to attribute it to. A caller catching
 // runtime_error broadly would read a genuine length mismatch in the sweep the
 // same way, which is the distinction DomainError above exists to keep.
-struct AdjointRangeError : std::runtime_error {
-  explicit AdjointRangeError(const std::string &msg) : std::runtime_error(msg) {}
+struct AdjointOverflowError : std::runtime_error {
+  explicit AdjointOverflowError(const std::string &msg) : std::runtime_error(msg) {}
 };
 
 // As stop(), for a sweep that left the representable range. Prefer a message
 // naming the step, the entry and the magnitude the step above carried: the last
-// of those is what says whether the descent compounded into it or met it.
-[[noreturn]] inline void stop_adjoint_range(const std::string &msg) {
-  throw AdjointRangeError(msg);
+// of those is what says whether the sweep compounded into it or met it.
+[[noreturn]] inline void stop_adjoint_overflow(const std::string &msg) {
+  throw AdjointOverflowError(msg);
 }
 
 // Not an R warning: nothing in the solver core may assume an R session exists.

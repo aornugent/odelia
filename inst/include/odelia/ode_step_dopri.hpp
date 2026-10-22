@@ -98,13 +98,13 @@ public:
   // says what the arguments are. The seventh evaluation is not recorded: the
   // state the step ends at does not depend on it, only the error estimate and
   // the dense output do.
-  void step_adjoint(active_system<System>& active,
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1,
                     double time, double step_size,
                     const state_type& y, const adjoint_rows& lambda_out,
                     adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint);
-  void step_adjoint(active_system<System>& active,
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     double time, double step_size, const state_type& y,
                     const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
@@ -266,7 +266,7 @@ private:
 // from y, and the parameter rows alongside it: one recording of the step's six
 // rate evaluations and the combination closing them, as Step::step_adjoint.
 template <class System>
-void DopriStep<System>::step_adjoint(active_system<System>& active,
+void DopriStep<System>::step_adjoint(adjoint_system<System>& active,
                                      const solved_row<System>& solved,
                                      const carried_rates<System>* k1,
                                      double time, double step_size,
@@ -274,7 +274,7 @@ void DopriStep<System>::step_adjoint(active_system<System>& active,
                                      const adjoint_rows& lambda_out,
                                      adjoint_rows& lambda_in,
                                      adjoint_rows& parameter_adjoint) {
-  using scalar = active_scalar<double>;
+  using scalar = adjoint_scalar<double>;
   const double h = step_size;
   if (lambda_out.empty()) {
     util::stop("step_adjoint: needs at least one seed");

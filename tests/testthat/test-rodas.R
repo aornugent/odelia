@@ -163,6 +163,6 @@ testthat::test_that("RODAS takes far fewer steps than RKCK on a stiff problem", 
 })
 
 # Note: the "RODAS rejected for active/AD scalars" invariant is now enforced
-# internally (ode_solver_internal.hpp: the rodas branch needs a rebind_from()
+# internally (ode_solver_internal.hpp: the rodas branch needs a rebind()
 # hook and a non-active scalar). It is no longer reachable from R, which holds
 # only the double solver -- the active replay is built internally for gradients.

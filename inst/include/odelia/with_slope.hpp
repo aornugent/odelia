@@ -1,6 +1,6 @@
 // -*-c++-*-
-#ifndef ODELIA_VALUE_WITH_SLOPE_HPP_
-#define ODELIA_VALUE_WITH_SLOPE_HPP_
+#ifndef ODELIA_WITH_SLOPE_HPP_
+#define ODELIA_WITH_SLOPE_HPP_
 
 namespace odelia {
 
@@ -26,7 +26,7 @@ namespace odelia {
 // No includes of its own, so a header on any path can take it without taking
 // anything else with it.
 template <typename T>
-struct value_with_slope {
+struct with_slope {
   T value;
   T slope;
 

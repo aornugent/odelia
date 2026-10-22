@@ -17,8 +17,8 @@ namespace odelia {
 namespace ode {
 
 // Solver<System> owns a System and a SolverInternal and drives them: forward
-// over a set of times (advance_adaptive, advance_fixed, advance_recorded), and
-// backward over what a forward run recorded (solve_adjoint).
+// over a set of times (advance_adaptive, advance_fixed, advance_schedule, replay),
+// and backward over what a forward run recorded (sweep_adjoint).
 //
 // A gradient of a run, in full:
 //
@@ -27,7 +27,7 @@ namespace ode {
 //   s.advance_adaptive({0.0, 10.0});      // the ordinary solve
 //   adjoint_rows lambda = adjoint_rows::one_row({1.0, 0.0, 0.0});  // d(x_final)
 //   adjoint_rows dp(1, n_parameters);     // one row per seed, zeroed
-//   s.solve_adjoint(lambda, dp);
+//   s.sweep_adjoint(lambda, dp);
 //   // dp[0][j] = d x_final / d parameter_j; lambda[0][i] = d x_final / d y_i(0)
 //
 // Where to read, in order: step_record and the Sweepable concept
@@ -36,7 +36,7 @@ namespace ode {
 // row is written; state_and_parameter_adjoints (adjoint.hpp) for the transpose
 // of one map; Step::step_adjoint (ode_step_rkck.hpp) for the transpose of one
 // step, which DopriStep::step_adjoint (ode_step_dopri.hpp) repeats on its own
-// tableau; solve_adjoint below for the loop over rows and insertions. Under
+// tableau; sweep_adjoint below for the loop over rows and insertions. Under
 // method = rkck or dopri a run records, replays and sweeps; rodas refuses a sweep
 // or a replay.
 //
@@ -167,24 +167,24 @@ public:
   }
 
   // Step over a schedule, landing on each of its times: at the recorded size
-  // where one is known, and to the time itself where it is not. See instruction
+  // where one is known, and to the time itself where it is not. See schedule_row
   // for why neither is derived from the other.
   //
   // A row marked an insertion is followed by the System's own state map, applied
   // here. A schedule that says where its insertions are is one a walk can execute
-  // without a range loop wrapped around it -- and it is the same map the sweep
+  // without a segment loop wrapped around it -- and it is the same map the sweep
   // transposes, so a tangent replayed through here traverses exactly the function
   // under test rather than a second spelling of it.
-  void advance_recorded(const std::vector<ode::instruction>& program)
+  void advance_schedule(const std::vector<ode::schedule_row>& schedule)
   {
-    if (program.empty())
+    if (schedule.empty())
     {
-      util::stop("'program' must hold at least the entry it starts from");
+      util::stop("'schedule' must hold at least the row it starts from");
     }
-    if (program.front().insertion || !std::isnan(program.front().step_size))
+    if (schedule.front().insertion || !std::isnan(schedule.front().step_size))
     {
-      util::stop("A program's first entry is where it starts, which no "
-                 "instruction reached, so it must be a step of NaN size");
+      util::stop("A schedule's first row is where it starts, which no step "
+                 "reached, so it must be a step of NaN size");
     }
 
     // Held across the walk rather than made per insertion. `widened` is written
@@ -197,24 +197,24 @@ public:
       history.push_back(system);
     }
 
-    for (std::size_t k = 1; k < program.size(); ++k)
+    for (std::size_t k = 1; k < schedule.size(); ++k)
     {
-      if (program[k].insertion)
+      if (schedule[k].insertion)
       {
         before.assign(system.ode_size(), value_type(0.0));
         system.ode_state(before.begin());
-        ode::apply_insertion(system, program[k].time, before.begin(), widened);
+        ode::apply_insertion(system, schedule[k].time, before.begin(), widened);
         set_state_from_system();
         solver.push_insertion(system);
         continue;
       }
-      if (std::isnan(program[k].step_size))
+      if (std::isnan(schedule[k].step_size))
       {
-        solver.step_to(system, program[k].time);
+        solver.step_to(system, schedule[k].time);
       }
       else
       {
-        solver.step_by(system, program[k]);
+        solver.step_by(system, schedule[k]);
       }
       if (collect)
       {
@@ -223,28 +223,28 @@ public:
     }
   }
 
-  // The same walk over a RECORDING rather than a program, which is a recording
-  // minus its rows. Each step is taken at the size that run took, and its stages
+  // The same walk over a RECORDING, which is a schedule plus what each step left.
+  // Each step is taken at the size that run took, and its stages
   // LOAD what that run solved for instead of solving again -- so a pass that must
   // not re-decide (anything re-running the model to tape it) traverses the
   // function the run computed rather than a second spelling of it.
   //
-  // The row travels WITH the step, because `step_record` is the instruction plus
+  // The row travels WITH the step, because `step_record` is the schedule row plus
   // what the step left.
   //
   // ⚠️ `rec[k].solved` is what the stages of the step that REACHED `rec[k].time`
-  // solved, which is the same pairing `solve_adjoint` walks. Off by one here and
+  // solved, which is the same pairing `sweep_adjoint` walks. Off by one here and
   // every stage loads its neighbour's answer, finitely.
-  void advance_recorded(std::span<const ode::step_record<System>> rec)
+  void replay(std::span<const ode::step_record<System>> rec)
   {
     if (rec.empty())
     {
-      util::stop("'rec' must hold at least the entry it starts from");
+      util::stop("'rec' must hold at least the row it starts from");
     }
     if (rec.front().insertion || !std::isnan(rec.front().step_size))
     {
-      util::stop("A recording's first entry is where it starts, which no "
-                 "instruction reached, so it must be a step of NaN size");
+      util::stop("A recording's first row is where it starts, which no step "
+                 "reached, so it must be a step of NaN size");
     }
 
     std::vector<value_type> before;
@@ -288,7 +288,7 @@ public:
                    "it: entry " + util::to_string(k) + " was taken by method='" +
                    method_name(rec[k].method) + "' and this solver steps by "
                    "method='" + method_name(method()) + "'. Build the solver "
-                   "with the recording's method, or replay schedule(), which "
+                   "with the recording's method, or replay steps_taken(), which "
                    "carries no rows, to solve the stages afresh");
       }
       solver.step_by(system, rec[k], &rec[k].solved);
@@ -436,72 +436,74 @@ public:
   std::span<const ode::step_record<System>> recording() const {
     return solver.recording();
   }
-  // The schedule a replay of this run would take. Read off the record, so the
-  // time and the size that reached it cannot be paired across two runs.
-  std::vector<ode::instruction> schedule() const { return solver.schedule(); }
+  // The steps this run took, without its insertion rows. Read off the record, so
+  // the time and the size that reached it cannot be paired across two runs.
+  std::vector<ode::schedule_row> steps_taken() const {
+    return solver.steps_taken();
+  }
 
   // Carry lambda back over recorded rows k_last down to k_first + 1, highest
   // first, adding each row's parameter contribution into `parameter_adjoint`.
   //
-  // Wherever the state changed width inside that range the descent stops, narrows
+  // Wherever the state changed width inside those rows the sweep stops, narrows
   // the System across it and transposes the map that widened it, so the rows it
   // carries arrive by the same route a step's do. Where nothing widened this is one
-  // rebind and one descent -- which is what a System of fixed width gets, and what
-  // every range this splits into gets.
+  // rebind and one sweep -- which is what a System of fixed width gets, and what
+  // every segment this splits into gets.
   //
   // `extra_stops` names further rows to stop at. The adjoint carried across such a
   // stop is the same one either way, so a caller can ask for a split and compare: a
   // check, not a choice.
   //
-  // The System is put where each range needs it and left where the run left it,
-  // so a sub-range can be swept without the caller positioning anything and the
+  // The System is put where each segment needs it and left where the run left it,
+  // so a sub-segment can be swept without the caller positioning anything and the
   // whole can be swept again afterwards.
   //
-  // Returns how many ranges carried a step.
-  std::size_t solve_adjoint(ode::adjoint_rows& lambda,
+  // Returns how many segments carried a step.
+  std::size_t sweep_adjoint(ode::adjoint_rows& lambda,
                             ode::adjoint_rows& parameter_adjoint,
                             size_t k_first, size_t k_last,
                             const std::vector<size_t>& extra_stops = {})
   {
-    using scalar = ode::active_scalar<double>;
+    using scalar = ode::adjoint_scalar<double>;
     static_assert(ode::Sweepable<System>,
-                  "this System cannot be swept: it needs rebind_from<U>(), "
+                  "this System cannot be swept: it needs rebind<U>(), "
                   "ad_parameters(), for_each_active(f) and "
                   "set_recorded_state(y, time); see Sweepable in "
                   "ode_interface.hpp");
     if (&lambda == &parameter_adjoint) {
-      util::stop("solve_adjoint: the state adjoints are replaced and the "
+      util::stop("sweep_adjoint: the state adjoints are replaced and the "
                  "parameter adjoints accumulated, so they cannot be the same "
                  "batch");
     }
     const std::span<const ode::step_record<System>> rec = recording();
     if (rec.size() < 2) {
-      util::stop("solve_adjoint: no recorded steps to sweep; run the adaptive "
+      util::stop("sweep_adjoint: no recorded steps to sweep; run the adaptive "
                  "pass first");
     }
     if (k_first >= k_last || k_last >= rec.size()) {
-      util::stop("the adjoint range is not a range of recorded steps");
+      util::stop("sweep_adjoint: the rows to sweep are not recorded rows");
     }
 
     // A insertion is a row the sweep carries an adjoint ACROSS, so it cannot be one
-    // the descent starts at or the one it is left standing on. Neither happens on a
+    // the sweep starts at or the one it is left standing on. Neither happens on a
     // recording a run made -- the schedule puts every insertion at the start of
     // an interval that then steps -- and both are checked here rather than at each
     // be_at_step, because the width this leaves the System at is a promise and the
     // call that restores it cannot raise.
     if (rec.back().insertion || rec[k_last].insertion) {
-      util::stop("solve_adjoint: a recording cannot end at an insertion, because "
+      util::stop("sweep_adjoint: a recording cannot end at an insertion, because "
                  "nothing stepped away from the state it made");
     }
 
     // The width on exit is a promise, and a throw is an exit, so a destructor
-    // keeps it. The descent starts at the run's own width and narrows as it goes,
+    // keeps it. The sweep starts at the run's own width and narrows as it goes,
     // so a sweep abandoned high up leaves the System at its widest -- where every
     // caller's tail widens back from the lowest and reads the mismatch as a length
     // error one call later, naming neither this walk nor what refused.
     //
     // The solver's own buffers are re-seeded from the System at the same time:
-    // a sweep sizes the stage buffers to each range it walks, so after a range
+    // a sweep sizes the stage buffers to each segment it walks, so after a segment
     // narrower than the run they hold a truncated state marked current, and a
     // step taken next would start from it.
     struct restore_on_exit {
@@ -520,36 +522,36 @@ public:
       }
     } restore{system, solver, rec};
 
-    // One tape for the whole descent, held active across every recording it takes.
+    // One tape for the whole sweep, held active across every recording it takes.
     // Clearing between recordings keeps the capacity the largest of them grew,
     // where one tape per recording regrows it every time.
     ode::adjoint_tape<double> tape(false);
     ode::tape_scope<ode::adjoint_tape<double>> running{tape};
 
-    // One range per width, highest first: the System is put at the range's top, so
-    // whoever narrows it is whoever rebinds on it and no descent inherits a width
-    // another call left behind.
+    // One segment per width, highest first: the System is put at the segment's
+    // top, so whoever narrows it is whoever rebinds on it and no sweep inherits a
+    // width another call left behind.
     //
     // A stop is either an insertion the run recorded or a cut a caller asked for, and
-    // they leave the descent in different places. A cut is a row the sweep resumes
+    // they leave the sweep in different places. A cut is a row the sweep resumes
     // at; an insertion is a row the sweep carries the adjoint ACROSS, so it resumes
     // one row below, on the state the map ran on.
     size_t swept = 0;
     size_t hi = k_last;
     const auto sweep_down_to = [&](size_t lo) -> void {
       ode::be_at_step(system, rec, hi);
-      // A range with no step in it cuts nothing, which is what two stops in a row
-      // gives. Nor does a range with no state -- a run that starts empty and
+      // A segment with no step in it cuts nothing, which is what two stops in a row
+      // gives. Nor does a segment with no state -- a run that starts empty and
       // widens at a later insertion, as plant's invader does before its first
       // cohort: a step with no state has no output, so it carries no adjoint and
       // adds nothing to any parameter's.
       if (lo < hi && lambda.width() > 0) {
-        sweep_range(tape, rec, lambda, parameter_adjoint, lo, hi);
+        sweep_segment(tape, rec, lambda, parameter_adjoint, lo, hi);
         ++swept;
       }
     };
 
-    // The rows this can stop at are the rows strictly inside the range, which is
+    // The rows this can stop at are the rows strictly inside the segment, which is
     // what the bounds say, and each is reached once. A row that is both an insertion
     // and a cut is the insertion, which is what keeps a cut free of a map.
     for (size_t at = k_last; at-- > k_first + 1;) {
@@ -572,7 +574,7 @@ public:
         continue;
       }
       // The map that widened `at`, transposed at the width below it -- which is
-      // the width the range below runs at, and the width the row below holds.
+      // the width the segment below runs at, and the width the row below holds.
       //
       // Its active System is its own and dies with it, because applying the map is
       // what widens the System: what this records on cannot be swept at the width
@@ -589,7 +591,7 @@ public:
                       s.apply_insertion(t, x, y);
                     }) {
         if (rec[at].state.size() != rec[at - 1].state.size()) {
-          util::stop("solve_adjoint: the recording widens from " +
+          util::stop("sweep_adjoint: the recording widens from " +
                      util::to_string(static_cast<int>(rec[at - 1].state.size())) +
                      " to " +
                      util::to_string(static_cast<int>(rec[at].state.size())) +
@@ -603,7 +605,7 @@ public:
                         std::vector<scalar>& y) -> void {
         ode::apply_insertion(sys, when, x, y);
       };
-      ode::active_system<System> widened{system, tape};
+      ode::adjoint_system<System> widened{system, tape};
       ode::adjoint_rows narrowed;
       ode::state_and_parameter_adjoints(widened, rec[at - 1].state, lambda, insert,
                                        narrowed, parameter_adjoint);
@@ -615,11 +617,11 @@ public:
   }
 
   // The whole recording.
-  std::size_t solve_adjoint(ode::adjoint_rows& lambda,
+  std::size_t sweep_adjoint(ode::adjoint_rows& lambda,
                             ode::adjoint_rows& parameter_adjoint,
                             const std::vector<size_t>& extra_stops = {})
   {
-    return solve_adjoint(lambda, parameter_adjoint, 0, recording().size() - 1,
+    return sweep_adjoint(lambda, parameter_adjoint, 0, recording().size() - 1,
                          extra_stops);
   }
 
@@ -633,29 +635,29 @@ public:
 std::vector<System> history;
 
 private:
-  // One range, at the width the caller left the System on: it is rebound here, so
-  // one copy serves every step in this range, each recording releases its slots
+  // One segment, at the width the caller left the System on: it is rebound here, so
+  // one copy serves every step in this segment, each recording releases its slots
   // before taking the next, and no active System arrives from a call that widened
   // it.
   //
-  // Every state visited has to be that width, so a range an insertion crossed is
+  // Every state visited has to be that width, so a segment an insertion crossed is
   // refused by the length check inside the loop rather than swept at one width.
-  void sweep_range(ode::adjoint_tape<double>& tape,
+  void sweep_segment(ode::adjoint_tape<double>& tape,
                    std::span<const ode::step_record<System>> rec,
                    ode::adjoint_rows& lambda, ode::adjoint_rows& parameter_adjoint,
                    size_t k_first, size_t k_last)
   {
     if (lambda.empty()) {
-      util::stop("solve_adjoint: needs at least one seed");
+      util::stop("sweep_adjoint: needs at least one seed");
     }
-    ode::active_system<System> active{system, tape};
+    ode::adjoint_system<System> active{system, tape};
     // Asked of the System the recordings are taken on, which is the width every
     // state below has to be loaded at. Named, because a bare length mismatch here
     // is read as the caller's and says nothing about the seam it is really about:
     // a batch carried at one width against a System at another. One width for
     // every row, so this is asked of the batch and not of each seed in it.
     if (lambda.width() != active.system.ode_size()) {
-      util::stop("solve_adjoint: the seeds are " +
+      util::stop("sweep_adjoint: the seeds are " +
                  util::to_string(static_cast<int>(lambda.width())) +
                  " wide against a System of " +
                  util::to_string(static_cast<int>(active.system.ode_size())) +
@@ -663,14 +665,14 @@ private:
     }
     // ⚠️ THE DESCENT STOPS AT THE FIRST NON-FINITE ENTRY, and must not be changed
     // to carry it. This hands its caller one number per input, so an overflow the
-    // descent picked up thousands of steps earlier would arrive indistinguishable
+    // sweep picked up thousands of steps earlier would arrive indistinguishable
     // from a NaN the last step made -- and a caller polling for a declared
     // refusal would find none, which is the one failure this gradient must never
-    // produce. Raised as AdjointRangeError, so a caller can tell it from any
+    // produce. Raised as AdjointOverflowError, so a caller can tell it from any
     // other failure.
     //
     // ODELIA_ADJOINT_TRACE=steps prints the magnitude at every step, which is
-    // what says whether the descent compounded into the failure or met it. One
+    // what says whether the sweep compounded into the failure or met it. One
     // line per recorded step is thousands of them, so it is not the default; the
     // magnitude one step above is in the message either way.
     static const char* const trace = std::getenv("ODELIA_ADJOINT_TRACE");
@@ -683,7 +685,7 @@ private:
       const state_type<System>& from = rec[k - 1].state;
       util::check_length(from.size(), active.system.ode_size());
       if (rec[k].subdivided) {
-        util::stop("solve_adjoint: recorded step " + util::to_string(k) +
+        util::stop("sweep_adjoint: recorded step " + util::to_string(k) +
                    " reached t=" + util::format_double(rec[k].time) +
                    " in several sub-steps, and one step of its interval is "
                    "not the step the run took; record the run adaptively, or "
@@ -694,7 +696,7 @@ private:
       // across rows has to supply it there itself.
       const bool k1_carried = !std::isnan(rec[k].k1_time);
       if (k1_carried && (k < 2 || rec[k - 1].insertion)) {
-        util::stop("solve_adjoint: recorded step " + util::to_string(k) +
+        util::stop("sweep_adjoint: recorded step " + util::to_string(k) +
                    " says its first rates were carried from the step below, "
                    "but row " + util::to_string(k - 1) + " is not a step");
       }
@@ -712,7 +714,7 @@ private:
         const std::span<double> row = lambda[m];
         for (size_t j = 0; j < row.size(); ++j) {
           if (!std::isfinite(row[j])) {
-            util::stop_adjoint_range(
+            util::stop_adjoint_overflow(
                 "the adjoint left the representable range at step " +
                 util::to_string(k) + " of [" + util::to_string(k_first) + ", " +
                 util::to_string(k_last) + "], t=" +
@@ -722,7 +724,7 @@ private:
                 util::to_string(row.size()) + " is " +
                 util::format_double(row[j]) + ", where the step above carried " +
                 util::format_double(worst_before) +
-                ". A descent is a product of step Jacobians and has no error "
+                ". A sweep is a product of step Jacobians and has no error "
                 "control, so it can pass outside the range of the answer it "
                 "returns; this one did not come back.");
           }

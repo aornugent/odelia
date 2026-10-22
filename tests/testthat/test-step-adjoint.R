@@ -45,12 +45,12 @@ compile_step_adjoint_interface <- function() {
       using value_type = T;
       RecordingLorenz(T sigma, T R, T b) : LorenzSystem<T>(sigma, R, b) {}
 
-      template <class S2> using rebind = RecordingLorenz<S2>;
+      template <class S2> using rebound = RecordingLorenz<S2>;
 
       template <class S2>
-      rebind<S2> rebind_from() const {
+      rebound<S2> rebind() const {
         std::vector<double> p = this->pars();
-        rebind<S2> out{S2(p[0]), S2(p[1]), S2(p[2])};
+        rebound<S2> out{S2(p[0]), S2(p[1]), S2(p[2])};
         std::vector<T> ic(3);
         this->ode_initial_state(ic.begin());
         std::vector<double> ic0 = {xad::value(ic[0]), xad::value(ic[1]),
@@ -98,7 +98,7 @@ compile_step_adjoint_interface <- function() {
       odelia::ode::adjoint_rows swept;
       odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
       stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
@@ -143,7 +143,7 @@ compile_step_adjoint_interface <- function() {
       odelia::ode::adjoint_rows swept;
       odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
       stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, seeds, swept, rows);
       const std::vector<double> lambda_in = swept.to_rows()[0];
@@ -240,18 +240,18 @@ testthat::test_that("the adjoint scalar is named at namespace scope", {
     #include <type_traits>
     #include <odelia/ode_interface.hpp>
 
-    static_assert(std::is_same_v<odelia::ode::active_scalar<>,
+    static_assert(std::is_same_v<odelia::ode::adjoint_scalar<>,
                                  xad::adj<double>::active_type>);
-    static_assert(std::is_same_v<odelia::ode::active_scalar<float>,
+    static_assert(std::is_same_v<odelia::ode::adjoint_scalar<float>,
                                  xad::adj<float>::active_type>);
 
     // [[Rcpp::export]]
-    bool active_scalar_named_without_solver() { return true; }
+    bool adjoint_scalar_named_without_solver() { return true; }
   ')
-  expect_true(active_scalar_named_without_solver())
+  expect_true(adjoint_scalar_named_without_solver())
 })
 
-# Compile step_adjoint on a minimal System, with `rebind_body` as its rebind_from()
+# Compile step_adjoint on a minimal System, with `rebind_body` as its rebind()
 # declaration. Empty gives a System with no hook; one returning Decay gives a hook
 # that hands back the wrong scalar. Both must be refused at the call.
 compile_step_adjoint_on <- function(rebind_body) {
@@ -284,7 +284,7 @@ compile_step_adjoint_on <- function(rebind_body) {
       odelia::ode::adjoint_rows swept;
       odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
       const odelia::ode::solved_row<Decay> solved{};
       stepper.step_adjoint(active, solved, 0.0, 0.1, y, seeds, swept, rows);
@@ -294,12 +294,12 @@ compile_step_adjoint_on <- function(rebind_body) {
 }
 
 testthat::test_that("step_adjoint refuses a System that cannot rebind to the adjoint scalar", {
-  # No rebind_from() at all.
+  # No rebind() at all.
   expect_error(compile_step_adjoint_on(""))
 
   # Present, but hands back a System on the wrong scalar.
   expect_error(compile_step_adjoint_on(
-    "template <class U> Decay rebind_from() const { return *this; }"))
+    "template <class U> Decay rebind() const { return *this; }"))
 
   # A System that does rebind is stepped, and its adjoint is checked against a
   # finite difference, by the Lorenz tests above.

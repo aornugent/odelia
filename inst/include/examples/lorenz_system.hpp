@@ -28,7 +28,7 @@ public:
 
   // --- For a sweep (see Sweepable in odelia/ode_interface.hpp) ---------------
   //
-  // rebind_from<S2>() is this System on scalar S2, values only: the sweep builds
+  // rebind<S2>() is this System on scalar S2, values only: the sweep builds
   // the adjoint-scalar copy with it and seeds that copy's inputs afterwards.
   // assign_from is the one map it is a line over: the parameters and the initial
   // state, read back to plain double (xad::value) so only values cross.
@@ -43,7 +43,7 @@ public:
   }
 
   template <class S2>
-  LorenzSystem<S2> rebind_from() const {
+  LorenzSystem<S2> rebind() const {
     LorenzSystem<S2> out;
     out.assign_from(*this);
     return out;

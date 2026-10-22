@@ -32,7 +32,7 @@ struct input_and_derivative {
 // recorded is not an error here: the value is still the value, and whether a
 // consumer can go on without the row is the consumer's to decide -- one output's
 // rows can go missing while another's survive, and a stop takes both.
-struct record_report {
+struct supply_report {
   bool whole = true;
   // Which input's row is missing, and what was wrong with it. Meaningless where
   // `whole`.
@@ -78,7 +78,7 @@ concept CarriesAdjoint = xad::ExprTraits<S>::isReverse;
 // The report is the return, so a caller cannot take the number without being
 // handed the reading of it.
 template <class S>
-[[nodiscard]] record_report record_with_derivatives(
+[[nodiscard]] supply_report supply_derivatives(
     double value, std::span<const input_and_derivative<S>> against, S& into) {
   for (std::size_t i = 0; i < against.size(); ++i) {
     // Either half being non-finite poisons the VALUE and not only what is
@@ -188,8 +188,8 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
     const S corr = F(S(y_star)) / dFdy;
     corrections.push_back({corr, -1.0});
     S out;
-    const record_report report =
-        record_with_derivatives<S>(y_star, corrections, out);
+    const supply_report report =
+        supply_derivatives<S>(y_star, corrections, out);
     if (!report.whole) {
       util::stop("implicit_value: " + report.why);
     }
