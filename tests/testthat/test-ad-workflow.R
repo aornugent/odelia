@@ -5,7 +5,7 @@ memoise_fit <- function(runner) {
   cache_res <- NULL
 
   fn <- function(p) {
-    cache_res <<- runner$fit(params = p)
+    cache_res <<- runner$loss_and_gradient(params = p)
     cache_p <<- p
     cache_res$loss
   }
@@ -96,8 +96,8 @@ test_that("a Dormand-Prince solver fits under Dormand-Prince", {
   # At the parameters that made the target, the replay is the reference's own
   # integrator on its own steps, so the loss is rounding (about 1e-27); a
   # Cash-Karp replay of the same steps is a different integrator (about 3e-14).
-  expect_lt(fitter("dopri")$fit(params = true_pars)$loss, 1e-20)
-  expect_gt(fitter("rkck")$fit(params = true_pars)$loss, 1e-18)
+  expect_lt(fitter("dopri")$loss_and_gradient(params = true_pars)$loss, 1e-20)
+  expect_gt(fitter("rkck")$loss_and_gradient(params = true_pars)$loss, 1e-18)
 
   # And its gradient is the derivative of its own loss.
   s <- fitter("dopri")
@@ -106,7 +106,7 @@ test_that("a Dormand-Prince solver fits under Dormand-Prince", {
   fd <- sapply(seq_along(at), function(j) {
     up <- at; up[j] <- up[j] + eps
     down <- at; down[j] <- down[j] - eps
-    (s$fit(params = up)$loss - s$fit(params = down)$loss) / (2 * eps)
+    (s$loss_and_gradient(params = up)$loss - s$loss_and_gradient(params = down)$loss) / (2 * eps)
   })
-  expect_equal(s$fit(params = at)$gradient, fd, tolerance = 1e-6)
+  expect_equal(s$loss_and_gradient(params = at)$gradient, fd, tolerance = 1e-6)
 })

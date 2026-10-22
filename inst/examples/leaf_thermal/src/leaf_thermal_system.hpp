@@ -42,11 +42,11 @@ public:
 
   // --- For a sweep (see Sweepable in odelia/ode_interface.hpp) ---------------
   //
-  // rebind_from<S2>() is this System on scalar S2, values only; the sweep seeds
+  // rebind<S2>() is this System on scalar S2, values only; the sweep seeds
   // the copy's inputs afterwards. The drivers are shared, not copied (see below).
 
   template <class S2>
-  LeafThermalSystem<S2> rebind_from() const {
+  LeafThermalSystem<S2> rebind() const {
     const LeafThermalPars p{xad::value(k_H), xad::value(g_tr_max),
                             xad::value(m_tr), xad::value(T_tr_mid)};
     LeafThermalSystem<S2> out(p, *drivers);

@@ -25,12 +25,12 @@
 //   row        one output's derivatives against a list of inputs; adjoint_rows
 //              is a batch of them, because several seeds share one recording.
 //   sweep      the backward walk over a run's rows, last to first.
-//   range      consecutive rows at one state width; a System of fixed width has
+//   segment    consecutive rows at one state width; a System of fixed width has
 //              one, a System that widens opens a new one at each insertion.
 //
 // Entry points: vector_jacobian_product for a free function,
 // state_and_parameter_adjoints for a map through a System, and
-// Solver::solve_adjoint (ode_solver.hpp) for a whole run.
+// Solver::sweep_adjoint (ode_solver.hpp) for a whole run.
 
 namespace odelia {
 namespace ode {
@@ -61,7 +61,7 @@ public:
   bool empty() const { return rows_ == 0; }
 
   // Every row zeroed at a new shape. A sweep hands back rows at the width of the
-  // range it swept, so a row the new shape does not reach must not survive as
+  // segment it swept, so a row the new shape does not reach must not survive as
   // a number from the last one.
   void assign(std::size_t rows, std::size_t width) {
     rows_ = rows;
@@ -190,8 +190,8 @@ void release_slot(S& x) {
 // that narrows. So every active value the System holds is released before the
 // clear, and the tape is asked whether any was missed.
 template <class System>
-struct active_system {
-  using scalar = active_scalar<double>;
+struct adjoint_system {
+  using scalar = adjoint_scalar<double>;
   using system_type = typename rebound_system<System, scalar>::type;
 
   // Declared first, so the destructor's tape is initialised before the System it
@@ -204,12 +204,12 @@ struct active_system {
   adjoint_tape<double>* tape_;
   adjoint_tape<double>& tape() const { return *tape_; }
 
-  active_system(const System& passive, adjoint_tape<double>& tape)
-      : tape_(&tape), system(passive.template rebind_from<scalar>()),
+  adjoint_system(const System& passive, adjoint_tape<double>& tape)
+      : tape_(&tape), system(passive.template rebind<scalar>()),
         parameters(system.ad_parameters()) {
     static_assert(Rebindable<System, scalar>,
                   "a recording is taken on this System at the adjoint scalar; "
-                  "it has no rebind_from()");
+                  "it has no rebind()");
   }
 
   // Handed back on the way out, so a walk that builds one of these per width
@@ -220,7 +220,7 @@ struct active_system {
   // Skipped where another tape is active: these slots are not on it, and
   // handing them back would decrement its count instead. Nothing reports the
   // skip; the next release() on this tape counts what was left behind.
-  ~active_system() {
+  ~adjoint_system() {
     adjoint_tape<double>* const running = adjoint_tape<double>::getActive();
     if (running != nullptr && running != tape_) {
       return;
@@ -233,8 +233,8 @@ struct active_system {
   // parameters to the object it was copied from. Declaring the destructor above
   // suppresses the move operations, which would leave those addresses pointing
   // into the object moved from.
-  active_system(const active_system&) = delete;
-  active_system& operator=(const active_system&) = delete;
+  adjoint_system(const adjoint_system&) = delete;
+  adjoint_system& operator=(const adjoint_system&) = delete;
 
   // Every active value back to unregistered, so the clear below it is safe and
   // the next recording registers them fresh.
@@ -252,7 +252,7 @@ struct active_system {
     const std::size_t still = tape_->getNumVariables();
     if (still != 0) {
       util::stop(
-          "active_system::release: " +
+          "adjoint_system::release: " +
           util::to_string(static_cast<int>(still)) +
           " active values of this System are still registered after releasing "
           "every one for_each_active reaches, so it holds some the walk does "
@@ -277,7 +277,7 @@ namespace internal {
 // recording is substitutable for one per seed rather than an approximation of it.
 template <class Read>
 void sweep_each_seed(adjoint_tape<double>& tape,
-                     std::vector<active_scalar<double>>& outputs,
+                     std::vector<adjoint_scalar<double>>& outputs,
                      const adjoint_rows& output_adjoints, Read&& read) {
     for (std::size_t m = 0; m < output_adjoints.rows(); ++m) {
         tape.clearDerivatives();
@@ -316,7 +316,7 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
                                      const adjoint_rows& output_adjoints,
                                      F&& f,
                                      adjoint_rows& input_adjoints) {
-    using ad_type = active_scalar<double>;
+    using ad_type = adjoint_scalar<double>;
     using tape_type = adjoint_tape<double>;
 
     if (x.empty()) {
@@ -384,10 +384,10 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // different length from its neighbours and there is nothing to test per row.
 template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
-    active_system<System>& active, const std::vector<double>& state,
+    adjoint_system<System>& active, const std::vector<double>& state,
     const adjoint_rows& output_adjoints, Evaluate&& evaluate,
     adjoint_rows& state_adjoint, adjoint_rows& parameter_adjoint) {
-    using scalar = active_scalar<double>;
+    using scalar = adjoint_scalar<double>;
     adjoint_tape<double>& tape = active.tape();
     const std::vector<scalar*>& parameters = active.parameters;
     const std::size_t n_state = state.size();
@@ -464,16 +464,16 @@ std::size_t state_and_parameter_adjoints(
 
 // The same transpose where the caller holds a double System rather than an active
 // one and is taking a single recording: the tape and the rebind are made here. A
-// walk taking many hands in the one it holds for its descent, and rebinds once per
+// walk taking many hands in the one it holds for its sweep, and rebinds once per
 // width.
 template <class System, class Evaluate>
-    requires Rebindable<System, active_scalar<double>>
+    requires Rebindable<System, adjoint_scalar<double>>
 std::size_t state_and_parameter_adjoints(
     const System& passive, const std::vector<double>& state,
     const adjoint_rows& output_adjoints, Evaluate&& evaluate,
     adjoint_rows& state_adjoint, adjoint_rows& parameter_adjoint) {
     adjoint_tape<double> tape(false);
-    active_system<System> active{passive, tape};
+    adjoint_system<System> active{passive, tape};
     return state_and_parameter_adjoints(active, state, output_adjoints,
                                         std::forward<Evaluate>(evaluate),
                                         state_adjoint, parameter_adjoint);
@@ -495,11 +495,11 @@ std::size_t state_and_parameter_adjoints(
 // copy cannot have.
 template <class System>
 std::size_t rates_adjoint(
-    active_system<System>& active,
+    adjoint_system<System>& active,
     const std::vector<double>& state, double time,
     const adjoint_rows& rate_adjoints, adjoint_rows& state_adjoint,
     adjoint_rows& parameter_adjoint) {
-    using scalar = active_scalar<double>;
+    using scalar = adjoint_scalar<double>;
     const std::size_t n_state = state.size();
     auto rates = [&](auto& sys,
                      typename std::vector<scalar>::const_iterator x,

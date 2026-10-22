@@ -22,7 +22,7 @@ compile_sap_interface <- function() {
     #include <XAD/XAD.hpp>
     #include <odelia/adjoint.hpp>
 
-    using adouble = odelia::ode::active_scalar<double>;
+    using adouble = odelia::ode::adjoint_scalar<double>;
 
     static int tiny_rebinds = 0;
 
@@ -52,7 +52,7 @@ compile_sap_interface <- function() {
       template <typename> friend struct TinySystem;
 
       template <class U>
-      TinySystem<U> rebind_from() const {
+      TinySystem<U> rebind() const {
         ++tiny_rebinds;
         TinySystem<U> out;
         out.a = U(odelia::util::to_passive(a));
@@ -80,7 +80,7 @@ compile_sap_interface <- function() {
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
       tiny_rebinds = 0;
-      odelia::ode::active_system<TinySystem<double>> active{system, tape};
+      odelia::ode::adjoint_system<TinySystem<double>> active{system, tape};
       for (int k = 0; k < n_calls; ++k) {
         auto evaluate = [&](TinySystem<adouble>& sys,
                             std::vector<adouble>::const_iterator x,
@@ -112,7 +112,7 @@ compile_sap_interface <- function() {
       odelia::ode::adjoint_rows parameter_adjoint(2, 2);
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
-      odelia::ode::active_system<TinySystem<double>> active{system, tape};
+      odelia::ode::adjoint_system<TinySystem<double>> active{system, tape};
 
       for (int k = 0; k < 2; ++k) {
         const int width = (k == 0) ? first_width : 1;
@@ -164,7 +164,7 @@ compile_sap_interface <- function() {
       };
 
       xad::adj<double>::tape_type tape(false);
-      odelia::ode::active_system<TinySystem<double>> active{system, tape};
+      odelia::ode::adjoint_system<TinySystem<double>> active{system, tape};
       odelia::ode::adjoint_rows& out =
           (which == 2) ? parameter_adjoint : state_adjoint;
       odelia::ode::state_and_parameter_adjoints(active, state, seeds,

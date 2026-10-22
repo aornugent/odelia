@@ -44,14 +44,14 @@ using state_type = std::vector<typename System::value_type>;
 // traversal saves. Every width agrees bit for bit, so what is ruled out is the
 // cost and never the answer.
 template <typename T = double>
-using active_scalar = typename xad::adj<T>::active_type;
+using adjoint_scalar = typename xad::adj<T>::active_type;
 
 // The tape a reverse pass records on, reached from the scalar rather than named
 // beside it. Naming a tape independently of its scalar is right at one
 // derivative width and silently wrong at another -- both spellings compile, and
 // the one that queries the wrong tape reports no tape active and stops nothing.
 template <typename T = double>
-using adjoint_tape = typename active_scalar<T>::tape_type;
+using adjoint_tape = typename adjoint_scalar<T>::tape_type;
 
 // Every active value among the members handed in, whatever shape they arrive in:
 // a scalar, a container of them, a pointer to one, or an object that answers
@@ -69,11 +69,11 @@ using adjoint_tape = typename active_scalar<T>::tape_type;
 // caller checks afterwards is the only thing that says so. This cannot refuse the
 // shape instead: from here a class holding active values and a class holding none
 // look the same, and callers hand over both. What reports the miss is
-// active_system::release, which counts the slots the walk did not reach.
+// adjoint_system::release, which counts the slots the walk did not reach.
 //
 // This does not open an aggregate of two scalars, so a type standing in for a
 // std::pair on a recorded path declares for_each_active, as hermite_spline and
-// value_with_slope do.
+// with_slope do.
 template <class F, class T>
 void visit_active(F& f, T& x) {
   // A type that declares for_each_active but cannot be walked const would stop
@@ -130,7 +130,7 @@ concept HasOdeTime = requires(const T& t) {
 };
 
 // A System that can hand back a copy of itself on scalar U. The rebound type must
-// itself be a System on U: a rebind_from() returning the wrong scalar fails here
+// itself be a System on U: a rebind() returning the wrong scalar fails here
 // rather than on the first arithmetic inside the caller.
 //
 // U is named rather than defaulted. Defaulting it to the System's own scalar asks
@@ -139,17 +139,17 @@ concept HasOdeTime = requires(const T& t) {
 // cannot do what the caller needs.
 template <typename S, typename U>
 concept Rebindable = requires(const S& s) {
-  { s.template rebind_from<U>() };
-  requires std::same_as<typename decltype(s.template rebind_from<U>())::value_type, U>;
+  { s.template rebind<U>() };
+  requires std::same_as<typename decltype(s.template rebind<U>())::value_type, U>;
 };
 
-// The System type rebound to scalar U, i.e. decltype(system.rebind_from<U>()).
-// When the System has no rebind_from() the type is not evaluated (a harmless
+// The System type rebound to scalar U, i.e. decltype(system.rebind<U>()).
+// When the System has no rebind() the type is not evaluated (a harmless
 // placeholder is used instead), so a holder can still be class-instantiated for
 // systems that will never rebind; the actual use is gated on the concept.
 template <typename S, typename U, bool = Rebindable<S, U>>
 struct rebound_system {
-  using type = decltype(std::declval<const S>().template rebind_from<U>());
+  using type = decltype(std::declval<const S>().template rebind<U>());
 };
 template <typename S, typename U>
 struct rebound_system<S, U, false> {
@@ -213,7 +213,7 @@ struct subsystem_substeps {
   bool operator==(const subsystem_substeps&) const = default;
 };
 
-// One instruction of a program: what carries the state from one boundary to the
+// One row of a schedule: what carries the state from one boundary to the
 // next. A step reaches `time`, by `step_size` where a run pinned it and by whatever
 // the controller chooses where that is NaN. A insertion applies the System's own
 // state map and reaches the time it started at, taking none.
@@ -226,17 +226,17 @@ struct subsystem_substeps {
 // by side can be paired across different runs; one cannot.
 //
 // A NaN size is a time with no size known, which is a grid point rather than a
-// recorded step: step TO it. So one type covers a grid a caller chose and a program
-// a run emitted, and each entry says which it is rather than a second container's
-// emptiness saying it for all of them.
+// recorded step: step TO it. So one type covers a grid a caller chose and a
+// schedule a run emitted, and each row says which it is rather than a second
+// container's emptiness saying it for all of them.
 //
-// The first entry is where a program starts, which no instruction reached: a step
-// of NaN size. `insertion` is last and defaults, so a grid written {time, NaN} is a
-// program of steps without saying so.
+// The first row is where a schedule starts, which no step reached: a step of NaN
+// size. `insertion` is last and defaults, so a grid written {time, NaN} is a
+// schedule of steps without saying so.
 //
 // `subsystem` holds a step's substeps where it substepped the System's subsystem
 // (see HasSubsystem); a replay and the sweep take them as recorded.
-struct instruction {
+struct schedule_row {
   double time;
   double step_size;
   bool insertion = false;
@@ -284,8 +284,8 @@ struct carried_rates {
   double time;
 };
 
-// One row of a recording: the instruction the run executed and the state it left
-// the System holding. A recording row IS a program row plus its state, so it
+// One row of a recording: the schedule row the run executed and the state it left
+// the System holding. A recording row IS a schedule row plus its state, so it
 // derives rather than repeating the two fields, and a time cannot be paired with a
 // state from another container.
 //
@@ -298,7 +298,7 @@ struct carried_rates {
 // solved values each, and nothing else: stage rates and stage states are
 // recomputed by the sweep, which is cheaper than holding them.
 template <typename System>
-struct step_record : instruction {
+struct step_record : schedule_row {
   state_type<System> state;
 
   // What this step's rate evaluations solved for; see solved_row.
@@ -308,7 +308,7 @@ struct step_record : instruction {
   // same shape, but entry i is the answer at THEIR stage i + 2, and the two
   // tableaux put stages 4..6 at different times and states. A replay under the
   // other stepper would load every one of those at the wrong stage, finitely, so
-  // advance_recorded refuses it; a program (schedule()) carries no rows and
+  // replay refuses it; a schedule (steps_taken()) carries no rows and
   // replays under either.
   Method method = Method::rkck;
 
@@ -361,15 +361,15 @@ struct step_record : instruction {
 // for, every member carrying the scalar (so the tape's slots can be handed back
 // before each recording is cleared), and a way to stand on a recorded state. A
 // System that widens adds apply_insertion, which cannot be a concept because its
-// absence is what a fixed-width System means. Solver::solve_adjoint asserts
+// absence is what a fixed-width System means. Solver::sweep_adjoint asserts
 // this, so a System missing a member fails to compile naming the four.
 template <typename S>
 concept Sweepable =
-  Rebindable<S, active_scalar<double>> &&
-  requires(typename rebound_system<S, active_scalar<double>>::type a,
-           const std::vector<active_scalar<double>>& y, double t) {
-    { a.ad_parameters() } -> std::same_as<std::vector<active_scalar<double>*>>;
-    a.for_each_active([](active_scalar<double>&) {});
+  Rebindable<S, adjoint_scalar<double>> &&
+  requires(typename rebound_system<S, adjoint_scalar<double>>::type a,
+           const std::vector<adjoint_scalar<double>>& y, double t) {
+    { a.ad_parameters() } -> std::same_as<std::vector<adjoint_scalar<double>*>>;
+    a.for_each_active([](adjoint_scalar<double>&) {});
     a.set_recorded_state(y, t);
   };
 

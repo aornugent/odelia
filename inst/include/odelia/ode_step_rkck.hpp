@@ -76,7 +76,7 @@ public:
   // carried them, and null where the run derived them afresh at `time`.
   // `substeps` holds the row's substeps where the step substepped the System's
   // subsystem.
-  void step_adjoint(active_system<System>& active,
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1,
                     double time, double step_size,
@@ -85,7 +85,7 @@ public:
                     const subsystem_substeps* substeps = nullptr);
   // The same with the first rates derived afresh, which is what a caller
   // transposing one step on its own has: no step before it to carry them.
-  void step_adjoint(active_system<System>& active,
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     double time, double step_size, const state_type& y,
                     const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
@@ -448,7 +448,7 @@ void Step<System>::step_error(const std::vector<std::vector<S>>& k, double h,
 // writes a transpose of its own; and the parameters ride in the same recording,
 // so a stage the parameters reach carries their rows too.
 template <class System>
-void Step<System>::step_adjoint(active_system<System>& active,
+void Step<System>::step_adjoint(adjoint_system<System>& active,
                                 const solved_row<System>& solved,
                                 const carried_rates<System>* k1,
                                 double time, double step_size,
@@ -456,7 +456,7 @@ void Step<System>::step_adjoint(active_system<System>& active,
                                 adjoint_rows& lambda_in,
                                 adjoint_rows& parameter_adjoint,
                                 const subsystem_substeps* substeps) {
-  using scalar = active_scalar<double>;
+  using scalar = adjoint_scalar<double>;
   const double h = step_size;
   if (lambda_out.empty()) {
     util::stop("step_adjoint: needs at least one seed");

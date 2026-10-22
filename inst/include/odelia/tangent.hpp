@@ -21,7 +21,7 @@ namespace ode {
 // by value, so at an active inner scalar every one of those copies is a recorded
 // statement, and the count grows faster than the expression's depth. A slope
 // wanted AT an adjoint scalar is taken through the kernel at double and handed
-// over as supplied rows -- `record_with_derivatives`, one statement whatever the
+// over as supplied rows -- `supply_derivatives`, one statement whatever the
 // row count. At any nested scalar, flatten an expression into named
 // intermediates rather than fusing it into one.
 template <typename T>

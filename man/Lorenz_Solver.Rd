@@ -31,7 +31,7 @@ R6 wrapper for the Lorenz ODE solver.
     \item \href{#method-Lorenz_Solver-history_step}{\code{Lorenz_Solver$history_step()}}
     \item \href{#method-Lorenz_Solver-history}{\code{Lorenz_Solver$history()}}
     \item \href{#method-Lorenz_Solver-set_target}{\code{Lorenz_Solver$set_target()}}
-    \item \href{#method-Lorenz_Solver-fit}{\code{Lorenz_Solver$fit()}}
+    \item \href{#method-Lorenz_Solver-loss_and_gradient}{\code{Lorenz_Solver$loss_and_gradient()}}
     \item \href{#method-Lorenz_Solver-clone}{\code{Lorenz_Solver$clone()}}
   }
 }
@@ -261,21 +261,23 @@ RK 4(5)), \code{"dopri"} (explicit Dormand-Prince 5(4)) or \code{"rodas"}
 \if{html}{\out{<a id="method-Lorenz_Solver-set_target"></a>}}
 \if{latex}{\out{\hypertarget{method-Lorenz_Solver-set_target}{}}}
 \subsection{\code{Lorenz_Solver$set_target()}}{
-  Set the calibration target for \code{$fit()}.
+  Set the calibration target for
+  \code{$loss_and_gradient()}.
   \subsection{Usage}{
     \if{html}{\out{<div class="r">}}
-    \preformatted{Lorenz_Solver$set_target(times, target, obs_indices)}
+    \preformatted{Lorenz_Solver$set_target(schedule, target, obs_indices)}
     \if{html}{\out{</div>}}
   }
   \subsection{Arguments}{
     \if{html}{\out{<div class="arguments">}}
     \describe{
-      \item{\code{times}}{Numeric vector: the schedule \code{$fit()} replays, one entry
-per step. Normally a reference run's \code{$times()}, so each fit takes
-the same steps and the loss is a smooth function of the inputs.}
+      \item{\code{schedule}}{Numeric vector: the step times
+\code{$loss_and_gradient()} replays, one entry per step. Normally a
+reference run's \code{$times()}, so each evaluation takes the same steps
+and the loss is a smooth function of the inputs.}
       \item{\code{target}}{Numeric matrix of observed states, one row per entry of
 \code{obs_indices} and one column per state variable.}
-      \item{\code{obs_indices}}{Integer indices (1-based) into \code{times} at which
+      \item{\code{obs_indices}}{Integer indices (1-based) into \code{schedule} at which
 each row of \code{target} was observed.}
     }
     \if{html}{\out{</div>}}
@@ -283,9 +285,9 @@ each row of \code{target} was observed.}
 }
 
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-Lorenz_Solver-fit"></a>}}
-\if{latex}{\out{\hypertarget{method-Lorenz_Solver-fit}{}}}
-\subsection{\code{Lorenz_Solver$fit()}}{
+\if{html}{\out{<a id="method-Lorenz_Solver-loss_and_gradient"></a>}}
+\if{latex}{\out{\hypertarget{method-Lorenz_Solver-loss_and_gradient}{}}}
+\subsection{\code{Lorenz_Solver$loss_and_gradient()}}{
   Least-squares loss against the target, and its exact
   gradient by reverse-mode automatic differentiation. The schedule is
   replayed under this solver's \code{method}, except that a
@@ -293,21 +295,23 @@ each row of \code{target} was observed.}
   Rosenbrock stepper cannot be swept.
   \subsection{Usage}{
     \if{html}{\out{<div class="r">}}
-    \preformatted{Lorenz_Solver$fit(ic = NULL, params = NULL)}
+    \preformatted{Lorenz_Solver$loss_and_gradient(initial_state = NULL, params = NULL)}
     \if{html}{\out{</div>}}
   }
   \subsection{Arguments}{
     \if{html}{\out{<div class="arguments">}}
     \describe{
-      \item{\code{ic}}{Initial state to fit from, or \code{NULL} to keep the system's.}
-      \item{\code{params}}{Parameters to fit at, or \code{NULL} to keep the system's.}
+      \item{\code{initial_state}}{Initial state to evaluate at, or \code{NULL} to keep
+the system's.}
+      \item{\code{params}}{Parameters to evaluate at, or \code{NULL} to keep the
+system's.}
     }
     \if{html}{\out{</div>}}
   }
   \subsection{Returns}{
     A list with \code{loss} (sum of squared differences) and
-  \code{gradient}:
-  d(loss)/d(params), then d(loss)/d(ic), for whichever were given.
+  \code{gradient}: d(loss)/d(params), then d(loss)/d(initial_state), for
+  whichever were given.
   }
 }
 

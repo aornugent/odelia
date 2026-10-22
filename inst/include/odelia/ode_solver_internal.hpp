@@ -52,7 +52,7 @@ public:
   // records no stages, so it carries no reverse counterpart.
   // `substeps` holds the row's substeps where the step substepped the System's
   // subsystem.
-  void step_adjoint(active_system<System>& active,
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1, double time,
                     double step_size, const state_type& y,
@@ -65,7 +65,7 @@ public:
     }
     refuse_substeps_unless_rkck(substeps);
     // The System can be a different width from the one the forward pass left,
-    // because a caller sweeping a range narrows it between ranges. Every seed
+    // because a caller sweeping a segment narrows it between segments. Every seed
     // carries that same width, and the stage buffers are sized to it here. A sweep
     // is the end of the solver's forward state either way.
     resize(lambda_out.width());
@@ -99,10 +99,10 @@ public:
   // state from the state the solver holds, and the record covers every step.
   void set_keep_states(bool keep) {
     keep_states_ = keep;
-    if (keep && prev_schedule.size() == 1 && prev_steps.empty()) {
-      step_record<System> row{prev_schedule.front(), state_type()};
+    if (keep && taken.size() == 1 && recorded.empty()) {
+      step_record<System> row{taken.front(), state_type()};
       row.state.assign(y.begin(), y.end());
-      prev_steps.push_back(std::move(row));
+      recorded.push_back(std::move(row));
       first_row_unfilled_ = false;
     }
   }
@@ -120,12 +120,12 @@ public:
                  "there is no record to sweep -- set_keep_states(true) before "
                  "the run");
     }
-    if (prev_steps.size() != prev_schedule.size()) {
+    if (recorded.size() != taken.size()) {
       util::stop("recording(): keep_states was turned on after the run had "
                  "stepped, so the record does not cover every step -- "
                  "set_keep_states(true) before the first step");
     }
-    return {prev_steps.data(), prev_steps.size()};
+    return {recorded.data(), recorded.size()};
   }
 
   // The steps this run took: each time it reached and the size that reached it,
@@ -138,10 +138,10 @@ public:
   // (a schedule written back into Parameters, and a replay driven interval by
   // interval) both apply their own insertions. get_times and get_step_sizes are
   // this list split in two rather than two more walks that could disagree.
-  std::vector<instruction> schedule() const {
-    std::vector<instruction> ret;
-    ret.reserve(prev_schedule.size());
-    for (const instruction& s : prev_schedule) {
+  std::vector<schedule_row> steps_taken() const {
+    std::vector<schedule_row> ret;
+    ret.reserve(taken.size());
+    for (const schedule_row& s : taken) {
       if (!s.insertion) {
         ret.push_back(s);
       }
@@ -153,9 +153,9 @@ public:
   // reached it and any substeps, and the state there where the run was asked to
   // keep states. `subdivided` marks a pinned interval crossed in more than one
   // sub-step.
-  void push_step(System& system, instruction step, bool subdivided = false);
+  void push_step(System& system, schedule_row step, bool subdivided = false);
   // The insertion the caller just applied, as a row of its own: it holds the state
-  // the map produced, at the time the row below it holds. Only schedule() has to
+  // the map produced, at the time the row below it holds. Only steps_taken() has to
   // know that two rows share a time, and it drops these.
   void push_insertion(System& system);
   void step(System& system, double time_max_);
@@ -163,7 +163,7 @@ public:
   // A step of `row`'s size, over its substeps where it has them, to the time a
   // recording says it ended at (a NaN time accumulates). `replay`, where a
   // recording is being walked, is that step's own solved row.
-  void step_by(System& system, const instruction& row,
+  void step_by(System& system, const schedule_row& row,
                const solved_row<System>* replay = nullptr);
   void step_euler(System& system, double time_max_);
 
@@ -296,10 +296,10 @@ private:
                            dydt_out_);
       } else {
         // RODAS is unavailable for this System: it has neither an
-        // ode_jacobian() hook nor a rebind_from() hook for the AD Jacobian, or its
+        // ode_jacobian() hook nor a rebind() hook for the AD Jacobian, or its
         // scalar type is itself active.
         util::stop("method='rodas' is not available for this system/scalar type "
-                   "(needs an ode_jacobian() hook, or a rebind_from() hook with a "
+                   "(needs an ode_jacobian() hook, or a rebind() hook with a "
                    "non-active scalar); use method='rkck' or method='dopri'.");
       }
     } else {
@@ -348,19 +348,19 @@ private:
   double time;     // Current time
   double time_max; // Time we will not go past
   // Each accepted step: the time it reached and the size it took, both recorded
-  // (see instruction). One entry per accepted step, the first being the state the run started from,
-  // which no step reached and which therefore has no size.
+  // (see schedule_row). One entry per accepted step, the first being the state
+  // the run started from, which no step reached and which therefore has no size.
   //
   // The state is kept BESIDE the size that reached it because the two are one
   // record: in separate stores a walk could pair a state with a size from a
   // different run, and nothing would say so.
-  std::vector<step_record<System>> prev_steps;
+  std::vector<step_record<System>> recorded;
   // What every run keeps, recording or not: the time each step reached, the
   // size that reached it, where the state widened, and any substeps. Separate
-  // from the records so a run that is only integrating stores an instruction a
+  // from the records so a run that is only integrating stores a schedule row a
   // step rather than a record with a state and a row of solved values. The two
   // are written together, row for row, and recording() refuses if they differ.
-  std::vector<instruction> prev_schedule;
+  std::vector<schedule_row> taken;
   // Whether to keep the states. The caller's: a run whose gradient will be taken
   // needs them and a run that is only integrating does not. The same flag decides
   // whether what a step solves for is kept, because those are one recording.
@@ -412,8 +412,8 @@ SolverInternal<System>::SolverInternal(System &system, OdeControl control_,
 // NOTE: This resets *everything* to basically a recreated object.
 template <class System>
 void SolverInternal<System>::reset(System& system) {
-  prev_steps.clear();
-  prev_schedule.clear();
+  recorded.clear();
+  taken.clear();
   step_size_last = control.step_size_initial;
   control.reset_memory();
   stepper.subsystem_stiffness = 0.0;
@@ -443,8 +443,8 @@ void SolverInternal<System>::set_state_from_system(System& system) {
   // The state the run starts from, into the record set_time just opened, once
   // (see first_row_unfilled_). Kept here rather than by the caller because this
   // is the one place that knows the System has been read.
-  if (keep_states_ && first_row_unfilled_ && prev_steps.size() == 1) {
-    prev_steps.back().state.assign(y.begin(), y.end());
+  if (keep_states_ && first_row_unfilled_ && recorded.size() == 1) {
+    recorded.back().state.assign(y.begin(), y.end());
     first_row_unfilled_ = false;
   }
 }
@@ -453,11 +453,11 @@ void SolverInternal<System>::set_state_from_system(System& system) {
 // `y`, so a System that reaches a state by a route of its own is recorded at the
 // state it holds.
 template <class System>
-void SolverInternal<System>::push_step(System& system, instruction step,
+void SolverInternal<System>::push_step(System& system, schedule_row step,
                                        bool subdivided) {
   // An adaptive step sets these again once it is pushed.
   last_inputs_.reset();
-  prev_schedule.push_back(step);
+  taken.push_back(step);
   if (keep_states_) {
     step_record<System> record{std::move(step), state_type()};
     record.state.resize(system.ode_size());
@@ -466,7 +466,7 @@ void SolverInternal<System>::push_step(System& system, instruction step,
     record.subdivided = subdivided;
     record.k1_time = k1_carried_at;
     record.method = method;
-    prev_steps.push_back(std::move(record));
+    recorded.push_back(std::move(record));
   }
 }
 
@@ -475,27 +475,27 @@ void SolverInternal<System>::push_step(System& system, instruction step,
 // reads one.
 template <class System>
 void SolverInternal<System>::push_insertion(System& system) {
-  if (prev_schedule.empty()) {
+  if (taken.empty()) {
     util::stop("push_insertion: no recorded step for an insertion to follow");
   }
-  const instruction row{prev_schedule.back().time,
+  const schedule_row row{taken.back().time,
                         std::numeric_limits<double>::quiet_NaN(), true};
-  prev_schedule.push_back(row);
+  taken.push_back(row);
   if (keep_states_) {
     step_record<System> record{row, state_type()};
     record.state.resize(system.ode_size());
     system.ode_state(record.state.begin());
     record.method = method;
-    prev_steps.push_back(std::move(record));
+    recorded.push_back(std::move(record));
   }
 }
 
 template <class System>
 std::vector<double> SolverInternal<System>::get_times() const {
-  const std::vector<instruction> steps = schedule();
+  const std::vector<schedule_row> steps = steps_taken();
   std::vector<double> ret;
   ret.reserve(steps.size());
-  for (const instruction& s : steps) {
+  for (const schedule_row& s : steps) {
     ret.push_back(s.time);
   }
   return ret;
@@ -505,10 +505,10 @@ std::vector<double> SolverInternal<System>::get_times() const {
 // time, which no step reached.
 template <class System>
 std::vector<double> SolverInternal<System>::get_step_sizes() const {
-  const std::vector<instruction> steps = schedule();
+  const std::vector<schedule_row> steps = steps_taken();
   std::vector<double> ret;
   ret.reserve(steps.size());
-  for (const instruction& s : steps) {
+  for (const schedule_row& s : steps) {
     ret.push_back(s.step_size);
   }
   return ret;
@@ -834,7 +834,7 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
       util::stop("A step to t = " + util::format_double(time_max) +
                  " from t = " + util::format_double(time) + " would substep "
                  "the System's subsystem, which a grid of times cannot; replay "
-                 "the run's program, its sizes and substeps with its times");
+                 "the run's schedule, its sizes and substeps with its times");
     }
   }
 
@@ -919,9 +919,9 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
 }
 
 // This takes a step of the given size, regardless of what the integration error
-// says. advance_recorded() drives a replay through it, one recorded step each.
+// says. advance_schedule() and replay() drive it, one row each.
 template <class System>
-void SolverInternal<System>::step_by(System& system, const instruction& row,
+void SolverInternal<System>::step_by(System& system, const schedule_row& row,
                                      const solved_row<System>* replay) {
   const double step_size = row.step_size;
   if (!util::is_finite(step_size)) {
@@ -946,7 +946,7 @@ void SolverInternal<System>::step_by(System& system, const instruction& row,
       util::stop("The step from t = " + util::format_double(time) + " of size " +
                  util::format_double(step_size) + " spans a knot of the "
                  "subsystem's forcing, so the run substepped it, and this row "
-                 "carries no substeps; replay the run's program with them");
+                 "carries no substeps; replay the run's schedule with them");
     }
   }
   stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay,
@@ -954,7 +954,7 @@ void SolverInternal<System>::step_by(System& system, const instruction& row,
   save_dydt_out_as_in();
 
   // The time the run reached, where a recording says what it was, rather than
-  // this time plus this size (see instruction).
+  // this time plus this size (see schedule_row).
   time = util::is_finite(row.time) ? row.time : time + step_size;
   time_max = time;
   push_step(system, {time, step_size, false, row.subsystem});
@@ -1092,22 +1092,22 @@ void SolverInternal<System>::save_dydt_out_as_in() {
 template <typename System>
 void SolverInternal<System>::set_time(double t) {
   const int ulp = 2; // units in the last place (accuracy)
-  if (prev_schedule.size() > 0 &&
-      !util::almost_equal(prev_schedule.back().time, t, ulp))
+  if (taken.size() > 0 &&
+      !util::almost_equal(taken.back().time, t, ulp))
   {
     util::stop("Time does not match previous (delta = " +
-               util::format_double(prev_schedule.back().time - t) +
+               util::format_double(taken.back().time - t) +
                "). Reset solver first.");
   }
   time = t;
-  if (prev_schedule.empty()) { // only if first time (avoids duplicate times)
+  if (taken.empty()) { // only if first time (avoids duplicate times)
     // No step reached the initial time, so it records no size. The state is
     // recorded by set_state_from_system, which calls this and then holds it.
-    const instruction row{time, std::numeric_limits<double>::quiet_NaN()};
-    prev_schedule.push_back(row);
+    const schedule_row row{time, std::numeric_limits<double>::quiet_NaN()};
+    taken.push_back(row);
     if (keep_states_) {
-      prev_steps.push_back(step_record<System>{row, state_type()});
-      prev_steps.back().method = method;
+      recorded.push_back(step_record<System>{row, state_type()});
+      recorded.back().method = method;
       first_row_unfilled_ = true;
     }
   }

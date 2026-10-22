@@ -54,21 +54,24 @@ LeafThermalSolver <- R6::R6Class(
     history = function() {
       LeafSolver_get_history(self$ptr)|> dplyr::bind_rows() |> dplyr::as_tibble() |> tibble::remove_rownames()
     },
-    # The calibration target $fit() is scored against: the schedule it replays
-    # (normally a reference run's $times()), the observed states, and the rows
-    # of `times` they were observed at.
-    set_target = function(times, target, obs_indices) {
-      private$target <- list(times = as.numeric(times),
+    # The calibration target $loss_and_gradient() is scored against: the
+    # schedule it replays (normally a reference run's $times()), the observed
+    # states, and the rows of `schedule` they were observed at.
+    set_target = function(schedule, target, obs_indices) {
+      private$target <- list(schedule = as.numeric(schedule),
                              target = as.matrix(target),
                              obs_indices = as.integer(obs_indices))
       invisible(self)
     },
     # Least-squares loss and its exact gradient: d(loss)/d(params), then
-    # d(loss)/d(ic), for whichever were given.
-    fit = function(ic = NULL, params = NULL) {
-      if (is.null(private$target)) stop("Must call set_target() before fit()")
+    # d(loss)/d(initial_state), for whichever were given.
+    loss_and_gradient = function(initial_state = NULL, params = NULL) {
+      if (is.null(private$target)) {
+        stop("Must call set_target() before loss_and_gradient()")
+      }
       t <- private$target
-      LeafSolver_fit(self$ptr, t$times, t$target, t$obs_indices, ic, params)
+      LeafSolver_loss_and_gradient(self$ptr, t$schedule, t$target,
+                                   t$obs_indices, initial_state, params)
     }
  ),
  private = list(

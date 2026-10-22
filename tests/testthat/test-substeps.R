@@ -34,7 +34,7 @@ store_system <- '
     }
 
     template <class S2>
-    Store<S2, WithSubsystem> rebind_from() const {
+    Store<S2, WithSubsystem> rebind() const {
       Store<S2, WithSubsystem> out;
       out.assign_from(*this);
       return out;
@@ -185,13 +185,13 @@ compile_substep_interface <- function() {
       return s;
     }
 
-    std::vector<ode::instruction> program_of(const std::vector<double>& pars,
+    std::vector<ode::schedule_row> schedule_of(const std::vector<double>& pars,
                                              const std::vector<double>& y0,
                                              double t_end, double tol) {
       ode::Solver<StoreA> solver(store(pars), control_at(tol));
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      return solver.schedule();
+      return solver.steps_taken();
     }
 
     // [[Rcpp::export]]
@@ -206,10 +206,10 @@ compile_substep_interface <- function() {
       solver.set_keep_states(true);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
-      const std::vector<ode::instruction> program = solver.schedule();
+      const std::vector<ode::schedule_row> schedule = solver.steps_taken();
       int substepped = 0, substeps = 0;
       bool fractions_landed = true, ascending = true, sized = true;
-      for (const ode::instruction& row : program) {
+      for (const ode::schedule_row& row : schedule) {
         if (!row.subsystem) {
           continue;
         }
@@ -228,10 +228,10 @@ compile_substep_interface <- function() {
       // A replay of the recording, its rows loaded, repeats the run.
       ode::Solver<StoreA> replay(store(pars), control_at(tol));
       replay.set_state(y0, 0.0);
-      replay.advance_recorded(solver.recording());
+      replay.replay(solver.recording());
       return Rcpp::List::create(
         Rcpp::_["y"] = solver.state(),
-        Rcpp::_["steps"] = (int) program.size() - 1,
+        Rcpp::_["steps"] = (int) schedule.size() - 1,
         Rcpp::_["substepped"] = substepped, Rcpp::_["substeps"] = substeps,
         Rcpp::_["fractions_landed"] = fractions_landed,
         Rcpp::_["ascending"] = ascending,
@@ -252,28 +252,28 @@ compile_substep_interface <- function() {
       ode::Solver<StoreA> solver(s, control_at(tol));
       solver.set_state(y0, 0.0);
       solver.advance_adaptive(stops);
-      const std::vector<ode::instruction> program = solver.schedule();
+      const std::vector<ode::schedule_row> schedule = solver.steps_taken();
       std::vector<double> times, substep_ends;
       std::vector<bool> substepped;
-      for (size_t k = 0; k < program.size(); ++k) {
-        times.push_back(program[k].time);
+      for (size_t k = 0; k < schedule.size(); ++k) {
+        times.push_back(schedule[k].time);
         if (k > 0) {
-          substepped.push_back(program[k].subsystem.has_value());
+          substepped.push_back(schedule[k].subsystem.has_value());
         }
-        if (k > 0 && program[k].subsystem) {
-          for (double end : program[k].subsystem->ends) {
-            substep_ends.push_back(program[k - 1].time + end * program[k].step_size);
+        if (k > 0 && schedule[k].subsystem) {
+          for (double end : schedule[k].subsystem->ends) {
+            substep_ends.push_back(schedule[k - 1].time + end * schedule[k].step_size);
           }
         }
       }
       return Rcpp::List::create(Rcpp::_["y"] = solver.state(),
-                                Rcpp::_["steps"] = (int) program.size() - 1,
+                                Rcpp::_["steps"] = (int) schedule.size() - 1,
                                 Rcpp::_["times"] = times,
                                 Rcpp::_["substepped"] = substepped,
                                 Rcpp::_["substep_ends"] = substep_ends);
     }
 
-    // The program of a pulsed run, replayed with its substeps dropped, which a step
+    // The schedule of a pulsed run, replayed with its substeps dropped, which a step
     // spanning a knot refuses.
     // [[Rcpp::export]]
     void store_pulsed_replay_without_substeps(double tol,
@@ -287,13 +287,13 @@ compile_substep_interface <- function() {
       ode::Solver<StoreA> run(s, control_at(tol));
       run.set_state(y0, 0.0);
       run.advance_adaptive({0.0, 1.0});
-      std::vector<ode::instruction> program = run.schedule();
-      for (ode::instruction& row : program) {
+      std::vector<ode::schedule_row> schedule = run.steps_taken();
+      for (ode::schedule_row& row : schedule) {
         row.subsystem.reset();
       }
       ode::Solver<StoreA> replay(s, control_at(tol));
       replay.set_state(y0, 0.0);
-      replay.advance_recorded(program);
+      replay.advance_schedule(schedule);
     }
 
     // [[Rcpp::export]]
@@ -308,39 +308,39 @@ compile_substep_interface <- function() {
                                 Rcpp::_["steps"] = (int) solver.times().size() - 1);
     }
 
-    // The program a run at `program_pars` took, replayed at `pars` from `y0`:
+    // The schedule a run at `schedule_pars` took, replayed at `pars` from `y0`:
     // where it lands, and whether its own rows took the substeps the run took.
     // [[Rcpp::export]]
-    Rcpp::List store_replay(std::vector<double> program_pars,
+    Rcpp::List store_replay(std::vector<double> schedule_pars,
                             std::vector<double> pars, std::vector<double> y0,
-                            std::vector<double> y0_program, double t_end,
+                            std::vector<double> y0_schedule, double t_end,
                             double tol, std::string method) {
-      const std::vector<ode::instruction> program =
-        program_of(program_pars, y0_program, t_end, tol);
+      const std::vector<ode::schedule_row> schedule =
+        schedule_of(schedule_pars, y0_schedule, t_end, tol);
       ode::Solver<StoreA> replay(store(pars), control_at(tol),
                                  method == "rodas" ? ode::Method::rodas
                                                    : ode::Method::rkck);
       replay.set_state(y0, 0.0);
-      replay.advance_recorded(program);
-      const std::vector<ode::instruction> taken = replay.schedule();
-      bool same_steps = taken.size() == program.size();
+      replay.advance_schedule(schedule);
+      const std::vector<ode::schedule_row> taken = replay.steps_taken();
+      bool same_steps = taken.size() == schedule.size();
       for (size_t k = 0; same_steps && k < taken.size(); ++k) {
-        same_steps = taken[k].subsystem == program[k].subsystem;
+        same_steps = taken[k].subsystem == schedule[k].subsystem;
       }
       return Rcpp::List::create(Rcpp::_["y"] = replay.state(),
                                 Rcpp::_["same_steps"] = same_steps);
     }
 
-    // The program a run took, replayed at the tangent scalar along `direction`
+    // The schedule a run took, replayed at the tangent scalar along `direction`
     // in the parameters: where it lands, and its derivative there.
     // [[Rcpp::export]]
     Rcpp::List store_tangent_replay(std::vector<double> pars, std::vector<double> y0,
                                     double t_end, double tol,
                                     std::vector<double> direction) {
-      const std::vector<ode::instruction> program =
-        program_of(pars, y0, t_end, tol);
+      const std::vector<ode::schedule_row> schedule =
+        schedule_of(pars, y0, t_end, tol);
       using tangent = ode::tangent_scalar<>;
-      auto active = store(pars).rebind_from<tangent>();
+      auto active = store(pars).rebind<tangent>();
       std::vector<tangent*> p = active.ad_parameters();
       for (size_t j = 0; j < p.size(); ++j) {
         ode::seed_direction(*p[j], direction[j]);
@@ -348,7 +348,7 @@ compile_substep_interface <- function() {
       ode::Solver<Store<tangent, true>> replay(active, control_at(tol));
       replay.set_collect(false);
       replay.set_state(y0, 0.0);
-      replay.advance_recorded(program);
+      replay.advance_schedule(schedule);
       std::vector<double> y, dy;
       for (const tangent& v : replay.state()) {
         y.push_back(xad::value(v));
@@ -362,13 +362,13 @@ compile_substep_interface <- function() {
     // [[Rcpp::export]]
     Rcpp::List store_grid_replay(std::vector<double> pars, std::vector<double> y0,
                                  double t_end, double tol) {
-      std::vector<ode::instruction> grid = program_of(pars, y0, t_end, tol);
-      for (ode::instruction& row : grid) {
+      std::vector<ode::schedule_row> grid = schedule_of(pars, y0, t_end, tol);
+      for (ode::schedule_row& row : grid) {
         row = {row.time, std::numeric_limits<double>::quiet_NaN()};
       }
       ode::Solver<StoreA> replay(store(pars), control_at(tol));
       replay.set_state(y0, 0.0);
-      replay.advance_recorded(grid);
+      replay.advance_schedule(grid);
       return Rcpp::List::create(Rcpp::_["y"] = replay.state());
     }
 
@@ -383,7 +383,7 @@ compile_substep_interface <- function() {
       ode::adjoint_rows lambda = ode::adjoint_rows::one_row(lambda_end);
       ode::adjoint_rows rows(1, pars.size());
       run.clear_recorded_rates();
-      run.solve_adjoint(lambda, rows);
+      run.sweep_adjoint(lambda, rows);
       return Rcpp::List::create(
         Rcpp::_["lambda"] = lambda.to_rows()[0],
         Rcpp::_["parameter_adjoint"] = rows.to_rows()[0],
@@ -468,7 +468,7 @@ testthat::test_that("a replay takes the run's substeps, at the run's parameters 
 testthat::test_that("a grid of a run's times is refused where a step would substep the store", {
   compile_substep_interface()
   expect_error(store_grid_replay(store_pars, store_y, 0.5, 1e-6),
-               "replay the run's program")
+               "replay the run's schedule")
   # Where the store's Cash-Karp error never sets the step no step substeps, and
   # the grid is stepped.
   off <- store_run(1e-6, 0.5, slow, store_y)
@@ -491,7 +491,7 @@ testthat::test_that("a tangent replay takes the run's substeps, its value the ru
   expect_equal(r$dy, expected, tolerance = 1e-5)
 })
 
-testthat::test_that("the sweep through substepped steps matches central differences of the replayed program", {
+testthat::test_that("the sweep through substepped steps matches central differences of the replayed schedule", {
   compile_substep_interface()
   t_end <- 2.0
   tol <- 1e-6
