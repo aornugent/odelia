@@ -170,12 +170,12 @@ compile_substep_interface <- function() {
     static_assert(ode::HasSubsystem<StoreA>);
     static_assert(!ode::HasSubsystem<StoreP>);
 
-    // The store with a tolerance factor on its two layers.
+    // The store with a tolerance scale on its two layers.
     struct ScaledStore : StoreA {
       using StoreA::StoreA;
-      double store_factor = 1.0;
-      void state_tolerance_factors(double, std::vector<double>& f) const {
-        f = {1.0, store_factor, store_factor};
+      double store_scale = 1.0;
+      void tolerance_scales(double, std::vector<double>& scales) const {
+        scales = {1.0, store_scale, store_scale};
       }
     };
 
@@ -305,14 +305,15 @@ compile_substep_interface <- function() {
       replay.advance_recorded(program);
     }
 
-    // A run with the store scaled by `store_factor`: where it lands, its steps
-    // and substepped steps, and where the unscaled store lands replaying them.
+    // A run with the tolerance on the store scaled by `store_scale`: where it
+    // lands, its steps and substepped steps, and where the unscaled store lands
+    // replaying them.
     // [[Rcpp::export]]
     Rcpp::List store_scaled_run(double tol, double t_end,
                                 std::vector<double> pars,
-                                std::vector<double> y0, double store_factor) {
+                                std::vector<double> y0, double store_scale) {
       ScaledStore s(pars[0], pars[1], pars[2], pars[3], pars[4]);
-      s.store_factor = store_factor;
+      s.store_scale = store_scale;
       ode::Solver<ScaledStore> solver(s, control_at(tol));
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
@@ -500,7 +501,7 @@ testthat::test_that("a replay takes the run's substeps, at the run's parameters 
                "taken only by method='rkck'")
 })
 
-testthat::test_that("a tolerance factor on the store decides its steps, and a replay repeats them", {
+testthat::test_that("a tolerance scale on the store decides its steps, and a replay repeats them", {
   compile_substep_interface()
   run <- store_run(1e-6, 2.0, store_pars, store_y)
   ones <- store_scaled_run(1e-6, 2.0, store_pars, store_y, 1)

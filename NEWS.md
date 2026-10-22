@@ -1,8 +1,8 @@
 ## odelia 0.8.2
 
-**A System can scale each component's tolerance.** A System that declares `state_tolerance_factors(time, f)` (`ScalesStateTolerances`) fills `f` with one positive factor per component for an adaptive step starting at `time`, and the step multiplies each component's error level by its factor, so a factor above 1 loosens that component. The factors are read once at the step's start and held across its retries. They scale the error level under both step-size rules, `gsl`'s max norm and `hairer`'s RMS norm, and in the test of whether Cash-Karp's error on a subsystem set the step, so a loosened subsystem is not substepped for an error the step no longer reads. A subsystem's own substeps keep the unscaled tolerance. The factors decide which steps are taken and nothing else: a replay and the sweep take the steps as recorded. A factor that is not positive, or a vector that is not one per component, is refused.
+**A System can scale each component's tolerance.** A System that declares `tolerance_scales(time, scales)` (`ScalesTolerances`) fills `scales` with one positive multiplier per component for an adaptive step starting at `time`, and the step multiplies each component's error level by it, so a scale above 1 loosens that component. The scales are read once at the step's start and held across its retries. They apply under both step-size rules, `gsl`'s max norm and `hairer`'s RMS norm, and in the test of whether Cash-Karp's error on a subsystem set the step, so a loosened subsystem is not substepped for an error the step no longer reads. `OdeControl::adjust_step_size()` takes them as an optional span; empty scales nothing. The scales decide which steps are taken and nothing else: a replay and the sweep take the steps as recorded. A scale that is not positive, or a vector that is not one per component, is refused.
 
-A **patch** bump: a System that declares no factors steps as before, bit for bit.
+A **patch** bump: a System that declares no scales steps as before, bit for bit.
 
 ## odelia 0.8.1
 

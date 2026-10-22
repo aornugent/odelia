@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
@@ -124,21 +125,21 @@ struct OdeControl {
   void set_stabilisation(double value) { stabilisation = value; }
   double get_stabilisation() const { return stabilisation; }
 
-  // `factors`, where given, multiply each component's error level, one per
-  // component (see ScalesStateTolerances).
+  // `tolerance_scales`, one per component where given, multiply each
+  // component's error level (see ScalesTolerances); empty scales none.
   double adjust_step_size(size_t dim, size_t ord,
                           double step_size,
                           const state_type &y,
                           const state_type &yerr,
                           const state_type &dydt,
-                          const state_type *factors = nullptr)
+                          std::span<const double> tolerance_scales = {})
   {
     double rmax = std::numeric_limits<double>::min();
     const double S = 0.9;
     bool nonfinite = false;
     const auto level = [&](size_t i) {
       const double D0 = errlevel(y[i], dydt[i], step_size);
-      return factors != nullptr ? D0 * (*factors)[i] : D0;
+      return tolerance_scales.empty() ? D0 : D0 * tolerance_scales[i];
     };
 
     for (size_t i = 0; i < dim; i++)

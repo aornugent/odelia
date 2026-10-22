@@ -1,9 +1,9 @@
-# Tests that a System's tolerance factors decide the adaptive steps: factors of
-# one reproduce the unscaled run bit for bit, a factor scales its component's
-# error level under both step-size rules, and the factors are read at each
-# step's start.
+# Tests that a System's tolerance scales decide the adaptive steps: scales of
+# one reproduce the unscaled run bit for bit, a scale multiplies its
+# component's error level under both step-size rules, and the scales are read
+# at each step's start.
 
-compile_state_tolerance_factors_interface <- function() {
+compile_tolerance_scales_interface <- function() {
   ensure_ode_interface_loaded()
 
   odelia_so <- .odelia_test_cache$odelia_so
@@ -22,22 +22,22 @@ compile_state_tolerance_factors_interface <- function() {
     using namespace odelia;
     using LorenzD = LorenzSystem<double>;
 
-    // Lorenz with a factor on each component, multiplied by `late` on a step
+    // Lorenz with a scale on each component, multiplied by `late` on a step
     // starting at or after `from`.
     struct ScaledLorenz : LorenzD {
       using LorenzD::LorenzD;
-      std::vector<double> factors;
+      std::vector<double> scales;
       double from = 0.0, late = 1.0;
-      void state_tolerance_factors(double time, std::vector<double>& f) const {
-        f = factors;
+      void tolerance_scales(double time, std::vector<double>& f) const {
+        f = scales;
         if (time >= from) {
           for (double& x : f) x *= late;
         }
       }
     };
 
-    static_assert(ode::ScalesStateTolerances<ScaledLorenz>);
-    static_assert(!ode::ScalesStateTolerances<LorenzD>);
+    static_assert(ode::ScalesTolerances<ScaledLorenz>);
+    static_assert(!ode::ScalesTolerances<LorenzD>);
 
     template <class System>
     Rcpp::List run(System sys, double t_end, double tol,
@@ -64,11 +64,11 @@ compile_state_tolerance_factors_interface <- function() {
     }
 
     // [[Rcpp::export]]
-    Rcpp::List lorenz_scaled(std::vector<double> factors, double from,
+    Rcpp::List lorenz_scaled(std::vector<double> scales, double from,
                              double late, double t_end, double tol = 1e-8,
                              std::string controller = "hairer") {
       ScaledLorenz sys(10.0, 28.0, 8.0 / 3.0);
-      sys.factors = factors;
+      sys.scales = scales;
       sys.from = from;
       sys.late = late;
       return run(sys, t_end, tol, controller);
@@ -76,18 +76,18 @@ compile_state_tolerance_factors_interface <- function() {
   ', verbose = FALSE)
 }
 
-test_that("factors of one reproduce the unscaled steps bit for bit", {
-  compile_state_tolerance_factors_interface()
+test_that("scales of one reproduce the unscaled steps bit for bit", {
+  compile_tolerance_scales_interface()
   for (controller in c("hairer", "gsl")) {
     expect_identical(lorenz_scaled(c(1, 1, 1), 0, 1, 2, controller = controller),
                      lorenz_unscaled(2, controller = controller))
   }
 })
 
-test_that("a factor of 4 on every component is the tolerance times 4, under both rules", {
+test_that("a scale of 4 on every component is the tolerance times 4, under both rules", {
   # A power of two scales each error level exactly, so the two runs agree to the
-  # bit only if the factor reaches every level each rule reads.
-  compile_state_tolerance_factors_interface()
+  # bit only if the scale reaches every level each rule reads.
+  compile_tolerance_scales_interface()
   for (controller in c("hairer", "gsl")) {
     expect_identical(
       lorenz_scaled(c(4, 4, 4), 0, 1, 2, tol = 1e-8, controller = controller),
@@ -95,8 +95,8 @@ test_that("a factor of 4 on every component is the tolerance times 4, under both
   }
 })
 
-test_that("a factor on one component changes the steps", {
-  compile_state_tolerance_factors_interface()
+test_that("a scale on one component changes the steps", {
+  compile_tolerance_scales_interface()
   plain <- lorenz_unscaled(2)
   tight <- lorenz_scaled(c(1, 1, 0.01), 0, 1, 2)
   loose <- lorenz_scaled(c(1, 1, 100), 0, 1, 2)
@@ -104,8 +104,8 @@ test_that("a factor on one component changes the steps", {
   expect_false(identical(loose$times, plain$times))
 })
 
-test_that("the factors are read at each step's start", {
-  compile_state_tolerance_factors_interface()
+test_that("the scales are read at each step's start", {
+  compile_tolerance_scales_interface()
   plain <- lorenz_unscaled(2)
   later <- lorenz_scaled(c(1, 1, 1), 1, 100, 2)
   # Every step that starts before t = 1 is the unscaled run's.
@@ -115,8 +115,8 @@ test_that("the factors are read at each step's start", {
   expect_lt(length(later$times), length(plain$times))
 })
 
-test_that("a factor that is not positive, or one too few, is refused", {
-  compile_state_tolerance_factors_interface()
+test_that("a scale that is not positive, or one too few, is refused", {
+  compile_tolerance_scales_interface()
   expect_error(lorenz_scaled(c(1, 0, 1), 0, 1, 2), "positive")
   expect_error(lorenz_scaled(c(1, 1), 0, 1, 2))
 })

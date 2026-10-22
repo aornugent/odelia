@@ -393,12 +393,12 @@ concept HasSubsystem =
   s.subsystem_rates(time, y, y, out);
 };
 
-// A System that fills `f` with one positive factor per component, multiplying
-// its error level on an adaptive step starting at `time`.
+// A System that fills `scales` with one positive multiplier per component on
+// its tolerance, for an adaptive step starting at `time`.
 template <typename System>
-concept ScalesStateTolerances = requires(const System& s, double time,
-                                         std::vector<double>& f) {
-  { s.state_tolerance_factors(time, f) } -> std::same_as<void>;
+concept ScalesTolerances = requires(const System& s, double time,
+                                    std::vector<double>& scales) {
+  { s.tolerance_scales(time, scales) } -> std::same_as<void>;
 };
 
 // Opt-in domain check. A system may declare
