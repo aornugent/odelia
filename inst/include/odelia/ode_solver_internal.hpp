@@ -48,7 +48,7 @@ public:
   void step(System& system);
 
   // The adjoint of one step, from the state that step started at, for several
-  // seeds at once. The two explicit steppers only: the Rosenbrock stepper
+  // outputs at once. The two explicit steppers only: the Rosenbrock stepper
   // records no stages, so it carries no reverse counterpart.
   // `substeps` holds the row's substeps where the step substepped the System's
   // subsystem.
@@ -56,8 +56,8 @@ public:
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1, double time,
                     double step_size, const state_type& y,
-                    const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
-                    adjoint_rows& parameter_adjoint,
+                    const adjoint_batch& lambda_out, adjoint_batch& lambda_in,
+                    adjoint_batch& parameter_adjoint,
                     const subsystem_substeps* substeps = nullptr) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck' or "
@@ -65,9 +65,9 @@ public:
     }
     refuse_substeps_unless_rkck(substeps);
     // The System can be a different width from the one the forward pass left,
-    // because a caller sweeping a segment narrows it between segments. Every seed
-    // carries that same width, and the stage buffers are sized to it here. A sweep
-    // is the end of the solver's forward state either way.
+    // because a caller sweeping a segment narrows it between segments. Every
+    // output adjoint carries that same width, and the stage buffers are sized to
+    // it here. A sweep is the end of the solver's forward state either way.
     resize(lambda_out.width());
     if (method == Method::dopri) {
       dopri_stepper.step_adjoint(active, solved, k1, time, step_size, y,
@@ -171,7 +171,7 @@ public:
 
   // The step the controller will try next: the size of the last accepted step
   // as adjusted by its error estimate, or the control's initial size after a
-  // reset. A consumer that re-seeds the state through set_state(), which resets
+  // reset. A consumer that resets the state through set_state(), which resets
   // this, may put a step it knows to be good back with set_step_size().
   double get_step_size() const { return step_size_last; }
   void set_step_size(double h) {
@@ -186,7 +186,7 @@ public:
   size_t get_n_rejections() const { return n_rejections; }
   // True while an attempt is in progress, and therefore afterwards if one was
   // abandoned by an exception that escaped step(): y and the system then hold
-  // a half-finished attempt and must be re-seeded (reset()) before stepping
+  // a half-finished attempt and must be reset (reset()) before stepping
   // again. A consumer whose right-hand side can raise -- an R callback -- reads
   // this rather than guessing from where the error came from.
   bool mid_step() const { return in_step; }
@@ -369,7 +369,7 @@ private:
   // next set_state_from_system; this says which of the two has happened.
   // ⚠️ A FLAG, NOT THE ROW'S LENGTH. A System can start with no state at all, so
   // its first row is empty after being filled too; testing emptiness would fill
-  // it again from the next seeding, the first insertion's, and record the run's
+  // it again from the next load, the first insertion's, and record the run's
   // start at the inserted width.
   bool first_row_unfilled_ = false;
 
@@ -392,7 +392,7 @@ private:
 
   // The subsystem's inputs at the start of the last accepted step, and its size,
   // where that step was adaptive: what the next step's input slope is taken
-  // from. Any other step, and any re-seed, empties it.
+  // from. Any other step, and any reset, empties it.
   struct last_inputs {
     state_type inputs;
     double step_size;
@@ -424,7 +424,7 @@ void SolverInternal<System>::reset(System& system) {
   set_state_from_system(system);
 }
 
-// Seed y and dydt_in from whatever state the system currently holds. The system
+// Load y and dydt_in from whatever state the system currently holds. The system
 // is mutable because `ode_rates` is allowed to compute: a system that reaches a
 // state by a route of its own (widening it, reloading it) can then hand back the
 // derivative *of that state* rather than a cached one belonging to an earlier
@@ -990,7 +990,7 @@ bool SolverInternal<System>::subsystem_error_sets_step(
     cash_karp = std::max(
       cash_karp, std::abs(stepper.subsystem_cash_karp_error[q]) / level);
     const double miss = substepped ? yerr[i] :
-      0.5 * h * (stepper.inputs_at_end_stage[q] - u0[q] - h * input_slope[q]);
+      0.5 * h * (stepper.inputs_at_last_stage[q] - u0[q] - h * input_slope[q]);
     coupling = std::max(coupling, std::abs(miss) / level);
   }
   return cash_karp > std::max(rest, coupling);

@@ -29,7 +29,7 @@ public:
   // --- For a sweep (see Sweepable in odelia/ode_interface.hpp) ---------------
   //
   // rebind<S2>() is this System on scalar S2, values only: the sweep builds
-  // the adjoint-scalar copy with it and seeds that copy's inputs afterwards.
+  // the adjoint-scalar copy with it and registers that copy's inputs afterwards.
   // assign_from is the one map it is a line over: the parameters and the initial
   // state, read back to plain double (xad::value) so only values cross.
   template <class S1>

@@ -221,7 +221,7 @@ c(time = s$time(), y = s$state())
 s$counts()
 ```
 
-Between steps `s$set_state(y, time)` re-seeds the state at any length and
+Between steps `s$set_state(y, time)` resets the state at any length and
 `s$set_step_size(h)` carries a step size across it; `s$advance_collect(times)`
 is the output loop of `ode_solve()`, a matrix of states at the times asked for.
 

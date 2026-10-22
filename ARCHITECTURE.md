@@ -27,7 +27,7 @@
 | `spline.hpp` → `interpolator.hpp` → `drivers.hpp` | cubic Hermite backend, `hermite_interpolator`, `Drivers` (time-varying forcing) |
 | `ode_control.hpp` | `OdeControl`: tolerances, step bounds, the `gsl` / `hairer` controller |
 | `ode_interface.hpp` | the System concepts (`HasOdeTime`, `Rebindable`, `SolvesForValues`, `ChecksState`, `Sweepable`), `adjoint_scalar<T>`, `schedule_row`, `step_record`, `visit_active`, `be_at_step`, `apply_insertion` |
-| `adjoint.hpp` | `adjoint_rows`, `adjoint_system`, `vector_jacobian_product`, `state_and_parameter_adjoints`: the transpose of one map |
+| `adjoint.hpp` | `adjoint_batch`, `adjoint_system`, `vector_jacobian_product`, `state_and_parameter_adjoints`: the transpose of one map |
 | `implicit_node.hpp` | `supply_derivatives`, `implicit_value`: a value on the tape carrying rows obtained elsewhere; independent of the solver |
 | `ode_linalg.hpp`, `ode_jacobian.hpp` | dense LU and eigenvalues; the Jacobian from a System's hook or by forward AD |
 | `ode_step_rkck.hpp`, `ode_step_dopri.hpp`, `ode_step_rodas.hpp` | the three steppers; the two explicit ones, `rkck` and `dopri`, record a run and carry `step_adjoint` |
@@ -144,7 +144,7 @@ stepper: `SteadyState<System>` solves `f(y*) = 0` by damped Newton, reads the
 fixed point's stability off the eigenvalues of `df/dy` (`ode_linalg.hpp`,
 Hessenberg reduction then Francis QR), and takes the parameter sensitivity
 `dy*/dθ = −(df/dy)⁻¹ (df/dθ)` from the same factorisation. `df/dθ` is the same
-forward sweep as `df/dy` with the seed on a parameter instead of a state
+forward sweep as `df/dy` with the direction on a parameter instead of a state
 component; which parameters is the System's `ad_parameters()` hook, a vector of
 pointers to them in a fixed order, which the rates must read live (a quantity
 cached from a parameter at construction carries no tangent and yields a zero

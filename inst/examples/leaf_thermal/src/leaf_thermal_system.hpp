@@ -42,7 +42,7 @@ public:
 
   // --- For a sweep (see Sweepable in odelia/ode_interface.hpp) ---------------
   //
-  // rebind<S2>() is this System on scalar S2, values only; the sweep seeds
+  // rebind<S2>() is this System on scalar S2, values only; the sweep registers
   // the copy's inputs afterwards. The drivers are shared, not copied (see below).
 
   template <class S2>
@@ -100,7 +100,7 @@ public:
     return it;
   }
 
-  // The parameters a pass can seed active, in the order it indexes them.
+  // The parameters a pass can differentiate, in the order it indexes them.
   std::vector<T*> ad_parameters() { return {&k_H, &g_tr_max, &m_tr, &T_tr_mid}; }
 
   // Every member carrying the scalar, so the sweep can hand their tape slots

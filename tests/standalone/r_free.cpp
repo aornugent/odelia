@@ -548,7 +548,7 @@ void test_supplied_rows_cost_one_statement() {
 void test_supplied_rows_carry_a_direction() {
   using T = odelia::ode::tangent_scalar<double>;
   T x = 2.0;
-  odelia::ode::seed_direction(x, 1.0);
+  odelia::ode::set_direction(x, 1.0);
   std::vector<odelia::input_and_derivative<T>> against{{x, 0.25}};
   T out;
   const odelia::supply_report report =
@@ -881,8 +881,8 @@ void test_sweep_of_a_pinned_run_matches_a_difference(odelia::ode::Method m) {
   check(s.get_n_rejections() == 0, "no pinned interval was refused");
   check(s.recording().size() == times.size(), "one row per pinned time");
 
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   s.sweep_adjoint(lambda, dp);
   const double h = 1e-6;
   const double fd = (grow_pinned_final(r + h, times, loose_control(), m) -
@@ -909,8 +909,8 @@ void test_subdivided_pinned_row_is_refused(odelia::ode::Method m) {
   for (const auto& row : rec) marked = marked || row.subdivided;
   check(marked, "and the row that was subdivided says so");
 
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   bool refused = false;
   try {
     s.sweep_adjoint(lambda, dp);
@@ -938,15 +938,15 @@ void test_sweep_refuses_one_batch_for_both() {
   s.set_keep_states(true);
   s.reset();
   s.advance_adaptive(std::vector<double>{0.0, 0.5});
-  odelia::ode::adjoint_rows lambda =
-      odelia::ode::adjoint_rows::one_row({1.0, 0.0, 0.0});
+  odelia::ode::adjoint_batch lambda =
+      odelia::ode::adjoint_batch::one({1.0, 0.0, 0.0});
   bool refused = false;
   try {
     s.sweep_adjoint(lambda, lambda);
   } catch (const std::runtime_error& e) {
     refused = std::string(e.what()).find("same batch") != std::string::npos;
   }
-  check(refused, "sweep_adjoint refuses the same batch as seed and accumulator");
+  check(refused, "sweep_adjoint refuses the same batch as output adjoints and accumulator");
 }
 
 // An input that already carries an adjoint when a residual is taken off the
@@ -1089,8 +1089,8 @@ void test_sweep_across_an_insertion(odelia::ode::Method m) {
     if (ins.time <= 0.5) seg1.push_back(ins.time);
     if (ins.time >= 0.5) seg2.push_back(ins.time);
   }
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0, 1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0, 1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   const size_t segments = s.sweep_adjoint(lambda, dp);
   check(segments == 2, "two segments, one each side of the insertion");
   check(lambda.width() == 1, "the adjoint comes back at the width the run started at");
@@ -1102,8 +1102,8 @@ void test_sweep_across_an_insertion(odelia::ode::Method m) {
 
   // The newborn's size is r / 100, so its own row carries a derivative that is
   // not the dynamics'.
-  odelia::ode::adjoint_rows newborn = odelia::ode::adjoint_rows::one_row({0.0, 1.0});
-  odelia::ode::adjoint_rows dp_newborn(1, 1);
+  odelia::ode::adjoint_batch newborn = odelia::ode::adjoint_batch::one({0.0, 1.0});
+  odelia::ode::adjoint_batch dp_newborn(1, 1);
   s.sweep_adjoint(newborn, dp_newborn);
   check(dp_newborn[0][0] != 0.0 && std::fabs(dp_newborn[0][0]) < std::fabs(dp[0][0]),
         "the newborn's initial condition contributes a parameter derivative");
@@ -1140,7 +1140,7 @@ void test_sweep_across_an_insertion(odelia::ode::Method m) {
 
 // A run that starts with NO state: the first insertion is a map from the
 // parameters alone, and the run's first row is empty after being filled. Both
-// halves of that were refused once -- the first row re-filled from the seeding
+// halves of that were refused once -- the first row re-filled from the load
 // the insertion makes, and the transpose of a map with no state inputs.
 void test_sweep_from_an_empty_start(odelia::ode::Method m) {
   const double r = 2.0;
@@ -1161,11 +1161,11 @@ void test_sweep_from_an_empty_start(odelia::ode::Method m) {
   for (const auto& ins : s.steps_taken()) {
     if (!ins.insertion) seg.push_back(ins.time);
   }
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   const size_t segments = s.sweep_adjoint(lambda, dp);
   check(segments == 1, "one segment with steps in it; the empty one above cuts nothing");
-  check(lambda.rows() == 1 && lambda.width() == 0,
+  check(lambda.size() == 1 && lambda.width() == 0,
         "the adjoint comes back at the empty width the run started at");
 
   // The same run pinned to its steps, differenced in r: the only route from r
@@ -1188,7 +1188,7 @@ void test_sweep_from_an_empty_start(odelia::ode::Method m) {
 // A run that starts empty and STEPS while empty, widening at a later insertion:
 // plant's invader before its first cohort. The steps below the insertion have
 // no state, so the segment they make carries nothing and is not swept; it was once
-// swept, and refused as a seed with no entries.
+// swept, and refused as an output adjoint with no entries.
 void test_sweep_across_empty_steps(odelia::ode::Method m) {
   const double r = 2.0;
   Cells<double> c(r, {});
@@ -1224,8 +1224,8 @@ void test_sweep_across_empty_steps(odelia::ode::Method m) {
   for (const auto& ins : s.steps_taken()) {
     if (!ins.insertion && ins.time >= 0.4) seg.push_back(ins.time);
   }
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   const size_t segments = s.sweep_adjoint(lambda, dp);
   check(segments == 1, "only the segment with state in it is swept");
   check(lambda.width() == 0, "the adjoint comes back at the empty width the run started at");
@@ -1257,14 +1257,14 @@ void test_sweep_across_empty_steps(odelia::ode::Method m) {
 // loaded choice exogenous to that sweep.
 namespace {
 
-// The instant and slot a choice was made at, held to those it is loaded at
+// The instant and stage a choice was made at, held to those it is loaded at
 // exactly: a mismatch is counted rather than raised so a test can say where it
 // happened.
 struct solved_choice {
   double s = 0.0;
   bool kept = false;
   double t = 0.0;
-  std::size_t slot = 0;
+  std::size_t stage = 0;
 };
 int chooser_mispaired_loads = 0;
 int chooser_loads = 0;
@@ -1293,14 +1293,14 @@ struct Chooser {
     y[0] = *it++; time = t; compute_rates(); return it;
   }
   void set_recorded_state(const std::vector<T>& s, double t) { set_ode_state(s.begin(), t); }
-  void store_solved(solved_choice& s, std::size_t slot) {
+  void store_solved(solved_choice& s, std::size_t stage) {
     into = &s; from = nullptr;
-    s.slot = slot;
+    s.stage = stage;
   }
-  void load_solved(const solved_choice& s, std::size_t slot) {
+  void load_solved(const solved_choice& s, std::size_t stage) {
     from = s.kept ? &s : nullptr; into = nullptr;
     if (s.kept) ++chooser_loads;
-    if (s.kept && s.slot != slot) ++chooser_mispaired_loads;
+    if (s.kept && s.stage != stage) ++chooser_mispaired_loads;
   }
   void end_solved() { into = nullptr; from = nullptr; }
   void compute_rates() {
@@ -1318,7 +1318,7 @@ struct Chooser {
 
 } // namespace
 
-// Every evaluation is handed its slot of the row, in the run and in its sweep.
+// Every evaluation is handed its stage of the row, in the run and in its sweep.
 void test_each_evaluation_is_handed_its_slot(odelia::ode::Method m) {
   Chooser<double> a(2.0);
   odelia::ode::Solver<Chooser<double>> run(a, odelia::ode::OdeControl(), m);
@@ -1329,15 +1329,15 @@ void test_each_evaluation_is_handed_its_slot(odelia::ode::Method m) {
   bool placed = true;
   for (size_t k = 1; k < rec.size(); ++k) {
     for (size_t i = 0; i < rec[k].solved.size(); ++i) {
-      placed = placed && rec[k].solved[i].kept && rec[k].solved[i].slot == i;
+      placed = placed && rec[k].solved[i].kept && rec[k].solved[i].stage == i;
     }
   }
-  check(placed, "each slot was stored by the evaluation handed it");
+  check(placed, "each stage was stored by the evaluation handed it");
   chooser_mispaired_loads = 0;
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   run.sweep_adjoint(lambda, dp);
-  check(chooser_mispaired_loads == 0, "and the sweep loads each by the slot it was stored in");
+  check(chooser_mispaired_loads == 0, "and the sweep loads each by the stage it was stored in");
 }
 
 void test_replay_keeps_the_rows_it_loaded(odelia::ode::Method m) {
@@ -1378,11 +1378,11 @@ void test_replay_keeps_the_rows_it_loaded(odelia::ode::Method m) {
   // A sweep of the replay's recording loads the same choices, so d y(1) / d r
   // is e^5 -- the derivative of the run the replay made, not of the run it
   // would have made choosing for itself.
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp_replay(1, 1), dp_run(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp_replay(1, 1), dp_run(1, 1);
   chooser_mispaired_loads = 0;
   replay.sweep_adjoint(lambda, dp_replay);
-  lambda = odelia::ode::adjoint_rows::one_row({1.0});
+  lambda = odelia::ode::adjoint_batch::one({1.0});
   run.sweep_adjoint(lambda, dp_run);
   check(chooser_mispaired_loads == 0, "both sweeps load every row at the instant it was made at");
   // The replay steps on the run's grid, coarse for r = 5, so its value sits
@@ -1468,8 +1468,8 @@ void test_carried_k1_keeps_its_own_instant(odelia::ode::Method m) {
   check(rec[2].solved[5].t == t_end, "and that is where the row below was solved");
 
   chooser_mispaired_loads = 0;
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   run.sweep_adjoint(lambda, dp);
   check(chooser_mispaired_loads == 0, "the sweep loads the carried row at its own instant");
   const auto run_at = [&](double r_) -> double {
@@ -1504,8 +1504,8 @@ void test_pinned_interval_short_by_an_ulp_is_one_step(odelia::ode::Method m) {
   check(rec[3].k1_time == 0.2 + (0.9 - 0.2), "the next k1 is carried from where the step evaluated last");
 
   chooser_mispaired_loads = 0;
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   run.sweep_adjoint(lambda, dp);
   check(chooser_mispaired_loads == 0, "the sweep loads every row at the instant it was made at");
   const auto run_at = [&](double r_) -> double {
@@ -1524,10 +1524,10 @@ void test_pinned_interval_short_by_an_ulp_is_one_step(odelia::ode::Method m) {
   check(replay.state()[0] == run.state()[0], "a replay of the pinned run lands where it did");
 }
 
-// A re-seed from the System between two steps derives the next k1 afresh, with
+// A reset from the System between two steps derives the next k1 afresh, with
 // no row, and keeps no row of its own; the step after it says so, and the one
 // after that is carried again.
-void test_reseed_derives_k1_afresh(odelia::ode::Method m) {
+void test_reset_derives_k1_afresh(odelia::ode::Method m) {
   Chooser<double> a(2.0);
   odelia::ode::Solver<Chooser<double>> run(a, odelia::ode::OdeControl(), m);
   run.set_keep_states(true);
@@ -1539,7 +1539,7 @@ void test_reseed_derives_k1_afresh(odelia::ode::Method m) {
   const auto rec = run.recording();
   check(rec.size() > first_after + 1, "the second leg took at least two steps");
   check(!rec[first_after].insertion && std::isnan(rec[first_after].k1_time),
-        "the step after a re-seed says its k1 was derived afresh");
+        "the step after a reset says its k1 was derived afresh");
   check(rec[first_after + 1].k1_time ==
             rec[first_after - 1].time + rec[first_after].step_size,
         "and the step after that carries it again, from where that step ended");
@@ -1552,15 +1552,15 @@ void test_reseed_derives_k1_afresh(odelia::ode::Method m) {
   check(carried_elsewhere, "every other step past the first carries its k1");
 
   // Five stage rows a step, and a k1 row at every step but the first and the
-  // re-seeded one: a row loaded there is a choice the run never made.
+  // reset one: a row loaded there is a choice the run never made.
   chooser_mispaired_loads = 0;
   chooser_loads = 0;
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
-  odelia::ode::adjoint_rows dp(1, 1);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0});
+  odelia::ode::adjoint_batch dp(1, 1);
   run.sweep_adjoint(lambda, dp);
   const int steps = static_cast<int>(rec.size()) - 1;
   check(chooser_loads == 5 * steps + (steps - 2),
-        "the sweep loads no row at the re-seeded k1");
+        "the sweep loads no row at the reset k1");
   check(chooser_mispaired_loads == 0, "and every row it loads at the instant it was made at");
   check(std::fabs(dp[0][0] - std::exp(2.0)) < 1e-6 * std::exp(2.0),
         "and the run's sweep is the run's");
@@ -1769,7 +1769,7 @@ void test_callback_rodas_matches_compiled() {
 
 // What a step costs in right-hand-side evaluations is the whole cost of a step
 // for a consumer whose right-hand side is an equilibrium solve. The budget:
-// one evaluation when the solver seeds itself, then per attempt five stages
+// one evaluation when the solver starts, then per attempt five stages
 // plus the derivative at the new point (6, whether the attempt is accepted or
 // rejected -- the estimate that rejects it needs them), plus once per accepted
 // step one for df/dt unless the system says it is autonomous, with the
@@ -1896,7 +1896,7 @@ void test_callback_domain_error_is_a_rejection() {
   threw = false;
   try {
     // Constructing the solver already evaluates the right-hand side once, to
-    // seed itself, so the throw can come from here.
+    // start, so the throw can come from here.
     odelia::ode::Solver<CallbackSystem> s3(bug, loose_control());
     s3.advance_adaptive(std::vector<double>{0.0, 1.0});
   } catch (const std::runtime_error& e) {
@@ -1908,7 +1908,7 @@ void test_callback_domain_error_is_a_rejection() {
 }
 
 // A consumer that drives the solver a step at a time and changes the shape of
-// its state between steps (#62): the state can be re-seeded at a new size, the
+// its state between steps (#62): the state can be reset at a new size, the
 // step size read back and set, a step bounded by a time it must not pass, and a
 // stale Jacobian never survives a resize.
 void test_callback_single_step_driving() {
@@ -1934,7 +1934,7 @@ void test_callback_single_step_driving() {
   const double t1 = s.time();
   s.get_system_ref().resize(2);
   s.set_state(State{0.5, 0.25}, t1);
-  check(s.state().size() == 2 && s.time() == t1, "set_state re-seeds at a new size");
+  check(s.state().size() == 2 && s.time() == t1, "set_state resets at a new size");
   check(s.get_step_size() == control.step_size_initial,
         "and the step size is back at the control's initial value");
   s.set_step_size(0.125);
@@ -2223,8 +2223,8 @@ void test_dopri_records() {
   check(replay.state() == run.state() && replay.time() == run.time(),
         "a replay of the recording lands where the run did, bit for bit");
 
-  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0, 0.0, 0.0});
-  odelia::ode::adjoint_rows dp(1, 3);
+  odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one({1.0, 0.0, 0.0});
+  odelia::ode::adjoint_batch dp(1, 3);
   run.clear_recorded_rates();
   run.sweep_adjoint(lambda, dp);
   check(run.recorded_rates() == 6 * (rec.size() - 1), "the sweep records six rates a step");
@@ -2430,7 +2430,7 @@ int main() {
   for_each_explicit_stepper(test_replay_keeps_the_rows_it_loaded);
   test_replay_under_the_other_stepper_is_refused();
   for_each_explicit_stepper(test_carried_k1_keeps_its_own_instant);
-  for_each_explicit_stepper(test_reseed_derives_k1_afresh);
+  for_each_explicit_stepper(test_reset_derives_k1_afresh);
   for_each_explicit_stepper(test_pinned_interval_short_by_an_ulp_is_one_step);
   test_jacobian_is_closed_at_an_adjoint_scalar();
   test_jacobian_hook_is_detected();

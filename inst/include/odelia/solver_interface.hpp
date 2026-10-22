@@ -226,7 +226,7 @@ inline Rcpp::List Solver_loss_and_gradient_impl(
   }
 
   // Each observed row's term, summed where two observations share a row.
-  std::map<std::size_t, std::vector<double>> seeds;
+  std::map<std::size_t, std::vector<double>> adjoints;
   double loss = 0.0;
   for (int i = 0; i < obs_indices.size(); ++i) {
     const int idx = obs_indices[i];
@@ -234,21 +234,21 @@ inline Rcpp::List Solver_loss_and_gradient_impl(
       Rcpp::stop("'obs_indices' must index into 'schedule' (1-based)");
     }
     const std::size_t row = static_cast<std::size_t>(idx - 1);
-    std::vector<double>& seed = seeds[row];
-    seed.resize(n, 0.0);
+    std::vector<double>& adjoint = adjoints[row];
+    adjoint.resize(n, 0.0);
     for (std::size_t j = 0; j < n; ++j) {
       const double diff = rec[row].state[j] - target(i, j);
       loss += diff * diff;
-      seed[j] += 2.0 * diff;
+      adjoint[j] += 2.0 * diff;
     }
   }
 
-  ode::adjoint_rows lambda(1, n);
-  ode::adjoint_rows parameter_adjoint(1, n_par);
-  auto it = seeds.rbegin();
+  ode::adjoint_batch lambda(1, n);
+  ode::adjoint_batch parameter_adjoint(1, n_par);
+  auto it = adjoints.rbegin();
   std::size_t hi = it->first;
   for (std::size_t j = 0; j < n; ++j) lambda[0][j] = it->second[j];
-  for (++it; it != seeds.rend(); ++it) {
+  for (++it; it != adjoints.rend(); ++it) {
     replay.sweep_adjoint(lambda, parameter_adjoint, it->first, hi);
     for (std::size_t j = 0; j < n; ++j) lambda[0][j] += it->second[j];
     hi = it->first;

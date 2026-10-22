@@ -25,8 +25,8 @@ namespace ode {
 //   Solver<Lorenz> s(system, control);
 //   s.set_keep_states(true);              // keep one step_record per step
 //   s.advance_adaptive({0.0, 10.0});      // the ordinary solve
-//   adjoint_rows lambda = adjoint_rows::one_row({1.0, 0.0, 0.0});  // d(x_final)
-//   adjoint_rows dp(1, n_parameters);     // one row per seed, zeroed
+//   adjoint_batch lambda = adjoint_batch::one({1.0, 0.0, 0.0});  // d(x_final)
+//   adjoint_batch dp(1, n_parameters);     // one per output, zeroed
 //   s.sweep_adjoint(lambda, dp);
 //   // dp[0][j] = d x_final / d parameter_j; lambda[0][i] = d x_final / d y_i(0)
 //
@@ -460,8 +460,8 @@ public:
   // whole can be swept again afterwards.
   //
   // Returns how many segments carried a step.
-  std::size_t sweep_adjoint(ode::adjoint_rows& lambda,
-                            ode::adjoint_rows& parameter_adjoint,
+  std::size_t sweep_adjoint(ode::adjoint_batch& lambda,
+                            ode::adjoint_batch& parameter_adjoint,
                             size_t k_first, size_t k_last,
                             const std::vector<size_t>& extra_stops = {})
   {
@@ -502,7 +502,7 @@ public:
     // caller's tail widens back from the lowest and reads the mismatch as a length
     // error one call later, naming neither this walk nor what refused.
     //
-    // The solver's own buffers are re-seeded from the System at the same time:
+    // The solver's own buffers are reset from the System at the same time:
     // a sweep sizes the stage buffers to each segment it walks, so after a segment
     // narrower than the run they hold a truncated state marked current, and a
     // step taken next would start from it.
@@ -606,7 +606,7 @@ public:
         ode::apply_insertion(sys, when, x, y);
       };
       ode::adjoint_system<System> widened{system, tape};
-      ode::adjoint_rows narrowed;
+      ode::adjoint_batch narrowed;
       ode::state_and_parameter_adjoints(widened, rec[at - 1].state, lambda, insert,
                                        narrowed, parameter_adjoint);
       lambda = std::move(narrowed);
@@ -617,8 +617,8 @@ public:
   }
 
   // The whole recording.
-  std::size_t sweep_adjoint(ode::adjoint_rows& lambda,
-                            ode::adjoint_rows& parameter_adjoint,
+  std::size_t sweep_adjoint(ode::adjoint_batch& lambda,
+                            ode::adjoint_batch& parameter_adjoint,
                             const std::vector<size_t>& extra_stops = {})
   {
     return sweep_adjoint(lambda, parameter_adjoint, 0, recording().size() - 1,
@@ -643,21 +643,23 @@ private:
   // Every state visited has to be that width, so a segment an insertion crossed is
   // refused by the length check inside the loop rather than swept at one width.
   void sweep_segment(ode::adjoint_tape<double>& tape,
-                   std::span<const ode::step_record<System>> rec,
-                   ode::adjoint_rows& lambda, ode::adjoint_rows& parameter_adjoint,
-                   size_t k_first, size_t k_last)
+                     std::span<const ode::step_record<System>> rec,
+                     ode::adjoint_batch& lambda,
+                     ode::adjoint_batch& parameter_adjoint,
+                     size_t k_first, size_t k_last)
   {
     if (lambda.empty()) {
-      util::stop("sweep_adjoint: needs at least one seed");
+      util::stop("sweep_adjoint: needs at least one output adjoint");
     }
     ode::adjoint_system<System> active{system, tape};
     // Asked of the System the recordings are taken on, which is the width every
-    // state below has to be loaded at. Named, because a bare length mismatch here
-    // is read as the caller's and says nothing about the seam it is really about:
-    // a batch carried at one width against a System at another. One width for
-    // every row, so this is asked of the batch and not of each seed in it.
+    // state below has to be loaded at. Named, because a bare length mismatch
+    // here is read as the caller's and says nothing about the seam it is really
+    // about: a batch carried at one width against a System at another. One
+    // width for every output adjoint, so this is asked of the batch and not of
+    // each adjoint in it.
     if (lambda.width() != active.system.ode_size()) {
-      util::stop("sweep_adjoint: the seeds are " +
+      util::stop("sweep_adjoint: the output adjoints are " +
                  util::to_string(static_cast<int>(lambda.width())) +
                  " wide against a System of " +
                  util::to_string(static_cast<int>(active.system.ode_size())) +
@@ -678,7 +680,7 @@ private:
     static const char* const trace = std::getenv("ODELIA_ADJOINT_TRACE");
     double worst_before = 0.0;
     const bool per_step = trace != nullptr && std::strcmp(trace, "steps") == 0;
-    ode::adjoint_rows lambda_in;
+    ode::adjoint_batch lambda_in;
     for (size_t k = k_last; k > k_first; --k) {
       // What the run's step k ran from: the row below it, whether that row is a
       // step's landing or an insertion's output.
@@ -710,7 +712,7 @@ private:
       // hands it the row above's, which the sweep refills rather than regrows.
       std::swap(lambda, lambda_in);
       double worst_here = 0.0;
-      for (size_t m = 0; m < lambda.rows(); ++m) {
+      for (size_t m = 0; m < lambda.size(); ++m) {
         const std::span<double> row = lambda[m];
         for (size_t j = 0; j < row.size(); ++j) {
           if (!std::isfinite(row[j])) {
@@ -719,7 +721,7 @@ private:
                 util::to_string(k) + " of [" + util::to_string(k_first) + ", " +
                 util::to_string(k_last) + "], t=" +
                 util::format_double(rec[k - 1].time) + ", h=" +
-                util::format_double(rec[k].step_size) + ": seed " +
+                util::format_double(rec[k].step_size) + ": output adjoint " +
                 util::to_string(m) + "'s entry " + util::to_string(j) + " of " +
                 util::to_string(row.size()) + " is " +
                 util::format_double(row[j]) + ", where the step above carried " +

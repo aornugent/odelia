@@ -116,14 +116,14 @@ s.advance_adaptive({0.0, 10.0});
 std::vector<double> y = s.state();
 ```
 
-A gradient of that run is three more lines: keep the record, seed the output
+A gradient of that run is three more lines: keep the record, set the output's adjoint
 wanted, and sweep.
 
 ```cpp
 s.set_keep_states(true);                       // before the run
 s.advance_adaptive({0.0, 10.0});
-auto lambda = odelia::ode::adjoint_rows::one_row({1.0, 0.0, 0.0});   // d x(10)
-odelia::ode::adjoint_rows dp(1, 3);            // one row per seed, zeroed
+auto lambda = odelia::ode::adjoint_batch::one({1.0, 0.0, 0.0});   // d x(10)
+odelia::ode::adjoint_batch dp(1, 3);            // one per output, zeroed
 s.sweep_adjoint(lambda, dp);                   // dp[0][j] = d x(10) / d parameter j
 ```
 
@@ -181,10 +181,10 @@ leaf-thermal example does.
 - **Recording** — what a run keeps when asked (`set_keep_states`): one row per
   accepted step with its time, step size, state, and whatever the step solved
   for inside a stage. A sweep reads it; a replay reproduces the run from it.
-- **Sweep** — the backward pass over a recording (`sweep_adjoint`). It is seeded
-  with the derivative wanted of the final state, one **seed** per output, and
-  returns one **row** of derivatives per seed against the parameters and the
-  initial state; `adjoint_rows` is the batch.
+- **Sweep** — the backward pass over a recording (`sweep_adjoint`). It starts
+  from the derivative wanted of the final state, one **adjoint** per output, and
+  returns one **row** of derivatives per output against the parameters and the
+  initial state; `adjoint_batch` is the batch.
 - **Insertion** — a scheduled growth of the state vector mid-run. The sweep
   transposes the System's own widening map across it.
 - **Supplied derivative** — a value put on the tape with rows obtained by other

@@ -32,14 +32,15 @@ typedef std::vector<double>::iterator       iterator;
 template<typename System>
 using state_type = std::vector<typename System::value_type>;
 
-// The scalar a reverse-mode (adjoint) pass runs on: one adjoint layer above T. This is
-// what a System is rebound to for a gradient, and the type its seeds and recorded values
-// have. T is a parameter so the layer can sit on another active scalar; at the default
-// it sits on double, which is the scalar an ordinary solve is differentiated from.
+// The scalar a reverse-mode (adjoint) pass runs on: one adjoint layer above T.
+// This is what a System is rebound to for a gradient, and the type its output
+// adjoints and recorded values have. T is a parameter so the layer can sit on
+// another active scalar; at the default it sits on double, which is the scalar
+// an ordinary solve is differentiated from.
 //
 // One derivative per slot, deliberately. `xad::adj` takes a second, defaulted
 // template argument for the derivative width, so `xad::adj<T, 3>` would sweep
-// three seeds in one walk. It does not pay: widening multiplies the bytes the
+// three outputs in one walk. It does not pay: widening multiplies the bytes the
 // derivative array occupies, and the cache gives back more than the shared
 // traversal saves. Every width agrees bit for bit, so what is ruled out is the
 // cost and never the answer.
@@ -194,14 +195,14 @@ using solved_values_t = typename solved_values<System>::type;
 // over nothing opens no extent, so a reload out of band cannot read a record and a
 // record cannot complete a state it was not taken at.
 //
-// `slot` is the evaluation's place in its step's row (see solved_row), by which a
+// `stage` is the evaluation's place in its step's row (see solved_row), by which a
 // System can find the same evaluation in another run's recording.
 template <typename System>
 concept SolvesForValues =
   requires(System s, solved_values_t<System>& into,
-           const solved_values_t<System>& from, std::size_t slot) {
-    s.store_solved(into, slot);
-    s.load_solved(from, slot);
+           const solved_values_t<System>& from, std::size_t stage) {
+    s.store_solved(into, stage);
+    s.load_solved(from, stage);
     s.end_solved();
   };
 
@@ -263,7 +264,8 @@ inline const char* method_name(Method m) {
 // forward walk, the sweep and the record (step_record::solved) all have to agree
 // on the shape.
 //
-// SIX AND NOT FIVE. Five are the stages after the first; the sixth, `end_slot`, is
+// Indexed by stage, counted from the second: stage s is the stepper's stage s + 2.
+// SIX AND NOT FIVE. Five are the stages after the first; the sixth, `end_stage`, is
 // the evaluation at the state the step ends at, which first-same-as-last hands the
 // next step as its own k1. The first stage has no entry: it is carried from the
 // step before or derived afresh, and step_record::k1_time says which. A SWEEP
@@ -271,9 +273,9 @@ inline const char* method_name(Method m) {
 // of the step before (see carried_rates) -- and a FORWARD replay cannot
 // re-derive it at all, because re-deriving is exactly what it is replaying to
 // avoid, and a step whose k1 was re-derived is wrong at first order in h.
-inline constexpr std::size_t end_slot = 5;
+inline constexpr std::size_t end_stage = 5;
 template <class System>
-using solved_row = std::array<solved_values_t<System>, end_slot + 1>;
+using solved_row = std::array<solved_values_t<System>, end_stage + 1>;
 
 // A step's first rates where first-same-as-last carried them from the step
 // before: that step's sixth evaluation, the row it was taken in and the time it
@@ -325,10 +327,10 @@ struct step_record : schedule_row {
   // time it ran at, and that time is kept here: fl(t + h) is not always the time
   // the row below records, which a pinned interval or a replay sets exactly. NaN
   // where the run derived the rates afresh instead -- at the run's start, after
-  // an insertion, after any re-seed from the System -- with no row at all.
+  // an insertion, after any reset from the System -- with no row at all.
   // ⚠️ A SWEEP TAKES k1 THE WAY THIS SAYS THE RUN DID, never as the row below
   // implies: a step row below does not mean the rates were carried, because a
-  // re-seed between two steps keeps no row of its own.
+  // reset between two steps keeps no row of its own.
   double k1_time = std::numeric_limits<double>::quiet_NaN();
 };
 
@@ -586,12 +588,12 @@ void derivs(T& obj, const StateType& y, StateType& dydt,
 // and has nothing to fail at.
 template <class System, class Values>
 struct solved_scope {
-  solved_scope(System& system, Values& values, std::size_t slot)
+  solved_scope(System& system, Values& values, std::size_t stage)
       : system_(system) {
     if constexpr (std::is_const_v<Values>) {
-      system_.load_solved(values, slot);
+      system_.load_solved(values, stage);
     } else {
-      system_.store_solved(values, slot);
+      system_.store_solved(values, stage);
     }
   }
   ~solved_scope() { system_.end_solved(); }
@@ -602,15 +604,15 @@ private:
   System& system_;
 };
 
-// One rate evaluation, handed its slot of the step's row to write its inner solves
+// One rate evaluation, handed its stage of the step's row to write its inner solves
 // into, or to read what an earlier pass wrote; a const row says which.
 template <typename T, typename StateType, typename Row>
   requires SolvesForValues<T> &&
            std::same_as<std::remove_const_t<Row>, solved_row<T>>
 void derivs(T& obj, const StateType& y, StateType& dydt, const double time,
-            Row& row, std::size_t slot) {
-  const solved_scope<T, std::remove_reference_t<decltype(row[slot])>> extent{
-      obj, row[slot], slot};
+            Row& row, std::size_t stage) {
+  const solved_scope<T, std::remove_reference_t<decltype(row[stage])>> extent{
+      obj, row[stage], stage};
   internal::set_ode_state(obj, y, time);
   obj.ode_rates(dydt.begin());
 }

@@ -185,7 +185,7 @@ testthat::test_that("a parameter read through a cached quantity is caught by the
 
   expect_true(res$converged)
   expect_equal(res$y, 6.0, tolerance = 1e-10)
-  # The contract breach: the true dy*/d(a, b) is (3, 2); AD seeded in place
+  # The contract breach: the true dy*/d(a, b) is (3, 2); AD with its direction set in place
   # sees none of k = a*b and reports zeros.
   expect_equal(as.vector(res$sensitivity), c(0, 0))
   expect_gt(res$param_check, 0.5)

@@ -79,9 +79,9 @@ public:
 
     // The fifth-order solution; its weights are the seventh stage's row.
     step_end(y0, k, h, y);
-    // The seventh evaluation, in the row's sixth slot: see solved_row.
+    // The seventh evaluation, at the row's end_stage: see solved_row.
     if constexpr (SolvesForValues<System>) {
-      ode::derivs(system, y, k[6], time + h, solved, end_slot);
+      ode::derivs(system, y, k[6], time + h, solved, end_stage);
     } else {
       ode::derivs(system, y, k[6], time + h);
     }
@@ -94,21 +94,21 @@ public:
     }
   }
 
-  // The step transposed, for as many seeds as are handed in; Step::step_adjoint
-  // says what the arguments are. The seventh evaluation is not recorded: the
-  // state the step ends at does not depend on it, only the error estimate and
-  // the dense output do.
+  // The step transposed, for as many output adjoints as are handed in;
+  // Step::step_adjoint says what the arguments are. The seventh evaluation is
+  // not recorded: the state the step ends at does not depend on it, only the
+  // error estimate and the dense output do.
   void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1,
                     double time, double step_size,
-                    const state_type& y, const adjoint_rows& lambda_out,
-                    adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint);
+                    const state_type& y, const adjoint_batch& lambda_out,
+                    adjoint_batch& lambda_in, adjoint_batch& parameter_adjoint);
   void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     double time, double step_size, const state_type& y,
-                    const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
-                    adjoint_rows& parameter_adjoint) {
+                    const adjoint_batch& lambda_out, adjoint_batch& lambda_in,
+                    adjoint_batch& parameter_adjoint) {
     step_adjoint(active, solved, nullptr, time, step_size, y, lambda_out,
                  lambda_in, parameter_adjoint);
   }
@@ -271,13 +271,13 @@ void DopriStep<System>::step_adjoint(adjoint_system<System>& active,
                                      const carried_rates<System>* k1,
                                      double time, double step_size,
                                      const state_type& y,
-                                     const adjoint_rows& lambda_out,
-                                     adjoint_rows& lambda_in,
-                                     adjoint_rows& parameter_adjoint) {
+                                     const adjoint_batch& lambda_out,
+                                     adjoint_batch& lambda_in,
+                                     adjoint_batch& parameter_adjoint) {
   using scalar = adjoint_scalar<double>;
   const double h = step_size;
   if (lambda_out.empty()) {
-    util::stop("step_adjoint: needs at least one seed");
+    util::stop("step_adjoint: needs at least one output adjoint");
   }
   util::check_length(y.size(), size);
 
@@ -291,7 +291,7 @@ void DopriStep<System>::step_adjoint(adjoint_system<System>& active,
     bool k1_loaded = false;
     if constexpr (SolvesForValues<System>) {
       if (k1 != nullptr) {
-        ode::derivs(sys, y_start, rate[0], k1->time, k1->row, end_slot);
+        ode::derivs(sys, y_start, rate[0], k1->time, k1->row, end_stage);
         k1_loaded = true;
       }
     }

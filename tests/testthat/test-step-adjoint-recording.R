@@ -153,15 +153,15 @@ compile_recording_interface <- function() {
       LotkaVolterra<double> adj(pars[0], pars[1], pars[2], pars[3]);
       adj.rate_calls = 0;
       lv_assigns = 0;
-      const odelia::ode::adjoint_rows seeds =
-        odelia::ode::adjoint_rows::one_row(lambda_out);
-      odelia::ode::adjoint_rows swept;
-      odelia::ode::adjoint_rows rows(1, adj.ad_parameters().size());
+      const odelia::ode::adjoint_batch adjoints =
+        odelia::ode::adjoint_batch::one(lambda_out);
+      odelia::ode::adjoint_batch swept;
+      odelia::ode::adjoint_batch rows(1, adj.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
       odelia::ode::adjoint_system<LotkaVolterra<double>> active{adj, step_tape};
-      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, seeds, swept, rows);
-      const std::vector<double> lambda_in = swept.to_rows()[0];
-      const std::vector<double> parameter_adjoint = rows.to_rows()[0];
+      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, adjoints, swept, rows);
+      const std::vector<double> lambda_in = swept.to_vectors()[0];
+      const std::vector<double> parameter_adjoint = rows.to_vectors()[0];
 
       return Rcpp::List::create(Rcpp::_["y_end"] = y_end,
                                 Rcpp::_["lambda_in"] = lambda_in,
@@ -204,15 +204,15 @@ compile_recording_interface <- function() {
       replay.advance_schedule(schedule);
       const auto rec = replay.recording();
 
-      odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row(lambda_end);
-      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
+      odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one(lambda_end);
+      odelia::ode::adjoint_batch rows(1, system.ad_parameters().size());
       replay.clear_recorded_rates();
       replay.sweep_adjoint(lambda, rows);
-      const std::vector<double> parameter_adjoint = rows.to_rows()[0];
+      const std::vector<double> parameter_adjoint = rows.to_vectors()[0];
 
       return Rcpp::List::create(Rcpp::_["n_steps"] = (int) schedule.size(),
                                 Rcpp::_["y_end"] = rec.back().state,
-                                Rcpp::_["lambda"] = lambda.to_rows()[0],
+                                Rcpp::_["lambda"] = lambda.to_vectors()[0],
                                 Rcpp::_["parameter_adjoint"] = parameter_adjoint,
                                 Rcpp::_["recorded_rates"] =
                                   (int) replay.recorded_rates());
@@ -241,11 +241,11 @@ compile_recording_interface <- function() {
       replay.advance_schedule(schedule);
       const auto rec = replay.recording();
 
-      odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row(lambda_end);
-      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
+      odelia::ode::adjoint_batch lambda = odelia::ode::adjoint_batch::one(lambda_end);
+      odelia::ode::adjoint_batch rows(1, system.ad_parameters().size());
       replay.sweep_adjoint(lambda, rows, (size_t) split, rec.size() - 1);
       replay.sweep_adjoint(lambda, rows, 0, (size_t) split);
-      return lambda.to_rows()[0];
+      return lambda.to_vectors()[0];
     }
 
     // The schedule `schedule_pars` resolved, run forward at `run_pars`. The
@@ -382,17 +382,17 @@ for (method in c("rkck", "dopri")) testthat::test_that(paste0("[", method, "] on
   step_size <- 0.05
   eps <- 1e-7
   for (i in seq_along(lv_y)) {
-    seed <- rep(0, length(lv_y))
-    seed[i] <- 1
+    adjoint <- rep(0, length(lv_y))
+    adjoint[i] <- 1
     row <- sapply(seq_along(lv_y), function(j) {
       up <- lv_y; up[j] <- up[j] + eps
       down <- lv_y; down[j] <- down[j] - eps
       (lv_step_end(lv_pars, 0.0, step_size, up, method = method)[i] -
        lv_step_end(lv_pars, 0.0, step_size, down, method = method)[i]) / (2 * eps)
     })
-    got <- lv_step_and_adjoint(lv_pars, 0.0, step_size, lv_y, seed, method = method)$lambda_in
+    got <- lv_step_and_adjoint(lv_pars, 0.0, step_size, lv_y, adjoint, method = method)$lambda_in
     expect_equal(got, row, tolerance = 1e-6,
-                 info = paste("seeded component", i))
+                 info = paste("adjoint on component", i))
   }
 })
 

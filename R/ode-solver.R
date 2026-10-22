@@ -59,7 +59,7 @@ check_callback <- function(f, name, nullable = FALSE) {
 #' own order), the explicit Cash--Karp 4(5) pair, or the implicit RODAS4(3)
 #' Rosenbrock stepper for stiff problems. The solver is
 #' driven a step at a time (or to a sequence of times), and the state can be
-#' re-seeded between steps -- at a different length if need be -- which is
+#' reset between steps -- at a different length if need be -- which is
 #' what a consumer with events needs.
 #'
 #' The right-hand side `rhs(t, y)` returns the rates as a numeric vector the
@@ -204,10 +204,10 @@ OdeSolver <- R6::R6Class(
     rates = function() RSolver_rates(private$ptr),
 
     #' @description Times of every accepted step since the last
-    #'   `set_state()`, starting with the time it was seeded at.
+    #'   `set_state()`, starting with the time it was set at.
     times = function() RSolver_times(private$ptr),
 
-    #' @description Re-seed the state and time. `y` may have a different
+    #' @description Reset the state and time. `y` may have a different
     #'   length from before. Resets the step size to the control's initial
     #'   value and the recorded times; evaluates `rhs` once; clears the
     #'   effect of an error in a callback.
