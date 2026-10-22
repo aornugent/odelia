@@ -396,10 +396,10 @@ compile_substep_interface <- function() {
 store_pars <- c(1.0, 0.8, 1e4, 200, 0.3)
 store_y <- c(1.0, 0.5, 0.5)
 # Drainage K = 10: a store inside Cash-Karp's stability limit, whose coupling
-# error exceeds Cash-Karp's own on it, so substepping it would not pay.
+# error exceeds Cash-Karp's own on it, so Cash-Karp's error never sets the step.
 slow <- store_pars * c(1, 1, 1e-3, 1, 1)
 
-testthat::test_that("where substepping would not pay, every step is the plain System's", {
+testthat::test_that("where the store's Cash-Karp error never sets the step, every step is the plain System's", {
   compile_substep_interface()
   off <- store_run(1e-6, 0.5, slow, store_y)
   plain <- store_plain_run(1e-6, 0.5, slow, store_y)
@@ -469,7 +469,8 @@ testthat::test_that("a grid of a run's times is refused where a step would subst
   compile_substep_interface()
   expect_error(store_grid_replay(store_pars, store_y, 0.5, 1e-6),
                "replay the run's program")
-  # Where substepping would not pay no step substeps, and the grid is replayed.
+  # Where the store's Cash-Karp error never sets the step no step substeps, and
+  # the grid is stepped.
   off <- store_run(1e-6, 0.5, slow, store_y)
   expect_equal(store_grid_replay(slow, store_y, 0.5, 1e-6)$y, off$y,
                tolerance = 1e-12)

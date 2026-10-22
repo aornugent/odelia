@@ -208,15 +208,16 @@ private:
   // Whether a step from the current time to `step_end` substeps the System's
   // subsystem: under Cash-Karp, where the step spans a knot of its forcing, or,
   // where the control allows, where it is past Cash-Karp's stability limit on
-  // it or follows a step that substepping would have let grow.
+  // it or follows a step whose size Cash-Karp's error on it set.
   bool substeps_subsystem(const System& system, double step_end) const;
-  // Whether Cash-Karp's error on the subsystem limited the step just accepted
-  // more than the rest's error and the coupling error of substepping: the one
-  // the step measured where it substepped, and otherwise half the step times
-  // how far the inputs at t + h missed the line along the input slope.
-  bool substepping_pays(const System& system, const state_type& u0,
-                        const std::vector<double>& input_slope, double h,
-                        bool substepped) const;
+  // Whether Cash-Karp's error on the subsystem set the size of the step just
+  // accepted: it exceeds both the rest's error and the coupling error of
+  // substepping -- the one the step measured where it substepped, and otherwise
+  // half the step times how far the inputs at t + h missed the line along the
+  // input slope. Compared component by component, as the gsl rule reads error.
+  bool subsystem_error_sets_step(const System& system, const state_type& u0,
+                                 const std::vector<double>& input_slope,
+                                 double h, bool substepped) const;
   bool spans_subsystem_knot(const System& system, double step_end) const;
   void refuse_substeps_unless_rkck(const subsystem_substeps* substeps) const {
     if (substeps != nullptr && method != Method::rkck) {
@@ -397,8 +398,8 @@ private:
     double step_size;
   };
   std::optional<last_inputs> last_inputs_;
-  // substepping_pays for the last accepted adaptive step.
-  bool substepping_paid_ = false;
+  // subsystem_error_sets_step for the last accepted adaptive step.
+  bool subsystem_error_set_step_ = false;
 };
 
 template <class System>
@@ -416,7 +417,7 @@ void SolverInternal<System>::reset(System& system) {
   step_size_last = control.step_size_initial;
   control.reset_memory();
   stepper.subsystem_stiffness = 0.0;
-  substepping_paid_ = false;
+  subsystem_error_set_step_ = false;
   time_max = std::numeric_limits<double>::infinity();
   in_step = false;
   have_prev = false;
@@ -768,8 +769,8 @@ void SolverInternal<System>::step(System& system) {
       have_prev = true;
       save_dydt_out_as_in();
       if constexpr (HasSubsystem<System>) {
-        substepping_paid_ = substepping_pays(system, u0, input_slope, step_size,
-                                             substeps.has_value());
+        subsystem_error_set_step_ = subsystem_error_sets_step(
+            system, u0, input_slope, step_size, substeps.has_value());
       }
       push_step(system, {time, step_size, false, std::move(substeps)});
       if constexpr (HasSubsystem<System>) {
@@ -966,7 +967,7 @@ bool SolverInternal<System>::substeps_subsystem(const System& system,
   if constexpr (HasSubsystem<System>) {
     return spans_subsystem_knot(system, step_end) ||
       (method == Method::rkck && control.substep_subsystem &&
-       (substepping_paid_ ||
+       (subsystem_error_set_step_ ||
         (step_end - time) * stepper.subsystem_stiffness > stepper.stability_limit));
   } else {
     return false;
@@ -974,10 +975,9 @@ bool SolverInternal<System>::substeps_subsystem(const System& system,
 }
 
 template <class System>
-bool SolverInternal<System>::substepping_pays(const System& system,
-                                              const state_type& u0,
-                                              const std::vector<double>& input_slope,
-                                              double h, bool substepped) const {
+bool SolverInternal<System>::subsystem_error_sets_step(
+    const System& system, const state_type& u0,
+    const std::vector<double>& input_slope, double h, bool substepped) const {
   const auto [first, n] = system.subsystem();
   double rest = 0.0, cash_karp = 0.0, coupling = 0.0;
   for (size_t i = 0; i < y.size(); ++i) {
