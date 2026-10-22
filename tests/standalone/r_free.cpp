@@ -1257,10 +1257,15 @@ void test_sweep_across_empty_steps(odelia::ode::Method m) {
 // loaded choice exogenous to that sweep.
 namespace {
 
-// The instant a choice was made at, held to the instant it is loaded at exactly,
-// as plant's Patch holds a recorded field: a mismatch is counted rather than
-// raised so a test can say where it happened.
-struct solved_choice { double s = 0.0; bool kept = false; double t = 0.0; };
+// The instant and slot a choice was made at, held to those it is loaded at
+// exactly: a mismatch is counted rather than raised so a test can say where it
+// happened.
+struct solved_choice {
+  double s = 0.0;
+  bool kept = false;
+  double t = 0.0;
+  std::size_t slot = 0;
+};
 int chooser_mispaired_loads = 0;
 int chooser_loads = 0;
 
@@ -1288,10 +1293,14 @@ struct Chooser {
     y[0] = *it++; time = t; compute_rates(); return it;
   }
   void set_recorded_state(const std::vector<T>& s, double t) { set_ode_state(s.begin(), t); }
-  void store_solved(solved_choice& s) { into = &s; from = nullptr; }
-  void load_solved(const solved_choice& s) {
+  void store_solved(solved_choice& s, std::size_t slot) {
+    into = &s; from = nullptr;
+    s.slot = slot;
+  }
+  void load_solved(const solved_choice& s, std::size_t slot) {
     from = s.kept ? &s : nullptr; into = nullptr;
     if (s.kept) ++chooser_loads;
+    if (s.kept && s.slot != slot) ++chooser_mispaired_loads;
   }
   void end_solved() { into = nullptr; from = nullptr; }
   void compute_rates() {
@@ -1308,6 +1317,28 @@ struct Chooser {
 };
 
 } // namespace
+
+// Every evaluation is handed its slot of the row, in the run and in its sweep.
+void test_each_evaluation_is_handed_its_slot(odelia::ode::Method m) {
+  Chooser<double> a(2.0);
+  odelia::ode::Solver<Chooser<double>> run(a, odelia::ode::OdeControl(), m);
+  run.set_keep_states(true);
+  run.reset();
+  run.advance_adaptive(std::vector<double>{0.0, 1.0});
+  const auto rec = run.recording();
+  bool placed = true;
+  for (size_t k = 1; k < rec.size(); ++k) {
+    for (size_t i = 0; i < rec[k].solved.size(); ++i) {
+      placed = placed && rec[k].solved[i].kept && rec[k].solved[i].slot == i;
+    }
+  }
+  check(placed, "each slot was stored by the evaluation handed it");
+  chooser_mispaired_loads = 0;
+  odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});
+  odelia::ode::adjoint_rows dp(1, 1);
+  run.solve_adjoint(lambda, dp);
+  check(chooser_mispaired_loads == 0, "and the sweep loads each by the slot it was stored in");
+}
 
 void test_replay_keeps_the_rows_it_loaded(odelia::ode::Method m) {
   // r = 2 never reaches the threshold: full speed throughout, y(1) = e^2.
@@ -2395,6 +2426,7 @@ int main() {
   for_each_explicit_stepper(test_sweep_across_an_insertion);
   for_each_explicit_stepper(test_sweep_from_an_empty_start);
   for_each_explicit_stepper(test_sweep_across_empty_steps);
+  for_each_explicit_stepper(test_each_evaluation_is_handed_its_slot);
   for_each_explicit_stepper(test_replay_keeps_the_rows_it_loaded);
   test_replay_under_the_other_stepper_is_refused();
   for_each_explicit_stepper(test_carried_k1_keeps_its_own_instant);

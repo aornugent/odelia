@@ -262,7 +262,7 @@ void Step<System>::step(System& system,
   // that solves for nothing is handed nothing and the branch compiles away.
   auto rates_at = [&](int i, const state_type& at, state_type& into) -> void {
     if constexpr (SolvesForValues<System>) {
-      ode::derivs(system, at, into, stage_time(i, time, h), solved[i - 1]);
+      ode::derivs(system, at, into, stage_time(i, time, h), solved, i - 1);
     } else {
       ode::derivs(system, at, into, stage_time(i, time, h));
     }
@@ -297,7 +297,7 @@ void Step<System>::step(System& system,
   }
   // The sixth evaluation, with a slot of its own: see `solved_row`.
   if constexpr (SolvesForValues<System>) {
-    ode::derivs(system, y, dydt_out, time + h, solved[5]);
+    ode::derivs(system, y, dydt_out, time + h, solved, end_slot);
   } else {
     ode::derivs(system, y, dydt_out, time + h);
   }
@@ -479,7 +479,7 @@ void Step<System>::step_adjoint(active_system<System>& active,
     bool k1_loaded = false;
     if constexpr (SolvesForValues<System>) {
       if (k1 != nullptr) {
-        ode::derivs(sys, y0, rate[0], k1->time, k1->row);
+        ode::derivs(sys, y0, rate[0], k1->time, k1->row, end_slot);
         k1_loaded = true;
       }
     }
@@ -490,8 +490,8 @@ void Step<System>::step_adjoint(active_system<System>& active,
     auto rates_at = [&](int i, const std::vector<scalar>& at,
                         std::vector<scalar>& into) -> void {
       if constexpr (SolvesForValues<System>) {
-        ode::derivs(sys, at, into, stage_time(i, time, h),
-                    std::as_const(solved[i - 1]));
+        ode::derivs(sys, at, into, stage_time(i, time, h), std::as_const(solved),
+                    i - 1);
       } else {
         ode::derivs(sys, at, into, stage_time(i, time, h));
       }
