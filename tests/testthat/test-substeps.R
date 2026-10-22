@@ -468,7 +468,7 @@ testthat::test_that("a replay takes the run's substeps, at the run's parameters 
 testthat::test_that("a grid of a run's times is refused where a step would substep the store", {
   compile_substep_interface()
   expect_error(store_grid_replay(store_pars, store_y, 0.5, 1e-6),
-               "replay the run's schedule")
+               "step the run's schedule")
   # Where substepping would not pay no step substeps, and the grid is replayed.
   off <- store_run(1e-6, 0.5, slow, store_y)
   expect_equal(store_grid_replay(slow, store_y, 0.5, 1e-6)$y, off$y,
