@@ -124,19 +124,26 @@ struct OdeControl {
   void set_stabilisation(double value) { stabilisation = value; }
   double get_stabilisation() const { return stabilisation; }
 
+  // `factors`, where given, multiply each component's error level, one per
+  // component (see ScalesStateTolerances).
   double adjust_step_size(size_t dim, size_t ord,
                           double step_size,
                           const state_type &y,
                           const state_type &yerr,
-                          const state_type &dydt)
+                          const state_type &dydt,
+                          const state_type *factors = nullptr)
   {
     double rmax = std::numeric_limits<double>::min();
     const double S = 0.9;
     bool nonfinite = false;
+    const auto level = [&](size_t i) {
+      const double D0 = errlevel(y[i], dydt[i], step_size);
+      return factors != nullptr ? D0 * (*factors)[i] : D0;
+    };
 
     for (size_t i = 0; i < dim; i++)
     {
-      const double D0 = errlevel(y[i], dydt[i], step_size);
+      const double D0 = level(i);
       using std::abs;
       const double r = abs(yerr[i]) / abs(D0);
       // A non-finite ratio means the step left the model's valid domain: yerr
@@ -184,7 +191,7 @@ struct OdeControl {
       {
         // std::abs, not abs: with libstdc++ an unqualified abs on a double is
         // C's int abs(int), and the ratio becomes an integer division by zero.
-        const double rr = std::abs(yerr[i]) / std::abs(errlevel(y[i], dydt[i], step_size));
+        const double rr = std::abs(yerr[i]) / std::abs(level(i));
         ss += rr * rr;
       }
       // With no components, 0 / 0 would make the ratio NaN, and NaN would

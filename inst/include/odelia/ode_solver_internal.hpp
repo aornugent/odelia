@@ -214,10 +214,12 @@ private:
   // accepted: it exceeds both the rest's error and the coupling error of
   // substepping -- the one the step measured where it substepped, and otherwise
   // half the step times how far the inputs at t + h missed the line along the
-  // input slope. Compared component by component, as the gsl rule reads error.
+  // input slope. Compared component by component, as the gsl rule reads error,
+  // at the error levels the step's `factors` scaled.
   bool subsystem_error_sets_step(const System& system, const state_type& u0,
                                  const std::vector<double>& input_slope,
-                                 double h, bool substepped) const;
+                                 double h, bool substepped,
+                                 const state_type* factors) const;
   bool spans_subsystem_knot(const System& system, double step_end) const;
   void refuse_substeps_unless_rkck(const subsystem_substeps* substeps) const {
     if (substeps != nullptr && method != Method::rkck) {
@@ -655,6 +657,21 @@ void SolverInternal<System>::step(System& system) {
   }
   std::optional<subsystem_substeps> substeps;
 
+  // The System's factor on each component's error level, read at the step's
+  // start and held across its retries; none where it declares none.
+  state_type factors;
+  if constexpr (ScalesStateTolerances<System>) {
+    system.state_tolerance_factors(time_orig, factors);
+    util::check_length(factors.size(), size);
+    for (const double f : factors) {
+      if (!(f > 0.0)) {
+        util::stop("state_tolerance_factors: every factor must be positive");
+      }
+    }
+  }
+  const state_type* scale =
+    ScalesStateTolerances<System> ? &factors : nullptr;
+
   while (true) {
     // Does this appear to be the last step before reaching `time_max`?
     const bool final_step = step_size > time_remaining;
@@ -701,7 +718,7 @@ void SolverInternal<System>::step(System& system) {
     } else {
       step_size_next =
         control.adjust_step_size(size, stepper_order(), step_size,
-			         y, yerr, dydt_out);
+			         y, yerr, dydt_out, scale);
       if (!state_valid(system, y)) {
         invalid = true;
         invalid_reason = "ode_state_valid() refused the state after the step";
@@ -770,7 +787,7 @@ void SolverInternal<System>::step(System& system) {
       save_dydt_out_as_in();
       if constexpr (HasSubsystem<System>) {
         subsystem_error_set_step_ = subsystem_error_sets_step(
-            system, u0, input_slope, step_size, substeps.has_value());
+            system, u0, input_slope, step_size, substeps.has_value(), scale);
       }
       push_step(system, {time, step_size, false, std::move(substeps)});
       if constexpr (HasSubsystem<System>) {
@@ -977,11 +994,13 @@ bool SolverInternal<System>::substeps_subsystem(const System& system,
 template <class System>
 bool SolverInternal<System>::subsystem_error_sets_step(
     const System& system, const state_type& u0,
-    const std::vector<double>& input_slope, double h, bool substepped) const {
+    const std::vector<double>& input_slope, double h, bool substepped,
+    const state_type* factors) const {
   const auto [first, n] = system.subsystem();
   double rest = 0.0, cash_karp = 0.0, coupling = 0.0;
   for (size_t i = 0; i < y.size(); ++i) {
-    const double level = control.errlevel(y[i], dydt_out[i], h);
+    const double level = control.errlevel(y[i], dydt_out[i], h) *
+      (factors != nullptr ? (*factors)[i] : 1.0);
     if (i < first || i >= first + n) {
       rest = std::max(rest, std::abs(yerr[i]) / level);
       continue;

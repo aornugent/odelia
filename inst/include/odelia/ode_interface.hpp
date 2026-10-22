@@ -393,6 +393,14 @@ concept HasSubsystem =
   s.subsystem_rates(time, y, y, out);
 };
 
+// A System that fills `f` with one positive factor per component, multiplying
+// its error level on an adaptive step starting at `time`.
+template <typename System>
+concept ScalesStateTolerances = requires(const System& s, double time,
+                                         std::vector<double>& f) {
+  { s.state_tolerance_factors(time, f) } -> std::same_as<void>;
+};
+
 // Opt-in domain check. A system may declare
 //
 //   bool ode_state_valid(const state_type& y) const;
