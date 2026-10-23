@@ -265,7 +265,56 @@ struct adjoint_system {
   std::vector<scalar*> parameters;
 };
 
+// The field each recording builds, for a sweep that fixes it: the tape position
+// after each build and the slots its values sit in. With `fixed`, the last
+// adjoint of every batch is swept with those slots zeroed at each mark, which
+// leaves the derivative with the field fixed (an invader's), and consumes the
+// recording.
+struct field_marks {
+  struct mark {
+    adjoint_tape<double>::position_type at;
+    std::vector<adjoint_tape<double>::slot_type> slots;
+  };
+  bool fixed = false;
+  std::vector<mark> marks;
+};
+inline field_marks& fixed_field() {
+  static field_marks f;
+  return f;
+}
+
+// Mark a field just built. `visit(add)` calls add on each value its readers read.
+template <class Visit>
+void mark_field(Visit&& visit) {
+  field_marks& f = fixed_field();
+  adjoint_tape<double>* tape = adjoint_tape<double>::getActive();
+  if (!f.fixed || tape == nullptr) {
+    return;
+  }
+  field_marks::mark m{tape->getPosition(), {}};
+  visit([&](const adjoint_scalar<double>& x) {
+    if (x.getSlot() != adjoint_tape<double>::INVALID_SLOT) {
+      m.slots.push_back(x.getSlot());
+    }
+  });
+  f.marks.push_back(std::move(m));
+}
+
 namespace internal {
+
+// Last to first: sweep to each mark, zero the field's adjoints, truncate there.
+// Without the truncation the next partial sweep re-walks swept statements.
+inline void sweep_fixing_field(adjoint_tape<double>& tape) {
+  const std::vector<field_marks::mark>& marks = fixed_field().marks;
+  for (auto m = marks.rbegin(); m != marks.rend(); ++m) {
+    tape.computeAdjointsTo(m->at);
+    for (auto s : m->slots) {
+      tape.derivative(s) = 0.0;
+    }
+    tape.resetTo(m->at);
+  }
+  tape.computeAdjoints();
+}
 
 // Set the recorded outputs' adjoints and sweep, once per output; `read(m)` runs
 // with output m's adjoints standing on the tape.
@@ -289,7 +338,11 @@ void sweep_each_adjoint(adjoint_tape<double>& tape,
         for (std::size_t i = 0; i < outputs.size(); ++i) {
             xad::derivative(outputs[i]) = output_adjoints[m][i];
         }
-        tape.computeAdjoints();
+        if (fixed_field().fixed && m + 1 == output_adjoints.size()) {
+            sweep_fixing_field(tape);
+        } else {
+            tape.computeAdjoints();
+        }
         read(m);
     }
 }
@@ -336,6 +389,7 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 
     tape_scope<tape_type> running{tape};
     tape.clearAll();
+    fixed_field().marks.clear();
 
     std::vector<ad_type> x_active(x.begin(), x.end());
     tape.registerInputs(x_active);
@@ -434,6 +488,7 @@ std::size_t state_and_parameter_adjoints(
     tape_scope<adjoint_tape<double>> running{tape};
     active.release();
     tape.clearAll();
+    fixed_field().marks.clear();
 
     // The two kinds of input, each registered as what it is. The state is this
     // recording's own and arrives as doubles; the parameters live on the System
