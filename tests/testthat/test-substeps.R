@@ -170,6 +170,15 @@ compile_substep_interface <- function() {
     static_assert(ode::HasSubsystem<StoreA>);
     static_assert(!ode::HasSubsystem<StoreP>);
 
+    // The store with a tolerance scale on its two layers.
+    struct ScaledStore : StoreA {
+      using StoreA::StoreA;
+      double store_scale = 1.0;
+      void tolerance_scales(double, std::vector<double>& scales) const {
+        scales = {1.0, store_scale, store_scale};
+      }
+    };
+
     // The GSL rule, which plant runs under: the Hairer rule grows a step across
     // more of the store pulses than the population stages resolve.
     ode::OdeControl control_at(double tol) {
@@ -294,6 +303,33 @@ compile_substep_interface <- function() {
       ode::Solver<StoreA> replay(s, control_at(tol));
       replay.set_state(y0, 0.0);
       replay.advance_schedule(schedule);
+    }
+
+    // A run with the tolerance on the store scaled by `store_scale`: where it
+    // lands, its steps and substepped steps, and where the unscaled store lands
+    // replaying them.
+    // [[Rcpp::export]]
+    Rcpp::List store_scaled_run(double tol, double t_end,
+                                std::vector<double> pars,
+                                std::vector<double> y0, double store_scale) {
+      ScaledStore s(pars[0], pars[1], pars[2], pars[3], pars[4]);
+      s.store_scale = store_scale;
+      ode::Solver<ScaledStore> solver(s, control_at(tol));
+      solver.set_state(y0, 0.0);
+      solver.advance_adaptive({0.0, t_end});
+      const std::vector<ode::schedule_row> schedule = solver.steps_taken();
+      int substepped = 0;
+      for (const ode::schedule_row& row : schedule) {
+        substepped += row.subsystem.has_value();
+      }
+      ode::Solver<StoreA> replay(store(pars), control_at(tol));
+      replay.set_state(y0, 0.0);
+      replay.advance_schedule(schedule);
+      return Rcpp::List::create(
+        Rcpp::_["y"] = solver.state(),
+        Rcpp::_["steps"] = (int) schedule.size() - 1,
+        Rcpp::_["substepped"] = substepped,
+        Rcpp::_["schedule_replayed"] = replay.state());
     }
 
     // [[Rcpp::export]]
@@ -463,6 +499,18 @@ testthat::test_that("a replay takes the run's substeps, at the run's parameters 
   expect_error(store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6,
                             "rodas"),
                "taken only by method='rkck'")
+})
+
+testthat::test_that("a tolerance scale on the store decides its steps, and a replay repeats them", {
+  compile_substep_interface()
+  run <- store_run(1e-6, 2.0, store_pars, store_y)
+  ones <- store_scaled_run(1e-6, 2.0, store_pars, store_y, 1)
+  expect_identical(ones$y, run$y)
+  expect_identical(ones$steps, run$steps)
+  expect_identical(ones$substepped, run$substepped)
+  loose <- store_scaled_run(1e-6, 2.0, store_pars, store_y, 100)
+  expect_lt(loose$steps, run$steps)
+  expect_identical(loose$schedule_replayed, loose$y)
 })
 
 testthat::test_that("a grid of a run's times is refused where a step would substep the store", {

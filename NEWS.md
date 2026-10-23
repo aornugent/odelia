@@ -1,3 +1,9 @@
+## odelia 0.9.1
+
+**A System can scale each component's tolerance.** A System that declares `tolerance_scales(time, scales)` (`ScalesTolerances`) fills `scales` with one positive multiplier per component for an adaptive step starting at `time`, and the step multiplies each component's error level by it, so a scale above 1 loosens that component. The scales are read once at the step's start and held across its retries. They apply under both step-size rules, `gsl`'s max norm and `hairer`'s RMS norm, and in the test of whether Cash-Karp's error on a subsystem set the step, so a loosened subsystem is not substepped for an error the step no longer reads. `OdeControl::adjust_step_size()` takes them as an optional span; empty scales nothing. The scales decide which steps are taken and nothing else: a replay and the sweep take the steps as recorded. A scale that is not positive, or a vector that is not one per component, is refused.
+
+A **patch** bump: a System that declares no scales steps as before, bit for bit.
+
 ## odelia 0.9.0
 
 **Each rate evaluation is handed its stage in the step's row.** `store_solved` and `load_solved` take the stage as a second argument: 0 to 4 for the stages after the first, and `end_stage` (5) for the evaluation at the state the step ends at. A System that reads another run's recording finds the same evaluation there by its stage and its time. The time alone does not identify it, because Cash–Karp's stage at t + h and the step's end share a time but not a state. `derivs` takes the row and the stage rather than one stage's values, and `carried_rates` holds the row.
