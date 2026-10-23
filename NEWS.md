@@ -2,7 +2,9 @@
 
 **A System can scale each component's tolerance.** A System that declares `tolerance_scales(time, scales)` (`ScalesTolerances`) fills `scales` with one positive multiplier per component for an adaptive step starting at `time`, and the step multiplies each component's error level by it, so a scale above 1 loosens that component. The scales are read once at the step's start and held across its retries. They apply under both step-size rules, `gsl`'s max norm and `hairer`'s RMS norm, and in the test of whether Cash-Karp's error on a subsystem set the step, so a loosened subsystem is not substepped for an error the step no longer reads. `OdeControl::adjust_step_size()` takes them as an optional span; empty scales nothing. The scales decide which steps are taken and nothing else: a replay and the sweep take the steps as recorded. A scale that is not positive, or a vector that is not one per component, is refused.
 
-A **patch** bump: a System that declares no scales steps as before, bit for bit.
+**A subsystem's substeps take their tolerance from the control.** `OdeControl::substep_tol` (default 1e-9, the fixed value it replaces) is the relative tolerance that chooses a subsystem's substeps; the absolute is 1e-4 of it. Loosening it saves little, because the substeps evaluate only the subsystem's rates: on TF24's soil, 1e-7 halved the substeps and left run time unchanged.
+
+A **patch** bump: a System that declares no scales steps as before, bit for bit, and the default substep tolerance is the value it replaces.
 
 ## odelia 0.9.0
 

@@ -181,11 +181,12 @@ compile_substep_interface <- function() {
 
     // The GSL rule, which plant runs under: the Hairer rule grows a step across
     // more of the store pulses than the population stages resolve.
-    ode::OdeControl control_at(double tol) {
+    ode::OdeControl control_at(double tol, double substep_tol = 1e-9) {
       ode::OdeControl ctl;
       ctl.set_tol_abs(tol);
       ctl.set_tol_rel(tol);
       ctl.set_controller(ode::Controller::gsl);
+      ctl.substep_tol = substep_tol;
       return ctl;
     }
 
@@ -206,12 +207,12 @@ compile_substep_interface <- function() {
     // [[Rcpp::export]]
     Rcpp::List store_run(double tol, double t_end,
                          std::vector<double> pars, std::vector<double> y0,
-                         double fail_after = 1e300) {
+                         double fail_after = 1e300, double substep_tol = 1e-9) {
       const std::vector<double> fractions{1.0 / 5.0, 0.3, 3.0 / 5.0, 7.0 / 8.0,
                                           1.0};
       StoreA s = store(pars);
       s.fail_after = fail_after;
-      ode::Solver<StoreA> solver(s, control_at(tol));
+      ode::Solver<StoreA> solver(s, control_at(tol, substep_tol));
       solver.set_keep_states(true);
       solver.set_state(y0, 0.0);
       solver.advance_adaptive({0.0, t_end});
@@ -499,6 +500,17 @@ testthat::test_that("a replay takes the run's substeps, at the run's parameters 
   expect_error(store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6,
                             "rodas"),
                "taken only by method='rkck'")
+})
+
+testthat::test_that("the substeps' tolerance is the control's", {
+  compile_substep_interface()
+  reference <- store_plain_run(1e-12, 2.0, store_pars, store_y)$y
+  tight <- store_run(1e-6, 2.0, store_pars, store_y)
+  loose <- store_run(1e-6, 2.0, store_pars, store_y, substep_tol = 1e-6)
+  expect_identical(store_run(1e-6, 2.0, store_pars, store_y, substep_tol = 1e-9),
+                   tight)
+  expect_lt(loose$substeps, tight$substeps)
+  expect_equal(loose$y, reference, tolerance = 1e-5)
 })
 
 testthat::test_that("a tolerance scale on the store decides its steps, and a replay repeats them", {

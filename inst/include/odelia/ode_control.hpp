@@ -339,6 +339,9 @@ struct OdeControl {
   // Whether a Cash-Karp step that spans no knot of a System's subsystem's
   // forcing may substep it (see SolverInternal::substeps_subsystem).
   bool substep_subsystem = true;
+  // The relative tolerance that chooses a subsystem's substeps; the absolute is
+  // 1e-4 of it. Loosening it saves little: substeps evaluate only its rates.
+  double substep_tol = 1e-9;
   bool last_rejected = false; // hairer: no growth on the step after a rejection
   double ratio_prev = 1e-4;   // hairer: the last accepted step's error ratio
 };

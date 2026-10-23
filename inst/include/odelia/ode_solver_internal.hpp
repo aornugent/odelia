@@ -697,8 +697,7 @@ void SolverInternal<System>::step(System& system) {
       if constexpr (HasSubsystem<System>) {
         if (substep_subsystem) {
           substeps = stepper.choose_substeps(system, time, step_size, y, dydt_in,
-                                             u0, input_slope,
-                                             control.get_step_size_min());
+                                             u0, input_slope, control);
         }
       }
       stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, nullptr,

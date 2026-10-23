@@ -57,15 +57,15 @@ public:
             const state_type& inputs = {});
 
   // The substeps of a step's predictor: Cash-Karp on the subsystem from `y`
-  // under inputs extrapolated from `u0` along `input_slope`, controlled at
-  // substep_tol and no smaller than `step_size_min`, landing on every stage
-  // fraction and every knot of the subsystem's forcing.
+  // under inputs extrapolated from `u0` along `input_slope`, controlled at the
+  // control's substep_tol and no smaller than its smallest step, landing on
+  // every stage fraction and every knot of the subsystem's forcing.
   subsystem_substeps choose_substeps(const System& system, double time,
                                      double step_size, const state_type& y,
                                      const state_type& dydt,
                                      const state_type& u0,
                                      std::vector<double> input_slope,
-                                     double step_size_min) const
+                                     const OdeControl& control) const
     requires HasSubsystem<System>;
 
   // The step transposed, for as many output adjoints as are handed in: one
@@ -142,9 +142,6 @@ private:
   void stage_state_fixed(const std::vector<S>& y,
                          const std::vector<std::vector<S>>& k, double h,
                          std::vector<S>& out) const;
-
-  // The substeps' relative tolerance; the absolute one is 1e-4 of it.
-  static constexpr double substep_tol = 1e-9;
 
   // The stages and the end for a step that substeps the subsystem from its
   // inputs `u0`: the rest from the tableau, the subsystem from a predictor under
@@ -524,7 +521,7 @@ template <class System>
 subsystem_substeps Step<System>::choose_substeps(
     const System& system, double time, double step_size, const state_type& y,
     const state_type& dydt, const state_type& u0, std::vector<double> input_slope,
-    double step_size_min) const
+    const OdeControl& control) const
   requires HasSubsystem<System> {
   const double h = step_size;
   const auto [first, n] = system.subsystem();
@@ -537,9 +534,9 @@ subsystem_substeps Step<System>::choose_substeps(
   std::vector<std::vector<double>> r(6, std::vector<double>(n));
   std::copy(dydt.begin() + at, dydt.begin() + last, r[0].begin());
   // GSL's rule, in fractions of this step and down to the solver's smallest step.
-  OdeControl control(1e-4 * substep_tol, substep_tol, 1.0, 0.0, step_size_min / h,
-                     1.0, 1.0);
-  control.set_controller(Controller::gsl);
+  OdeControl inner(1e-4 * control.substep_tol, control.substep_tol, 1.0, 0.0,
+                   control.get_step_size_min() / h, 1.0, 1.0);
+  inner.set_controller(Controller::gsl);
   std::vector<double> stops(stage_fractions.begin(), stage_fractions.end());
   for (const double knot : system.subsystem_knots(time, time + h)) {
     const double fraction = (knot - time) / h;
@@ -558,8 +555,8 @@ subsystem_substeps Step<System>::choose_substeps(
       step_error(r, (end - from) * h, error);
       // Compared with the substep asked for: `end - from` rounds away from it.
       const double asked = substep;
-      substep = control.adjust_step_size(n, order(), end - from, next, error, r[0]);
-      if (control.step_size_shrank()) {
+      substep = inner.adjust_step_size(n, order(), end - from, next, error, r[0]);
+      if (inner.step_size_shrank()) {
         if (!(substep < asked)) {
           throw util::DomainError(
             "The subsystem fails its error test at the smallest substep");
