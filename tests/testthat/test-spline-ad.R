@@ -20,7 +20,10 @@ compile_spline_ad_interface <- function() {
   } else {
     Sys.getenv("PKG_LIBS", unset = "")
   }
+  # Without contraction, because read_linear is held to eval bit for bit: fused,
+  # its end line's y + m * dx rounds once where the tape's arithmetic rounds twice.
   withr::local_envvar(PKG_CPPFLAGS = odelia_cppflags(include_dir),
+                      PKG_CXXFLAGS = "-ffp-contract=off",
                       PKG_LIBS = pkg_libs)
 
   res <- tryCatch({
@@ -302,9 +305,10 @@ testthat::test_that("read_linear is eval's read, and its weights are the read's 
     expect_identical(r$value, r$eval, label = paste("value at", q))
     expect_identical(r$slope, r$eval_slope, label = paste("slope at", q))
     # The weights are the Hermite basis; the tape reaches the knots through the
-    # span coefficients, which associate differently.
-    expect_equal(r$weight_y, r$grad_y, tolerance = 1e-12)
-    expect_equal(r$weight_m, r$grad_m, tolerance = 1e-12)
+    # span coefficients, which associate differently. Absolute, because a weight
+    # near zero (3e-5 at 8.99) has no relative precision to compare.
+    expect_lt(max(abs(r$weight_y - r$grad_y)), 1e-14, label = paste("y weights at", q))
+    expect_lt(max(abs(r$weight_m - r$grad_m)), 1e-14, label = paste("m weights at", q))
   }
 })
 

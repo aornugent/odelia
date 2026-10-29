@@ -232,7 +232,10 @@ public:
   // weight[i] * *input[i], where the inputs are the value and slope at the two
   // knots around u, and slope is d(value)/du. Inside the knots the weights are
   // the Hermite basis; beyond either end the read is the end line eval extends.
-  // value and slope equal eval's and slope()'s bit for bit. A caller summing many
+  // value and slope equal eval's and slope()'s bit for bit where the build does
+  // not contract floating point: fused into one rounding, the end line's
+  // y + m * dx can differ by an ulp from an active spline's eval, whose tape
+  // arithmetic is not fused. A caller summing many
   // reads can supply weight[i] times its own derivative as the partial on
   // *input[i], and record the sum as one statement rather than a statement a read.
   struct linear_read {
