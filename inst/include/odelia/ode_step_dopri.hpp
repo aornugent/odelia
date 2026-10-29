@@ -79,7 +79,7 @@ public:
 
     // The fifth-order solution; its weights are the seventh stage's row.
     step_end(y0, k, h, y);
-    // The seventh evaluation, in the row's sixth slot: see solved_row.
+    // The seventh evaluation, in the row's `end_slot`: see solved_row.
     if constexpr (SolvesForValues<System>) {
       ode::derivs(system, y, k[6], time + h, solved, end_slot);
     } else {

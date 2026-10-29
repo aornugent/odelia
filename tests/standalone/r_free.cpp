@@ -1318,7 +1318,8 @@ struct Chooser {
 
 } // namespace
 
-// Every evaluation is handed its slot of the row, in the run and in its sweep.
+// Every evaluation is handed its slot of the row, in the run, in its sweep and
+// in a replay of it.
 void test_each_evaluation_is_handed_its_slot(odelia::ode::Method m) {
   Chooser<double> a(2.0);
   odelia::ode::Solver<Chooser<double>> run(a, odelia::ode::OdeControl(), m);
@@ -1338,6 +1339,11 @@ void test_each_evaluation_is_handed_its_slot(odelia::ode::Method m) {
   odelia::ode::adjoint_rows dp(1, 1);
   run.solve_adjoint(lambda, dp);
   check(chooser_mispaired_loads == 0, "and the sweep loads each by the slot it was stored in");
+  chooser_mispaired_loads = 0;
+  Chooser<double> b(2.0);
+  odelia::ode::Solver<Chooser<double>> replay(b, odelia::ode::OdeControl(), m);
+  replay.advance_recorded(rec);
+  check(chooser_mispaired_loads == 0, "and so does a replay");
 }
 
 void test_replay_keeps_the_rows_it_loaded(odelia::ode::Method m) {
@@ -1465,7 +1471,8 @@ void test_carried_k1_keeps_its_own_instant(odelia::ode::Method m) {
   check(std::isnan(rec[1].k1_time), "the first step's k1 was derived afresh");
   check(rec[3].k1_time == t_end && rec[2].time == 0.9,
         "the last step's k1 is carried from fl(0.2 + 0.7), not from 0.9");
-  check(rec[2].solved[5].t == t_end, "and that is where the row below was solved");
+  check(rec[2].solved[odelia::ode::end_slot].t == t_end,
+        "and that is where the row below was solved");
 
   chooser_mispaired_loads = 0;
   odelia::ode::adjoint_rows lambda = odelia::ode::adjoint_rows::one_row({1.0});

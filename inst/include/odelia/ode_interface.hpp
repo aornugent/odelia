@@ -194,8 +194,10 @@ using solved_values_t = typename solved_values<System>::type;
 // over nothing opens no extent, so a reload out of band cannot read a record and a
 // record cannot complete a state it was not taken at.
 //
-// `slot` is the evaluation's place in its step's row (see solved_row), by which a
-// System can find the same evaluation in another run's recording.
+// `slot` is the evaluation's place in its step's row (see solved_row). The slot
+// and the time together name an evaluation, which the time alone does not: the
+// stage at t + h and the step's end share a time but not a state. A System that
+// reads another run's recording finds the same evaluation there by both.
 template <typename System>
 concept SolvesForValues =
   requires(System s, solved_values_t<System>& into,
@@ -321,7 +323,7 @@ struct step_record : instruction {
   bool subdivided = false;
 
   // Where this step's first rates came from. First-same-as-last hands a step the
-  // sixth evaluation of the step before, taken in that row's `solved[5]` at the
+  // sixth evaluation of the step before, taken in that row's `end_slot` at the
   // time it ran at, and that time is kept here: fl(t + h) is not always the time
   // the row below records, which a pinned interval or a replay sets exactly. NaN
   // where the run derived the rates afresh instead -- at the run's start, after
