@@ -45,12 +45,12 @@ compile_step_adjoint_interface <- function() {
       using value_type = T;
       RecordingLorenz(T sigma, T R, T b) : LorenzSystem<T>(sigma, R, b) {}
 
-      template <class S2> using rebind = RecordingLorenz<S2>;
+      template <class S2> using rebound = RecordingLorenz<S2>;
 
       template <class S2>
-      rebind<S2> rebind_from() const {
+      rebound<S2> rebind() const {
         std::vector<double> p = this->pars();
-        rebind<S2> out{S2(p[0]), S2(p[1]), S2(p[2])};
+        rebound<S2> out{S2(p[0]), S2(p[1]), S2(p[2])};
         std::vector<T> ic(3);
         this->ode_initial_state(ic.begin());
         std::vector<double> ic0 = {xad::value(ic[0]), xad::value(ic[1]),
@@ -93,16 +93,16 @@ compile_step_adjoint_interface <- function() {
       // The six stage states of the recording, ascending, then the start state
       // the step puts the system back to.
       stage_log.clear();
-      const odelia::ode::adjoint_rows seeds =
-        odelia::ode::adjoint_rows::one_row(lambda_out);
-      odelia::ode::adjoint_rows swept;
-      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_batch adjoints =
+        odelia::ode::adjoint_batch::one(lambda_out);
+      odelia::ode::adjoint_batch swept;
+      odelia::ode::adjoint_batch rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
-      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, seeds, swept, rows);
-      const std::vector<double> lambda_in = swept.to_rows()[0];
-      const std::vector<double> parameter_adjoint = rows.to_rows()[0];
+      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, adjoints, swept, rows);
+      const std::vector<double> lambda_in = swept.to_vectors()[0];
+      const std::vector<double> parameter_adjoint = rows.to_vectors()[0];
       Rcpp::List recorded(6);
       for (int j = 0; j < 6; ++j) recorded[j] = stage_log[j];
 
@@ -138,16 +138,16 @@ compile_step_adjoint_interface <- function() {
       stepper.step(system, solved, time, step_size, y_end, yerr, dydt_in,
                    dydt_out);
 
-      const odelia::ode::adjoint_rows seeds =
-        odelia::ode::adjoint_rows::one_row(lambda_out);
-      odelia::ode::adjoint_rows swept;
-      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_batch adjoints =
+        odelia::ode::adjoint_batch::one(lambda_out);
+      odelia::ode::adjoint_batch swept;
+      odelia::ode::adjoint_batch rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
-      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, seeds, swept, rows);
-      const std::vector<double> lambda_in = swept.to_rows()[0];
-      const std::vector<double> parameter_adjoint = rows.to_rows()[0];
+      stepper.step_adjoint(active, std::as_const(solved), time, step_size, y, adjoints, swept, rows);
+      const std::vector<double> lambda_in = swept.to_vectors()[0];
+      const std::vector<double> parameter_adjoint = rows.to_vectors()[0];
 
       return Rcpp::List::create(Rcpp::_["y_end"] = y_end,
                                 Rcpp::_["lambda_in"] = lambda_in);
@@ -240,18 +240,18 @@ testthat::test_that("the adjoint scalar is named at namespace scope", {
     #include <type_traits>
     #include <odelia/ode_interface.hpp>
 
-    static_assert(std::is_same_v<odelia::ode::active_scalar<>,
+    static_assert(std::is_same_v<odelia::ode::adjoint_scalar<>,
                                  xad::adj<double>::active_type>);
-    static_assert(std::is_same_v<odelia::ode::active_scalar<float>,
+    static_assert(std::is_same_v<odelia::ode::adjoint_scalar<float>,
                                  xad::adj<float>::active_type>);
 
     // [[Rcpp::export]]
-    bool active_scalar_named_without_solver() { return true; }
+    bool adjoint_scalar_named_without_solver() { return true; }
   ')
-  expect_true(active_scalar_named_without_solver())
+  expect_true(adjoint_scalar_named_without_solver())
 })
 
-# Compile step_adjoint on a minimal System, with `rebind_body` as its rebind_from()
+# Compile step_adjoint on a minimal System, with `rebind_body` as its rebind()
 # declaration. Empty gives a System with no hook; one returning Decay gives a hook
 # that hands back the wrong scalar. Both must be refused at the call.
 compile_step_adjoint_on <- function(rebind_body) {
@@ -279,27 +279,27 @@ compile_step_adjoint_on <- function(rebind_body) {
       odelia::ode::Step<Decay> stepper;
       stepper.resize(1);
       std::vector<double> y(1, 1.0), lambda_out(1, 1.0);
-      const odelia::ode::adjoint_rows seeds =
-        odelia::ode::adjoint_rows::one_row(lambda_out);
-      odelia::ode::adjoint_rows swept;
-      odelia::ode::adjoint_rows rows(1, system.ad_parameters().size());
+      const odelia::ode::adjoint_batch adjoints =
+        odelia::ode::adjoint_batch::one(lambda_out);
+      odelia::ode::adjoint_batch swept;
+      odelia::ode::adjoint_batch rows(1, system.ad_parameters().size());
       odelia::ode::adjoint_tape<double> step_tape(false);
-      odelia::ode::active_system<std::decay_t<decltype(system)>> active{
+      odelia::ode::adjoint_system<std::decay_t<decltype(system)>> active{
           system, step_tape};
       const odelia::ode::solved_row<Decay> solved{};
-      stepper.step_adjoint(active, solved, 0.0, 0.1, y, seeds, swept, rows);
-      return swept.to_rows()[0];
+      stepper.step_adjoint(active, solved, 0.0, 0.1, y, adjoints, swept, rows);
+      return swept.to_vectors()[0];
     }
   ', rebind_body))
 }
 
 testthat::test_that("step_adjoint refuses a System that cannot rebind to the adjoint scalar", {
-  # No rebind_from() at all.
+  # No rebind() at all.
   expect_error(compile_step_adjoint_on(""))
 
   # Present, but hands back a System on the wrong scalar.
   expect_error(compile_step_adjoint_on(
-    "template <class U> Decay rebind_from() const { return *this; }"))
+    "template <class U> Decay rebind() const { return *this; }"))
 
   # A System that does rebind is stepped, and its adjoint is checked against a
   # finite difference, by the Lorenz tests above.

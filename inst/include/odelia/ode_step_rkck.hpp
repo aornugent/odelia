@@ -53,36 +53,36 @@ public:
             const subsystem_substeps* substeps = nullptr,
             const state_type& inputs = {});
 
-  // The step transposed, for as many seeds as are handed in: one recording of the
-  // whole step, swept once per seed (see adjoint_rows). The active System is the
-  // walk's, held across every step of one width.
+  // The step transposed, for as many output adjoints as are handed in: one
+  // recording of the whole step, swept once per output (see adjoint_batch). The
+  // active System is the walk's, held across every step of one width.
   //
   // `k1` is how the run took this step's first rates where the step before
   // carried them, and null where the run derived them afresh at `time`.
   // `substeps` holds the row's substeps where the step substepped the System's
   // subsystem.
-  void step_adjoint(active_system<System>& active,
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1,
                     double time, double step_size,
-                    const state_type &y, const adjoint_rows& lambda_out,
-                    adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint,
+                    const state_type &y, const adjoint_batch& lambda_out,
+                    adjoint_batch& lambda_in, adjoint_batch& parameter_adjoint,
                     const subsystem_substeps* substeps = nullptr);
   // The same with the first rates derived afresh, which is what a caller
   // transposing one step on its own has: no step before it to carry them.
-  void step_adjoint(active_system<System>& active,
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     double time, double step_size, const state_type& y,
-                    const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
-                    adjoint_rows& parameter_adjoint) {
+                    const adjoint_batch& lambda_out, adjoint_batch& lambda_in,
+                    adjoint_batch& parameter_adjoint) {
     step_adjoint(active, solved, nullptr, time, step_size, y, lambda_out,
                  lambda_in, parameter_adjoint);
   }
 
   // Rate evaluations the sweeps since the last clear have recorded, counted where
   // they are recorded rather than added up as a total the loop could disagree
-  // with. Six a step, whatever the seed count, because the step is recorded once
-  // and swept per seed. A term entering once a step where it belongs once a stage
+  // with. Six a step, whatever the output count, because the step is recorded once
+  // and swept per output. A term entering once a step where it belongs once a stage
   // divides this by six, and no gradient check can see that, because a tangent and
   // a sweep apply the same multiplier.
   std::size_t recorded_rates = 0;
@@ -130,7 +130,7 @@ private:
 
   // The tableau as SubsystemSubsteps reads it: stage 4 is at t + h, a step
   // carries six rate vectors, and the error reads none at the end state.
-  static constexpr int stage_at_end = 4;
+  static constexpr int last_stage = 4;
   static constexpr int stage_rates = 6;
   static constexpr bool error_reads_end_rates = false;
   static constexpr double stage_fraction(int i) { return ah[i - 1]; }
@@ -229,7 +229,7 @@ void Step<System>::step(System& system,
   }
   // The sixth evaluation, with a slot of its own: see `solved_row`.
   if constexpr (SolvesForValues<System>) {
-    ode::derivs(system, y, dydt_out, time + h, solved, end_slot);
+    ode::derivs(system, y, dydt_out, time + h, solved, end_stage);
   } else {
     ode::derivs(system, y, dydt_out, time + h);
   }
@@ -360,18 +360,19 @@ void Step<System>::step_error(const std::vector<std::vector<S>>& k, double h,
 // writes a transpose of its own; and the parameters ride in the same recording,
 // so a stage the parameters reach carries their rows too.
 template <class System>
-void Step<System>::step_adjoint(active_system<System>& active,
+void Step<System>::step_adjoint(adjoint_system<System>& active,
                                 const solved_row<System>& solved,
                                 const carried_rates<System>* k1,
                                 double time, double step_size,
-                                const state_type &y, const adjoint_rows& lambda_out,
-                                adjoint_rows& lambda_in,
-                                adjoint_rows& parameter_adjoint,
+                                const state_type &y,
+                                const adjoint_batch& lambda_out,
+                                adjoint_batch& lambda_in,
+                                adjoint_batch& parameter_adjoint,
                                 const subsystem_substeps* substeps) {
-  using scalar = active_scalar<double>;
+  using scalar = adjoint_scalar<double>;
   const double h = step_size;
   if (lambda_out.empty()) {
-    util::stop("step_adjoint: needs at least one seed");
+    util::stop("step_adjoint: needs at least one output adjoint");
   }
   // The recording hands the whole state buffer to the slice below, and `size` is
   // what resize() set -- so a state of another width is checked here rather than
@@ -391,7 +392,7 @@ void Step<System>::step_adjoint(active_system<System>& active,
     bool k1_loaded = false;
     if constexpr (SolvesForValues<System>) {
       if (k1 != nullptr) {
-        ode::derivs(sys, y0, rate[0], k1->time, k1->row, end_slot);
+        ode::derivs(sys, y0, rate[0], k1->time, k1->row, end_stage);
         k1_loaded = true;
       }
     }

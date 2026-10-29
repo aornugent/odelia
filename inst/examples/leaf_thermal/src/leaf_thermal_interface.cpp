@@ -148,7 +148,7 @@ Rcpp::NumericVector LeafThermalSystem_get_current_drivers(SEXP LeafThermalSystem
 
 // Build a double Solver for a LeafThermalSystem. `method` picks the stepper
 // (rcpp_interface_helpers.hpp: "rkck", "dopri" or "rodas"); the system has a
-// rebind_from() hook, so "rodas" takes its Jacobian by forward-mode AD.
+// rebind() hook, so "rodas" takes its Jacobian by forward-mode AD.
 // [[Rcpp::export]]
 SEXP LeafSolver_new(SEXP system_xp, SEXP control_xp, SEXP drivers_xp,
                     std::string method = "rkck") {
@@ -231,12 +231,14 @@ Rcpp::List LeafSolver_get_history(SEXP solver_xp) {
 }
 
 // Least-squares loss against observed states and its gradient by reverse mode,
-// through the time-varying drivers; Solver_fit_impl says what is replayed.
+// through the time-varying drivers; Solver_loss_and_gradient_impl says what is
+// replayed.
 // [[Rcpp::export]]
-Rcpp::List LeafSolver_fit(SEXP solver_xp, Rcpp::NumericVector times,
-                          Rcpp::NumericMatrix target, Rcpp::IntegerVector obs_indices,
-                          Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
-                          Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
-  return odelia::solver::Solver_fit_impl<SystemType>(solver_xp, times, target,
-                                                     obs_indices, ic, params);
+Rcpp::List LeafSolver_loss_and_gradient(
+    SEXP solver_xp, Rcpp::NumericVector schedule, Rcpp::NumericMatrix target,
+    Rcpp::IntegerVector obs_indices,
+    Rcpp::Nullable<Rcpp::NumericVector> initial_state = R_NilValue,
+    Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
+  return odelia::solver::Solver_loss_and_gradient_impl<SystemType>(
+      solver_xp, schedule, target, obs_indices, initial_state, params);
 }

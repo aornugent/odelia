@@ -21,52 +21,52 @@
 //              operations; cost is counted in statements.
 //   recording  what sits on the tape between clears -- here, one step's
 //              arithmetic, or one insertion's.
-//   seed       the derivative a backward walk starts from, one per output.
-//   row        one output's derivatives against a list of inputs; adjoint_rows
-//              is a batch of them, because several seeds share one recording.
+//   adjoint    one output's derivatives against a list of inputs; a sweep starts
+//              from each output's and hands back each input's. adjoint_batch
+//              holds several, because several outputs share one recording.
 //   sweep      the backward walk over a run's rows, last to first.
-//   range      consecutive rows at one state width; a System of fixed width has
+//   segment    consecutive rows at one state width; a System of fixed width has
 //              one, a System that widens opens a new one at each insertion.
 //
 // Entry points: vector_jacobian_product for a free function,
 // state_and_parameter_adjoints for a map through a System, and
-// Solver::solve_adjoint (ode_solver.hpp) for a whole run.
+// Solver::sweep_adjoint (ode_solver.hpp) for a whole run.
 
 namespace odelia {
 namespace ode {
 
-// One adjoint per seed, every row the same width: what a transpose is seeded with,
+// One adjoint per output, every one the same width: what a transpose starts from,
 // and what it hands back.
 //
 // Several exist together because they share ONE recording. The recording is a model
-// evaluation and a sweep is arithmetic, so a caller wanting several rows pays one
-// recording rather than one per row -- which is the whole reason this is a set and
-// not a vector. One seed is a batch of one, and nothing takes a single seed
-// instead: a second signature over the same recording would be a second place for
-// the seam between the recording and the sweep to be got wrong.
+// evaluation and a sweep is arithmetic, so a caller wanting several outputs pays one
+// recording rather than one per output -- which is the whole reason this is a
+// batch and not a vector. One output is a batch of one, and nothing takes a single
+// adjoint instead: a second signature over the same recording would be a second
+// place for the seam between the recording and the sweep to be got wrong.
 //
-// The shape is the object's own, so a ragged set and a row of the
-// wrong width are not things a caller can build, where a vector of vectors builds
-// both and every function on the path then has to test for them.
+// The shape is the object's own, so a ragged batch and an adjoint of the wrong
+// width are not things a caller can build, where a vector of vectors builds both
+// and every function on the path then has to test for them.
 //
 // The width is a run-time number on purpose. A sweep narrows as it descends, and
-// how many seeds a caller wants is the caller's; neither is a property of a type.
-class adjoint_rows {
+// how many outputs a caller wants is the caller's; neither is a property of a type.
+class adjoint_batch {
 public:
-  adjoint_rows() = default;
-  adjoint_rows(std::size_t rows, std::size_t width) { assign(rows, width); }
+  adjoint_batch() = default;
+  adjoint_batch(std::size_t size, std::size_t width) { assign(size, width); }
 
-  std::size_t rows() const { return rows_; }
+  std::size_t size() const { return size_; }
   std::size_t width() const { return width_; }
-  bool empty() const { return rows_ == 0; }
+  bool empty() const { return size_ == 0; }
 
-  // Every row zeroed at a new shape. A sweep hands back rows at the width of the
-  // range it swept, so a row the new shape does not reach must not survive as
-  // a number from the last one.
-  void assign(std::size_t rows, std::size_t width) {
-    rows_ = rows;
+  // Every adjoint zeroed at a new shape. A sweep hands back adjoints at the width
+  // of the segment it swept, so an entry the new shape does not reach must not
+  // survive as a number from the last one.
+  void assign(std::size_t size, std::size_t width) {
+    size_ = size;
     width_ = width;
-    store_.assign(rows * width, 0.0);
+    store_.assign(size * width, 0.0);
   }
 
   std::span<double> operator[](std::size_t m) {
@@ -76,17 +76,17 @@ public:
     return {store_.data() + m * width_, width_};
   }
 
-  // The rows `which` names, in the order it names them. Out of range is refused
-  // rather than clamped: a caller indexing by position would otherwise be handed
-  // a different row than the one it asked for.
-  adjoint_rows select(const std::vector<std::size_t>& which) const {
-    adjoint_rows ret(which.size(), width_);
+  // The adjoints `which` names, in the order it names them. Out of range is
+  // refused rather than clamped: a caller indexing by position would otherwise be
+  // handed a different adjoint than the one it asked for.
+  adjoint_batch select(const std::vector<std::size_t>& which) const {
+    adjoint_batch ret(which.size(), width_);
     for (std::size_t m = 0; m < which.size(); ++m) {
-      if (which[m] >= rows_) {
-        util::stop("adjoint_rows::select: row " +
+      if (which[m] >= size_) {
+        util::stop("adjoint_batch::select: adjoint " +
                    util::to_string(static_cast<int>(which[m])) +
                    " is outside a batch of " +
-                   util::to_string(static_cast<int>(rows_)));
+                   util::to_string(static_cast<int>(size_)));
       }
       const std::span<const double> from = (*this)[which[m]];
       std::copy(from.begin(), from.end(), ret[m].begin());
@@ -94,32 +94,32 @@ public:
     return ret;
   }
 
-  // A batch of one, which is how a caller wanting a single transpose row asks for
-  // it.
-  static adjoint_rows one_row(const std::vector<double>& values) {
-    adjoint_rows ret(1, values.size());
+  // A batch of one, which is how a caller wanting a single output's transpose
+  // asks for it.
+  static adjoint_batch one(const std::vector<double>& values) {
+    adjoint_batch ret(1, values.size());
     std::copy(values.begin(), values.end(), ret[0].begin());
     return ret;
   }
 
-  // The seeds that ask for every row of a Jacobian: one per output, each picking
-  // that output out.
-  static adjoint_rows all_rows(std::size_t rows) {
-    adjoint_rows ret(rows, rows);
-    for (std::size_t m = 0; m < rows; ++m) {
+  // The batch that asks for a whole Jacobian: one adjoint per output, each
+  // picking that output out.
+  static adjoint_batch identity(std::size_t size) {
+    adjoint_batch ret(size, size);
+    for (std::size_t m = 0; m < size; ++m) {
       ret[m][m] = 1.0;
     }
     return ret;
   }
 
-  // Rows of doubles for a caller that hands them on -- the R boundary, which
+  // Vectors of doubles for a caller that hands them on -- the R boundary, which
   // takes nothing else. Not how anything inside works.
-  std::vector<std::vector<double>> to_rows() const {
+  std::vector<std::vector<double>> to_vectors() const {
     std::vector<std::vector<double>> ret;
-    ret.reserve(rows_);
-    for (std::size_t m = 0; m < rows_; ++m) {
-      const std::span<const double> row = (*this)[m];
-      ret.emplace_back(row.begin(), row.end());
+    ret.reserve(size_);
+    for (std::size_t m = 0; m < size_; ++m) {
+      const std::span<const double> adjoint = (*this)[m];
+      ret.emplace_back(adjoint.begin(), adjoint.end());
     }
     return ret;
   }
@@ -127,7 +127,7 @@ public:
 private:
   // Set together and nowhere else, so the extent and the shape it is meant to
   // hold cannot disagree.
-  std::size_t rows_ = 0, width_ = 0;
+  std::size_t size_ = 0, width_ = 0;
   std::vector<double> store_;
 };
 
@@ -190,8 +190,8 @@ void release_slot(S& x) {
 // that narrows. So every active value the System holds is released before the
 // clear, and the tape is asked whether any was missed.
 template <class System>
-struct active_system {
-  using scalar = active_scalar<double>;
+struct adjoint_system {
+  using scalar = adjoint_scalar<double>;
   using system_type = typename rebound_system<System, scalar>::type;
 
   // Declared first, so the destructor's tape is initialised before the System it
@@ -204,12 +204,12 @@ struct active_system {
   adjoint_tape<double>* tape_;
   adjoint_tape<double>& tape() const { return *tape_; }
 
-  active_system(const System& passive, adjoint_tape<double>& tape)
-      : tape_(&tape), system(passive.template rebind_from<scalar>()),
+  adjoint_system(const System& passive, adjoint_tape<double>& tape)
+      : tape_(&tape), system(passive.template rebind<scalar>()),
         parameters(system.ad_parameters()) {
     static_assert(Rebindable<System, scalar>,
                   "a recording is taken on this System at the adjoint scalar; "
-                  "it has no rebind_from()");
+                  "it has no rebind()");
   }
 
   // Handed back on the way out, so a walk that builds one of these per width
@@ -220,7 +220,7 @@ struct active_system {
   // Skipped where another tape is active: these slots are not on it, and
   // handing them back would decrement its count instead. Nothing reports the
   // skip; the next release() on this tape counts what was left behind.
-  ~active_system() {
+  ~adjoint_system() {
     adjoint_tape<double>* const running = adjoint_tape<double>::getActive();
     if (running != nullptr && running != tape_) {
       return;
@@ -233,8 +233,8 @@ struct active_system {
   // parameters to the object it was copied from. Declaring the destructor above
   // suppresses the move operations, which would leave those addresses pointing
   // into the object moved from.
-  active_system(const active_system&) = delete;
-  active_system& operator=(const active_system&) = delete;
+  adjoint_system(const adjoint_system&) = delete;
+  adjoint_system& operator=(const adjoint_system&) = delete;
 
   // Every active value back to unregistered, so the clear below it is safe and
   // the next recording registers them fresh.
@@ -252,7 +252,7 @@ struct active_system {
     const std::size_t still = tape_->getNumVariables();
     if (still != 0) {
       util::stop(
-          "active_system::release: " +
+          "adjoint_system::release: " +
           util::to_string(static_cast<int>(still)) +
           " active values of this System are still registered after releasing "
           "every one for_each_active reaches, so it holds some the walk does "
@@ -267,19 +267,20 @@ struct active_system {
 
 namespace internal {
 
-// Seed the recorded outputs and sweep, once per seed row; `read(m)` runs with
-// seed m's adjoints standing on the tape.
+// Set the recorded outputs' adjoints and sweep, once per output; `read(m)` runs
+// with output m's adjoints standing on the tape.
 //
-// The derivatives are cleared between sweeps. Without it the previous seed's
-// adjoints are still on the slots and every row after the first is the running
-// sum of the ones before it. Clearing leaves the recorded operations alone, so
-// each sweep is bit-identical to the row a fresh recording would give: one
-// recording is substitutable for one per seed rather than an approximation of it.
+// The derivatives are cleared between sweeps. Without it the previous output's
+// adjoints are still on the slots and every answer after the first is the
+// running sum of the ones before it. Clearing leaves the recorded operations
+// alone, so each sweep is bit-identical to what a fresh recording would give: one
+// recording is substitutable for one per output rather than an approximation of
+// it.
 template <class Read>
-void sweep_each_seed(adjoint_tape<double>& tape,
-                     std::vector<active_scalar<double>>& outputs,
-                     const adjoint_rows& output_adjoints, Read&& read) {
-    for (std::size_t m = 0; m < output_adjoints.rows(); ++m) {
+void sweep_each_adjoint(adjoint_tape<double>& tape,
+                        std::vector<adjoint_scalar<double>>& outputs,
+                        const adjoint_batch& output_adjoints, Read&& read) {
+    for (std::size_t m = 0; m < output_adjoints.size(); ++m) {
         tape.clearDerivatives();
         // The adjoint slots, named directly rather than through an accessor of
         // their own: this is the only place in the family that touches one, and a
@@ -295,39 +296,42 @@ void sweep_each_seed(adjoint_tape<double>& tape,
 
 }  // namespace internal
 
-// One block of `f`, recorded ONCE on the tape handed in and swept once per seed:
+// One block of `f`, recorded ONCE on the tape handed in and swept once per output:
 // `input_adjoints[m]` receives transpose(jacobian) * output_adjoints[m], and the return
 // value is the recording's size. `f` is instantiated at the active scalar here, so only
 // doubles cross in and out.
 //
-// The batch carries its own shape (adjoint_rows), so a seed of the wrong width is not
-// something a caller can hand in and not something this has to test for.
+// The batch carries its own shape (adjoint_batch), so an adjoint of the wrong
+// width is not something a caller can hand in and not something this has to
+// test for.
 //
 // The tape is the caller's and is reused across calls, so nothing here allocates one.
 // Stops if a tape other than this one is active: recording onto a tape this product does
 // not own would sweep the block's adjoints twice.
 //
-// An empty seed is swept anyway rather than skipped: the row is then zeros, which is
-// what the caller's accumulator expects, and skipping would make the result depend on
-// which seeds happen to vanish at this state.
+// An empty output adjoint is swept anyway rather than skipped: its answer is
+// then zeros, which is what the caller's accumulator expects, and skipping would
+// make the result depend on which outputs' adjoints happen to vanish at this
+// state.
 template <class F>
 std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
                                      const std::vector<double>& x,
-                                     const adjoint_rows& output_adjoints,
+                                     const adjoint_batch& output_adjoints,
                                      F&& f,
-                                     adjoint_rows& input_adjoints) {
-    using ad_type = active_scalar<double>;
+                                     adjoint_batch& input_adjoints) {
+    using ad_type = adjoint_scalar<double>;
     using tape_type = adjoint_tape<double>;
 
     if (x.empty()) {
         util::stop("vector_jacobian_product: 'x' must have at least one entry");
     }
     if (output_adjoints.empty()) {
-        util::stop("vector_jacobian_product: needs at least one seed");
+        util::stop("vector_jacobian_product: needs at least one output adjoint");
     }
     const std::size_t n_out = output_adjoints.width();
     if (n_out == 0) {
-        util::stop("vector_jacobian_product: a seed must have at least one entry");
+        util::stop("vector_jacobian_product: an output adjoint must have at least "
+                   "one entry");
     }
 
     tape_scope<tape_type> running{tape};
@@ -345,8 +349,8 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
     }
     tape.registerOutputs(y_active);
 
-    input_adjoints.assign(output_adjoints.rows(), x.size());
-    internal::sweep_each_seed(tape, y_active, output_adjoints,
+    input_adjoints.assign(output_adjoints.size(), x.size());
+    internal::sweep_each_adjoint(tape, y_active, output_adjoints,
                               [&](std::size_t m) -> void {
         for (std::size_t i = 0; i < x_active.size(); ++i) {
             input_adjoints[m][i] = xad::derivative(x_active[i]);
@@ -357,7 +361,7 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 }
 
 // A transpose taken with respect to a System's state AND the parameters its
-// active-scalar lists: one recording over both, swept once per seed.
+// active-scalar lists: one recording over both, swept once per output.
 //
 // The active System is the caller's, held across the recordings a walk takes on
 // it. It is released here rather than there, because the release has to sit
@@ -370,11 +374,12 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // so a state written first derives it at the previous values.
 //
 // The sweep splits back along the same seam, and the two halves are handled
-// differently. `state_adjoint` is REPLACED: it is resized to one row per seed and
-// each row assigned, so rows a shorter batch does not reach do not survive as
-// stale numbers. `parameter_adjoint` is ADDED to, because a parameter is reached
-// once per step and its gradient is the sum over every step swept, so it is the
-// caller's to clear once per sweep and may carry rows past the seeds handed in.
+// differently. `state_adjoint` is REPLACED: it is resized to one per output and
+// each adjoint assigned, so entries a shorter batch does not reach do not
+// survive as stale numbers. `parameter_adjoint` is ADDED to, because a
+// parameter is reached once per step and its gradient is the sum over every
+// step swept, so it is the caller's to clear once per sweep and may carry
+// adjoints past the outputs handed in.
 //
 // They are therefore different objects, and passing one as both is refused:
 // that would resize the accumulator between the check on its rows and the
@@ -384,24 +389,24 @@ std::size_t vector_jacobian_product(adjoint_tape<double>& tape,
 // different length from its neighbours and there is nothing to test per row.
 template <class System, class Evaluate>
 std::size_t state_and_parameter_adjoints(
-    active_system<System>& active, const std::vector<double>& state,
-    const adjoint_rows& output_adjoints, Evaluate&& evaluate,
-    adjoint_rows& state_adjoint, adjoint_rows& parameter_adjoint) {
-    using scalar = active_scalar<double>;
+    adjoint_system<System>& active, const std::vector<double>& state,
+    const adjoint_batch& output_adjoints, Evaluate&& evaluate,
+    adjoint_batch& state_adjoint, adjoint_batch& parameter_adjoint) {
+    using scalar = adjoint_scalar<double>;
     adjoint_tape<double>& tape = active.tape();
     const std::vector<scalar*>& parameters = active.parameters;
     const std::size_t n_state = state.size();
     const std::size_t n_parameter = parameters.size();
-    const std::size_t n_seed = output_adjoints.rows();
+    const std::size_t n_adjoint = output_adjoints.size();
 
     if (&state_adjoint == &parameter_adjoint) {
         util::stop("state_and_parameter_adjoints: the state adjoints are "
                    "replaced and the parameter adjoints accumulated, so they "
                    "cannot be the same batch");
     }
-    if (parameter_adjoint.rows() < n_seed) {
+    if (parameter_adjoint.size() < n_adjoint) {
         util::stop("state_and_parameter_adjoints: one row of parameter adjoints "
-                   "per seed, to accumulate into");
+                   "per output, to accumulate into");
     }
     util::check_length(parameter_adjoint.width(), n_parameter);
     // An empty state is a map with no state inputs, not a mistake: the first
@@ -413,12 +418,13 @@ std::size_t state_and_parameter_adjoints(
                    "state is empty and the System lists no parameters");
     }
     if (output_adjoints.empty()) {
-        util::stop("state_and_parameter_adjoints: needs at least one seed");
+        util::stop("state_and_parameter_adjoints: needs at least one output "
+                   "adjoint");
     }
     const std::size_t n_out = output_adjoints.width();
     if (n_out == 0) {
-        util::stop("state_and_parameter_adjoints: a seed must have at least one "
-                   "entry");
+        util::stop("state_and_parameter_adjoints: an output adjoint must have at "
+                   "least one entry");
     }
 
     // Held for the release, the recording and the sweeps. The release comes
@@ -449,8 +455,8 @@ std::size_t state_and_parameter_adjoints(
     }
     tape.registerOutputs(outputs);
 
-    state_adjoint.assign(n_seed, n_state);
-    internal::sweep_each_seed(tape, outputs, output_adjoints,
+    state_adjoint.assign(n_adjoint, n_state);
+    internal::sweep_each_adjoint(tape, outputs, output_adjoints,
                               [&](std::size_t m) -> void {
         for (std::size_t i = 0; i < n_state; ++i) {
             state_adjoint[m][i] = xad::derivative(state_active[i]);
@@ -464,16 +470,16 @@ std::size_t state_and_parameter_adjoints(
 
 // The same transpose where the caller holds a double System rather than an active
 // one and is taking a single recording: the tape and the rebind are made here. A
-// walk taking many hands in the one it holds for its descent, and rebinds once per
+// walk taking many hands in the one it holds for its sweep, and rebinds once per
 // width.
 template <class System, class Evaluate>
-    requires Rebindable<System, active_scalar<double>>
+    requires Rebindable<System, adjoint_scalar<double>>
 std::size_t state_and_parameter_adjoints(
     const System& passive, const std::vector<double>& state,
-    const adjoint_rows& output_adjoints, Evaluate&& evaluate,
-    adjoint_rows& state_adjoint, adjoint_rows& parameter_adjoint) {
+    const adjoint_batch& output_adjoints, Evaluate&& evaluate,
+    adjoint_batch& state_adjoint, adjoint_batch& parameter_adjoint) {
     adjoint_tape<double> tape(false);
-    active_system<System> active{passive, tape};
+    adjoint_system<System> active{passive, tape};
     return state_and_parameter_adjoints(active, state, output_adjoints,
                                         std::forward<Evaluate>(evaluate),
                                         state_adjoint, parameter_adjoint);
@@ -495,11 +501,11 @@ std::size_t state_and_parameter_adjoints(
 // copy cannot have.
 template <class System>
 std::size_t rates_adjoint(
-    active_system<System>& active,
+    adjoint_system<System>& active,
     const std::vector<double>& state, double time,
-    const adjoint_rows& rate_adjoints, adjoint_rows& state_adjoint,
-    adjoint_rows& parameter_adjoint) {
-    using scalar = active_scalar<double>;
+    const adjoint_batch& rate_adjoints, adjoint_batch& state_adjoint,
+    adjoint_batch& parameter_adjoint) {
+    using scalar = adjoint_scalar<double>;
     const std::size_t n_state = state.size();
     auto rates = [&](auto& sys,
                      typename std::vector<scalar>::const_iterator x,

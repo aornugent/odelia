@@ -71,7 +71,7 @@ testthat::test_that("a supplied Jacobian agrees with finite differences and is f
   ca <- ode_counts(an)
   cf <- ode_counts(fd)
   expect_equal(ca[["n_jac"]], ca[["n_steps"]])
-  # The budget from tests/standalone: one evaluation to seed, six per attempt,
+  # The budget from tests/standalone: one evaluation to start, six per attempt,
   # and for the finite-difference Jacobian n = 3 more per accepted step.
   expect_equal(ca[["n_rhs"]], 1 + 6 * (ca[["n_steps"]] + ca[["n_rejections"]]))
   expect_equal(cf[["n_rhs"]], 1 + 6 * (cf[["n_steps"]] + cf[["n_rejections"]]) + 3 * cf[["n_steps"]])
@@ -282,7 +282,7 @@ testthat::test_that("domain_error() rejects the step rather than ending the solv
   expect_error(s$advance_adaptive(c(0, 1)), "over the ceiling")
 })
 
-testthat::test_that("the state can be re-seeded at a new length, and the step size read and set", {
+testthat::test_that("the state can be reset at a new length, and the step size read and set", {
   decay <- function(t, y) -y
   ctrl <- OdeControl$new()
   # Loose enough that a step of 0.125 passes the error estimate: at the default

@@ -130,7 +130,7 @@ The controller's rule is itself a switch, `OdeControl$set_controller()`:
 NEWS for 0.8.0).
 
 To use `method = "rodas"` with your own C++ system, give it either a
-`template<class U> System<U> rebind_from() const` method (a one-liner that copies the
+`template<class U> System<U> rebind() const` method (a one-liner that copies the
 system with its scalar type swapped) so its right-hand side can be
 differentiated for the Jacobian, as the Lorenz example does, or an
 `ode_jacobian(y, t, dydt, J)` method that fills the Jacobian itself -- the
@@ -221,7 +221,7 @@ c(time = s$time(), y = s$state())
 s$counts()
 ```
 
-Between steps `s$set_state(y, time)` re-seeds the state at any length and
+Between steps `s$set_state(y, time)` resets the state at any length and
 `s$set_step_size(h)` carries a step size across it; `s$advance_collect(times)`
 is the output loop of `ode_solve()`, a matrix of states at the times asked for.
 

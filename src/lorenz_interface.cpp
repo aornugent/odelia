@@ -92,8 +92,8 @@ Rcpp::NumericVector System_rates(SEXP system_xp) {
 
 // Solver creation - Lorenz-specific (must know LorenzSystem type). R only ever
 // holds the double solver; gradients build the active replay internally. The
-// method chooses how this solver steps, and `$fit()` replays under it (see
-// Solver_fit_impl for rodas).
+// method chooses how this solver steps, and `$loss_and_gradient()` replays under
+// it (see Solver_loss_and_gradient_impl for rodas).
 // [[Rcpp::export]]
 SEXP Solver_new(SEXP system_xp, SEXP control_xp, std::string method = "rkck") {
   Rcpp::XPtr<SystemType> sys(system_xp);
@@ -178,14 +178,16 @@ Rcpp::List Solver_get_history(SEXP solver_xp) {
 }
 
 // Least-squares loss against observed states and its gradient by reverse mode;
-// Solver_fit_impl says what is replayed and in what order the gradient comes.
+// Solver_loss_and_gradient_impl says what is replayed and in what order the
+// gradient comes.
 // [[Rcpp::export]]
-Rcpp::List Solver_fit(SEXP solver_xp, Rcpp::NumericVector times,
-                      Rcpp::NumericMatrix target, Rcpp::IntegerVector obs_indices,
-                      Rcpp::Nullable<Rcpp::NumericVector> ic = R_NilValue,
-                      Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
-  return odelia::solver::Solver_fit_impl<SystemType>(solver_xp, times, target,
-                                                     obs_indices, ic, params);
+Rcpp::List Solver_loss_and_gradient(
+    SEXP solver_xp, Rcpp::NumericVector schedule, Rcpp::NumericMatrix target,
+    Rcpp::IntegerVector obs_indices,
+    Rcpp::Nullable<Rcpp::NumericVector> initial_state = R_NilValue,
+    Rcpp::Nullable<Rcpp::NumericVector> params = R_NilValue) {
+  return odelia::solver::Solver_loss_and_gradient_impl<SystemType>(
+      solver_xp, schedule, target, obs_indices, initial_state, params);
 }
 
 //-------------------------------------------------------------------------

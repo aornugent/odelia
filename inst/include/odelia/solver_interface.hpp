@@ -138,37 +138,36 @@ inline Rcpp::List Solver_get_history_impl(SEXP solver_xp) {
 // A least-squares loss against observations of the state, and its exact gradient
 // with respect to the System's parameters and/or its initial state.
 //
-// The forward pass replays the schedule `times` records -- the reference run's own
-// step times -- at the parameters and initial state given, keeping its states, so
-// the loss is a function of those inputs alone and not of a step-size controller
-// that would move with them. The loss is sum over observations i and state
-// components j of (y_j(times[obs_indices[i]]) - target(i, j))^2.
+// The forward pass steps `schedule` -- the reference run's own step times -- at
+// the parameters and initial state given, keeping its states, so the loss is a
+// function of those inputs alone and not of a step-size controller that would
+// move with them. The loss is sum over observations i and state components j of
+// (y_j(schedule[obs_indices[i]]) - target(i, j))^2.
 //
-// The gradient is one reverse sweep over that recording, taken as one range per
+// The gradient is one reverse sweep over that recording, taken interval by
 // interval between observed rows: each observation's own term is added to the
 // adjoint at its row, and the sweep carries the sum down to the next one. What
 // arrives at row 0 is dL/dy0; what the sweep accumulates is dL/dtheta.
 //
 // Returns list(loss, gradient) with the gradient's entries in the order the old
 // fitting interface used: the parameters (as the System's ad_parameters() lists
-// them) if `params` was given, then the initial state if `ic` was.
+// them) if `params` was given, then the initial state if `initial_state` was.
 template<typename SystemType>
-inline Rcpp::List Solver_fit_impl(SEXP solver_xp,
-                                  Rcpp::NumericVector times,
-                                  Rcpp::NumericMatrix target,
-                                  Rcpp::IntegerVector obs_indices,
-                                  Rcpp::Nullable<Rcpp::NumericVector> ic,
-                                  Rcpp::Nullable<Rcpp::NumericVector> params) {
-  if (ic.isNull() && params.isNull()) {
-    Rcpp::stop("Must provide at least one of 'ic' or 'params'");
+inline Rcpp::List Solver_loss_and_gradient_impl(
+    SEXP solver_xp, Rcpp::NumericVector schedule, Rcpp::NumericMatrix target,
+    Rcpp::IntegerVector obs_indices,
+    Rcpp::Nullable<Rcpp::NumericVector> initial_state,
+    Rcpp::Nullable<Rcpp::NumericVector> params) {
+  if (initial_state.isNull() && params.isNull()) {
+    Rcpp::stop("Must provide at least one of 'initial_state' or 'params'");
   }
-  const std::size_t n_times = times.size();
+  const std::size_t n_times = schedule.size();
   if (n_times < 2) {
-    Rcpp::stop("'times' must hold the run's start and at least one step");
+    Rcpp::stop("'schedule' must hold the run's start and at least one step");
   }
   for (std::size_t k = 1; k < n_times; ++k) {
-    if (!(times[k] > times[k - 1])) {
-      Rcpp::stop("'times' must be strictly increasing");
+    if (!(schedule[k] > schedule[k - 1])) {
+      Rcpp::stop("'schedule' must be strictly increasing");
     }
   }
   if (target.nrow() != obs_indices.size()) {
@@ -190,79 +189,79 @@ inline Rcpp::List Solver_fit_impl(SEXP solver_xp,
     std::vector<double> pv(p.begin(), p.end());
     sys.set_params(pv.begin());
   }
-  if (ic.isNotNull()) {
-    Rcpp::NumericVector y(ic);
+  if (initial_state.isNotNull()) {
+    Rcpp::NumericVector y(initial_state);
     if (static_cast<std::size_t>(y.size()) != n) {
-      Rcpp::stop("'ic' needs one entry per state variable");
+      Rcpp::stop("'initial_state' needs one entry per state variable");
     }
     std::vector<double> yv(y.begin(), y.end());
-    sys.set_initial_state(yv.begin(), times[0]);
+    sys.set_initial_state(yv.begin(), schedule[0]);
   }
   sys.reset();
   std::vector<double> y0(n);
   sys.ode_state(y0.begin());
 
-  std::vector<ode::instruction> program(n_times);
-  program[0] = {times[0], std::numeric_limits<double>::quiet_NaN()};
+  std::vector<ode::schedule_row> rows(n_times);
+  rows[0] = {schedule[0], std::numeric_limits<double>::quiet_NaN()};
   for (std::size_t k = 1; k < n_times; ++k) {
-    program[k] = {times[k], times[k] - times[k - 1]};
+    rows[k] = {schedule[k], schedule[k] - schedule[k - 1]};
   }
 
   // Under the solver's own stepper where that stepper can be swept, so the loss
   // is of the integrator the caller chose. RODAS cannot, so a stiff solver's
-  // schedule is replayed under Cash-Karp.
+  // schedule is stepped under Cash-Karp.
   const ode::Method method = solver->method() == ode::Method::rodas
                                ? ode::Method::rkck : solver->method();
   ode::Solver<SystemType> replay(sys, solver->control(), method);
   replay.set_collect(false);
   replay.set_keep_states(true);
-  replay.set_state(y0, times[0]);
-  replay.advance_recorded(program);
+  replay.set_state(y0, schedule[0]);
+  replay.advance_schedule(rows);
   const auto rec = replay.recording();
   // One row per scheduled step, or a step was subdivided and its row no longer
   // describes one Runge-Kutta step -- which the sweep would transpose as one.
   if (rec.size() != n_times) {
-    Rcpp::stop("the replay did not take the schedule's steps one row each, so it "
+    Rcpp::stop("the run did not take the schedule's steps one row each, so it "
                "cannot be swept");
   }
 
   // Each observed row's term, summed where two observations share a row.
-  std::map<std::size_t, std::vector<double>> seeds;
+  std::map<std::size_t, std::vector<double>> adjoints;
   double loss = 0.0;
   for (int i = 0; i < obs_indices.size(); ++i) {
     const int idx = obs_indices[i];
     if (idx < 1 || static_cast<std::size_t>(idx) > n_times) {
-      Rcpp::stop("'obs_indices' must index into 'times' (1-based)");
+      Rcpp::stop("'obs_indices' must index into 'schedule' (1-based)");
     }
     const std::size_t row = static_cast<std::size_t>(idx - 1);
-    std::vector<double>& seed = seeds[row];
-    seed.resize(n, 0.0);
+    std::vector<double>& adjoint = adjoints[row];
+    adjoint.resize(n, 0.0);
     for (std::size_t j = 0; j < n; ++j) {
       const double diff = rec[row].state[j] - target(i, j);
       loss += diff * diff;
-      seed[j] += 2.0 * diff;
+      adjoint[j] += 2.0 * diff;
     }
   }
 
-  ode::adjoint_rows lambda(1, n);
-  ode::adjoint_rows parameter_adjoint(1, n_par);
-  auto it = seeds.rbegin();
+  ode::adjoint_batch lambda(1, n);
+  ode::adjoint_batch parameter_adjoint(1, n_par);
+  auto it = adjoints.rbegin();
   std::size_t hi = it->first;
   for (std::size_t j = 0; j < n; ++j) lambda[0][j] = it->second[j];
-  for (++it; it != seeds.rend(); ++it) {
-    replay.solve_adjoint(lambda, parameter_adjoint, it->first, hi);
+  for (++it; it != adjoints.rend(); ++it) {
+    replay.sweep_adjoint(lambda, parameter_adjoint, it->first, hi);
     for (std::size_t j = 0; j < n; ++j) lambda[0][j] += it->second[j];
     hi = it->first;
   }
   if (hi > 0) {
-    replay.solve_adjoint(lambda, parameter_adjoint, 0, hi);
+    replay.sweep_adjoint(lambda, parameter_adjoint, 0, hi);
   }
 
   std::vector<double> gradient;
   if (params.isNotNull()) {
     for (std::size_t q = 0; q < n_par; ++q) gradient.push_back(parameter_adjoint[0][q]);
   }
-  if (ic.isNotNull()) {
+  if (initial_state.isNotNull()) {
     for (std::size_t j = 0; j < n; ++j) gradient.push_back(lambda[0][j]);
   }
   return Rcpp::List::create(Rcpp::Named("loss") = loss,

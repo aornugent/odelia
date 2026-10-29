@@ -9,7 +9,7 @@
 //   1. Solves the equilibrium  f(y*, theta) = 0  by damped Newton's method,
 //      reusing the state Jacobian J = df/dy the implicit stepper uses
 //      (ode_jacobian.hpp: the system's own ode_jacobian() hook, or forward-mode
-//      AD on a rebind_from() twin) and the dense LU (ode_linalg.hpp).
+//      AD on a rebind() twin) and the dense LU (ode_linalg.hpp).
 //   2. Computes the parameter sensitivity of the fixed point by the implicit
 //      function theorem,   dy*/dtheta = - (df/dy)^-1 (df/dtheta),   reusing the
 //      LU factorization of df/dy already formed at the solution and the
@@ -60,7 +60,7 @@ public:
   using state_type = std::vector<value_type>;
 
   // Requires a state Jacobian from either route (an ode_jacobian() hook, or a
-  // rebind_from() hook + non-active scalar). Parameter sensitivity needs the AD
+  // rebind() hook + non-active scalar). Parameter sensitivity needs the AD
   // route plus the ad_parameters() hook. Callers gate on these; the class
   // instantiates regardless.
   static constexpr bool supported = Jacobian<System>::supported;
@@ -102,7 +102,7 @@ public:
                   "tape by attaching sensitivity() as a supplied derivative.");
     if constexpr (!supported) {
       util::stop("Steady-state solve needs a Jacobian: the system must provide "
-                 "an ode_jacobian() hook, or a rebind_from() hook and a non-active "
+                 "an ode_jacobian() hook, or a rebind() hook and a non-active "
                  "scalar type.");
       return Result();
     } else {
@@ -297,14 +297,14 @@ public:
 
   // Self-check of the ad_parameters() contract at the equilibrium: the largest
   // relative discrepancy, over every entry, between the forward-AD df/dtheta
-  // and a central difference of f taken through rebind_from(). The difference
+  // and a central difference of f taken through rebind(). The difference
   // perturbs a parameter on a copy of the System and then *rebuilds* the System
   // from that copy's values, so anything the constructor derives from the
-  // parameter is derived afresh; the AD column, which seeds the parameter in
-  // place, sees none of that. A System whose rates read every parameter live
-  // agrees to finite-difference accuracy (~1e-6 at the default step); one with
-  // a cached derived quantity returns a discrepancy of order one. Costs two
-  // rebinds and two rate evaluations per parameter.
+  // parameter is derived afresh; the AD column, which sets the parameter's
+  // direction in place, sees none of that. A System whose rates read every
+  // parameter live agrees to finite-difference accuracy (~1e-6 at the default
+  // step); one with a cached derived quantity returns a discrepancy of order
+  // one. Costs two rebinds and two rate evaluations per parameter.
   double check_parameters(const System& system, double rel_step = 1e-6) {
     if (!solved) {
       util::stop("check_parameters() needs a converged solve() first.");
@@ -318,7 +318,7 @@ public:
       std::vector<value_type> Jp;
       jac.compute_params(system, y_star, t_eval, Jp, n_params);
 
-      System probe = system.template rebind_from<value_type>();
+      System probe = system.template rebind<value_type>();
       std::vector<value_type*> params = probe.ad_parameters();
       state_type f_plus(n), f_minus(n);
       double worst = 0.0;
@@ -327,10 +327,10 @@ public:
         const double h =
             rel_step * std::max(std::fabs(util::to_passive(p0)), 1.0);
         *params[c] = p0 + value_type(h);
-        System up = probe.template rebind_from<value_type>();
+        System up = probe.template rebind<value_type>();
         ode::derivs(up, y_star, f_plus, t_eval);
         *params[c] = p0 - value_type(h);
-        System down = probe.template rebind_from<value_type>();
+        System down = probe.template rebind<value_type>();
         ode::derivs(down, y_star, f_minus, t_eval);
         *params[c] = p0;
         for (size_t r = 0; r < n; ++r) {

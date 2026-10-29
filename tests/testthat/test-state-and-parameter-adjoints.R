@@ -1,5 +1,5 @@
 # Tests for state_and_parameter_adjoints -- one recording over a System's state
-# followed by its parameters, swept once per seed and split back along the same
+# followed by its parameters, swept once per output and split back along the same
 # seam. The two halves are treated differently on purpose: the state adjoints are
 # replaced and the parameter adjoints accumulated.
 #
@@ -22,7 +22,7 @@ compile_sap_interface <- function() {
     #include <XAD/XAD.hpp>
     #include <odelia/adjoint.hpp>
 
-    using adouble = odelia::ode::active_scalar<double>;
+    using adouble = odelia::ode::adjoint_scalar<double>;
 
     static int tiny_rebinds = 0;
 
@@ -52,7 +52,7 @@ compile_sap_interface <- function() {
       template <typename> friend struct TinySystem;
 
       template <class U>
-      TinySystem<U> rebind_from() const {
+      TinySystem<U> rebind() const {
         ++tiny_rebinds;
         TinySystem<U> out;
         out.a = U(odelia::util::to_passive(a));
@@ -69,9 +69,9 @@ compile_sap_interface <- function() {
     // [[Rcpp::export]]
     Rcpp::List sap_products(std::vector<double> state,
                             std::vector<double> prior, int n_calls, int width) {
-      const odelia::ode::adjoint_rows seeds = odelia::ode::adjoint_rows::all_rows(2);
-      odelia::ode::adjoint_rows state_adjoint;
-      odelia::ode::adjoint_rows parameter_adjoint(2, prior.size());
+      const odelia::ode::adjoint_batch adjoints = odelia::ode::adjoint_batch::identity(2);
+      odelia::ode::adjoint_batch state_adjoint;
+      odelia::ode::adjoint_batch parameter_adjoint(2, prior.size());
       for (std::size_t m = 0; m < 2; ++m) {
         std::copy(prior.begin(), prior.end(), parameter_adjoint[m].begin());
       }
@@ -80,7 +80,7 @@ compile_sap_interface <- function() {
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
       tiny_rebinds = 0;
-      odelia::ode::active_system<TinySystem<double>> active{system, tape};
+      odelia::ode::adjoint_system<TinySystem<double>> active{system, tape};
       for (int k = 0; k < n_calls; ++k) {
         auto evaluate = [&](TinySystem<adouble>& sys,
                             std::vector<adouble>::const_iterator x,
@@ -92,12 +92,12 @@ compile_sap_interface <- function() {
           y[1] = x[0] * x[1] + sys.square;
         };
         recording = double(odelia::ode::state_and_parameter_adjoints(
-            active, state, seeds, evaluate, state_adjoint,
+            active, state, adjoints, evaluate, state_adjoint,
             parameter_adjoint));
       }
       return Rcpp::List::create(
-          Rcpp::_["state"] = Rcpp::wrap(state_adjoint.to_rows()),
-          Rcpp::_["parameter"] = Rcpp::wrap(parameter_adjoint.to_rows()),
+          Rcpp::_["state"] = Rcpp::wrap(state_adjoint.to_vectors()),
+          Rcpp::_["parameter"] = Rcpp::wrap(parameter_adjoint.to_vectors()),
           Rcpp::_["rebinds"] = tiny_rebinds,
           Rcpp::_["recording"] = recording);
     }
@@ -107,12 +107,12 @@ compile_sap_interface <- function() {
     // fresh, and rows that are wrong but finite if it is not.
     // [[Rcpp::export]]
     Rcpp::List sap_after_wider(std::vector<double> state, int first_width) {
-      const odelia::ode::adjoint_rows seeds = odelia::ode::adjoint_rows::all_rows(2);
-      odelia::ode::adjoint_rows state_adjoint;
-      odelia::ode::adjoint_rows parameter_adjoint(2, 2);
+      const odelia::ode::adjoint_batch adjoints = odelia::ode::adjoint_batch::identity(2);
+      odelia::ode::adjoint_batch state_adjoint;
+      odelia::ode::adjoint_batch parameter_adjoint(2, 2);
       xad::adj<double>::tape_type tape(false);
       TinySystem<double> system;
-      odelia::ode::active_system<TinySystem<double>> active{system, tape};
+      odelia::ode::adjoint_system<TinySystem<double>> active{system, tape};
 
       for (int k = 0; k < 2; ++k) {
         const int width = (k == 0) ? first_width : 1;
@@ -128,16 +128,16 @@ compile_sap_interface <- function() {
         if (k == 1) {
           parameter_adjoint.assign(2, 2);
         }
-        odelia::ode::state_and_parameter_adjoints(active, state, seeds,
+        odelia::ode::state_and_parameter_adjoints(active, state, adjoints,
                                                   evaluate, state_adjoint,
                                                   parameter_adjoint);
       }
-      return Rcpp::List::create(Rcpp::_["state"] = Rcpp::wrap(state_adjoint.to_rows()),
-                                Rcpp::_["parameter"] = Rcpp::wrap(parameter_adjoint.to_rows()));
+      return Rcpp::List::create(Rcpp::_["state"] = Rcpp::wrap(state_adjoint.to_vectors()),
+                                Rcpp::_["parameter"] = Rcpp::wrap(parameter_adjoint.to_vectors()));
     }
 
     // The two shapes it still refuses, and the one it no longer can: 0 gives one
-    // accumulator row against two seeds, 1 gives a batch of the wrong width, and
+    // accumulator row against two outputs, 1 gives a batch of the wrong width, and
     // 2 hands the same batch in for both halves. A batch whose rows disagree with
     // each other is not among them -- one width covers every row, so that shape
     // cannot be built.
@@ -145,9 +145,9 @@ compile_sap_interface <- function() {
     void sap_refused(int which) {
       TinySystem<double> system;
       std::vector<double> state{5.0, 7.0};
-      const odelia::ode::adjoint_rows seeds = odelia::ode::adjoint_rows::all_rows(2);
-      odelia::ode::adjoint_rows state_adjoint;
-      odelia::ode::adjoint_rows parameter_adjoint;
+      const odelia::ode::adjoint_batch adjoints = odelia::ode::adjoint_batch::identity(2);
+      odelia::ode::adjoint_batch state_adjoint;
+      odelia::ode::adjoint_batch parameter_adjoint;
       if (which == 0) {
         parameter_adjoint.assign(1, 2);
       } else if (which == 1) {
@@ -164,10 +164,10 @@ compile_sap_interface <- function() {
       };
 
       xad::adj<double>::tape_type tape(false);
-      odelia::ode::active_system<TinySystem<double>> active{system, tape};
-      odelia::ode::adjoint_rows& out =
+      odelia::ode::adjoint_system<TinySystem<double>> active{system, tape};
+      odelia::ode::adjoint_batch& out =
           (which == 2) ? parameter_adjoint : state_adjoint;
-      odelia::ode::state_and_parameter_adjoints(active, state, seeds,
+      odelia::ode::state_and_parameter_adjoints(active, state, adjoints,
                                                 evaluate, out,
                                                 parameter_adjoint);
     }', verbose = FALSE)
@@ -210,8 +210,8 @@ testthat::test_that("the parameter half accumulates and the state half does not"
   testthat::expect_equal(rows(thrice$state), rows(once$state))
 
   # And what the caller had in the accumulator is added to, not replaced.
-  seeded <- sap_products(c(5, 7), c(10, 20), 1L, 1L)
-  testthat::expect_equal(rows(seeded$parameter),
+  accumulated <- sap_products(c(5, 7), c(10, 20), 1L, 1L)
+  testthat::expect_equal(rows(accumulated$parameter),
                          rows(once$parameter) +
                            matrix(c(10, 10, 20, 20), nrow = 2))
 })
@@ -241,7 +241,7 @@ testthat::test_that("one active System serves a whole walk, and no recording inh
 testthat::test_that("state_and_parameter_adjoints refuses the shapes it cannot honour", {
   compile_sap_interface()
 
-  # One accumulator row against two seeds: the second seed would have nowhere to
+  # One accumulator row against two outputs: the second output would have nowhere to
   # add to.
   testthat::expect_error(sap_refused(0L), "one row of parameter adjoints")
 

@@ -21,40 +21,42 @@ namespace odelia {
 // THE INPUT IS BORROWED, and must outlive the record it is handed to. Held by
 // reference because copying an active scalar is not free: the copy registers a
 // tape slot and records a statement, for a value that is only ever read: n
-// inputs would cost n of those per row.
+// inputs would cost n of those per value supplied.
 template <class S>
 struct input_and_derivative {
   const S& input;
   double derivative;
 };
 
-// What a record could not record, beside the value it wrote. A row that cannot be
-// recorded is not an error here: the value is still the value, and whether a
-// consumer can go on without the row is the consumer's to decide -- one output's
-// rows can go missing while another's survive, and a stop takes both.
-struct record_report {
+// What a record could not record, beside the value it wrote. A partial that
+// cannot be recorded is not an error here: the value is still the value, and
+// whether a consumer can go on without the partial is the consumer's to decide
+// -- one output's partials can go missing while another's survive, and a stop
+// takes both.
+struct supply_report {
   bool whole = true;
-  // Which input's row is missing, and what was wrong with it. Meaningless where
-  // `whole`.
+  // Which input's partial is missing, and what was wrong with it. Meaningless
+  // where `whole`.
   std::size_t at = 0;
   std::string why;
 };
 
-// The scalar that carries an adjoint, so a row set can be a statement's operand
-// run. A direction has no tape to hold one and takes the arithmetic below.
+// The scalar that carries an adjoint, so a set of partials can be a statement's
+// operand run. A direction has no tape to hold one and takes the arithmetic
+// below.
 template <class S>
 concept CarriesAdjoint = xad::ExprTraits<S>::isReverse;
 
 // Cost, in tape statements walked per solve of a submodel of T statements with
-// m outputs, read by a consumer sweeping k seeds:
+// m outputs, read by a consumer sweeping k of its own outputs:
 //
 //   recorded inline on the consumer's tape   T + kT
 //   supplied here, nothing recorded          m + km
 //
-// The second carries no T, so what a supplied row costs does not depend on how
-// long the submodel is. Recording the submodel on a tape of its own and sweeping
-// it m times to extract a dense block pays only when the submodel has fewer
-// outputs than the consumer has seeds.
+// The second carries no T, so what a supplied partial costs does not depend on
+// how long the submodel is. Recording the submodel on a tape of its own and
+// sweeping it m times to extract a dense block pays only when the submodel has
+// fewer outputs than the consumer sweeps.
 //
 // `into` receives `value` carrying the derivatives supplied against it: the
 // number is `value` itself, and its derivative with respect to each input is the
@@ -63,22 +65,23 @@ concept CarriesAdjoint = xad::ExprTraits<S>::isReverse;
 // This is how a quantity computed away from the tape gets onto it -- a
 // root-find, a submodel's own solve, anything whose derivative is known by some
 // means other than recording the steps that produced it. At a plain double the
-// rows vanish and this is the value.
+// partials vanish and this is the value.
 //
-// ONE STATEMENT, whatever the row count. A tape statement is a left-hand side
-// over a run of operations, so n rows are n operations under one lhs -- not the
-// n recorded assignments that writing the sum out as `out += d * (x -
-// to_passive(x))` costs.
+// ONE STATEMENT, whatever the count of partials. A tape statement is a
+// left-hand side over a run of operations, so n partials are n operations under
+// one lhs -- not the n recorded assignments that writing the sum out as
+// `out += d * (x - to_passive(x))` costs.
 //
-// NOTHING PARTIAL. Every row is tested before any is recorded, because a value
-// carrying some of its rows is a channel that has gone missing with every number
-// still finite -- which is worse than no rows at all, since a consumer told the
-// rows are absent can carry the value as a constant and say so.
+// ALL OR NOTHING. Every partial is tested before any is recorded, because a
+// value carrying some of its partials is a channel that has gone missing with
+// every number still finite -- which is worse than no partials at all, since a
+// consumer told the partials are absent can carry the value as a constant and
+// say so.
 //
 // The report is the return, so a caller cannot take the number without being
 // handed the reading of it.
 template <class S>
-[[nodiscard]] record_report record_with_derivatives(
+[[nodiscard]] supply_report supply_derivatives(
     double value, std::span<const input_and_derivative<S>> against, S& into) {
   for (std::size_t i = 0; i < against.size(); ++i) {
     // Either half being non-finite poisons the VALUE and not only what is
@@ -101,18 +104,18 @@ template <class S>
   // the transpose, and carrying it costs a tape edge the sweep then walks.
   if constexpr (CarriesAdjoint<S>) {
     using tape_type = typename S::tape_type;
-    // ⚠️ THE ORDER IS THE VALUE, THEN THE ROWS, THEN THE CLOSE, and each step is
-    // load-bearing. A statement's operations are everything pushed since the last
-    // left-hand side, so anything that pushes between the first row and the close
-    // claims them -- which is why every row is tested above rather than here.
-    // `registerOutput` is a no-op on a value that already holds a slot, leaving
-    // the rows for whatever statement closes next, so the destination is built
-    // here and moved out.
+    // ⚠️ THE ORDER IS THE VALUE, THEN THE ROWS, THEN THE CLOSE, and each step
+    // is load-bearing. A statement's operations are everything pushed since the
+    // last left-hand side, so anything that pushes between the first partial
+    // and the close claims them -- which is why every partial is tested above
+    // rather than here. `registerOutput` is a no-op on a value that already
+    // holds a slot, leaving the partials for whatever statement closes next, so
+    // the destination is built here and moved out.
     //
-    // Pushed one row at a time rather than gathered first: operations accumulate
-    // until the left-hand side closes over them, so the run is the same run and
-    // the two scratch arrays a gather needs are two allocations per call at a
-    // rate of millions.
+    // Pushed one partial at a time rather than gathered first: operations
+    // accumulate until the left-hand side closes over them, so the run is the
+    // same run and the two scratch arrays a gather needs are two allocations
+    // per call at a rate of millions.
     S out = value;
     if (tape_type* tape = tape_type::getActive()) {
       for (const input_and_derivative<S>& term : against) {
@@ -121,7 +124,7 @@ template <class S>
         }
         // A passive input holds no slot, and the sweep indexes the slot it is
         // pushed without a bounds check, so pushing one would corrupt memory
-        // rather than raise. It has no row to carry either way.
+        // rather than raise. It has no partial to carry either way.
         const typename tape_type::slot_type slot = term.input.getSlot();
         if (slot == tape_type::INVALID_SLOT) {
           continue;
@@ -188,8 +191,8 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
     const S corr = F(S(y_star)) / dFdy;
     corrections.push_back({corr, -1.0});
     S out;
-    const record_report report =
-        record_with_derivatives<S>(y_star, corrections, out);
+    const supply_report report =
+        supply_derivatives<S>(y_star, corrections, out);
     if (!report.whole) {
       util::stop("implicit_value: " + report.why);
     }
@@ -206,14 +209,14 @@ S implicit_value(double y_star, double dFdy, Residual&& F) {
 // it asks for. This form sweeps the residual ONCE, here, keeps the numbers that
 // fall out, and rewinds. The consumer sees one statement.
 //
-// `inputs` are the values whose rows are wanted, in whatever shape they are held
-// -- `visit_active` opens a scalar, a container, a pointer, or anything declaring
-// `for_each_active`. They are the residual's own inputs, so a caller hands over
-// what it already holds rather than assembling a list.
+// `inputs` are the values whose partials are wanted, in whatever shape they are
+// held -- `visit_active` opens a scalar, a container, a pointer, or anything
+// declaring `for_each_active`. They are the residual's own inputs, so a caller
+// hands over what it already holds rather than assembling a list.
 //
 // ⚠️ A SHAPE `visit_active` DOES NOT OPEN IS SKIPPED IN SILENCE (see visit_active),
 // AND THE COLUMN IT COSTS DOES NOT COME BACK ZERO. The sweep below deposits the
-// missing row on that input's slot, and nothing here can reach it to clear it:
+// missing partial on that input's slot, and nothing here can reach it to clear it:
 // XAD's `clearDerivativesAfter` reaches only slots created after the mark, and an
 // input predates it by construction. So the consumer's own sweep adds to what was
 // left. Nothing here can detect it either, so no count is handed back: see
@@ -228,7 +231,7 @@ template <class S, class Residual, class First, class... Rest>
 S implicit_value(double y_star, double dFdy, Residual&& F, const First& first,
                  const Rest&... rest) {
   // A direction has no tape to rewind, and at a double there is nothing to
-  // record at all: both take the arithmetic form, which carries the same rows
+  // record at all: both take the arithmetic form, which carries the same partials
   // where it has any.
   if constexpr (!CarriesAdjoint<S>) {
     return implicit_value<S>(y_star, dFdy, std::forward<Residual>(F));
@@ -254,7 +257,7 @@ S implicit_value(double y_star, double dFdy, Residual&& F, const First& first,
     // ⚠️ THE INPUTS' ADJOINTS ARE HELD AND PUT BACK, NOT ZEROED. The sweep below
     // runs on the CALLER'S tape and ACCUMULATES, so a slot the caller has already
     // swept something into arrives non-zero -- reading it afterwards would report
-    // the caller's own answer as this residual's row, and zeroing it afterwards
+    // the caller's own answer as this residual's partial, and zeroing it afterwards
     // would destroy the caller's.
     //
     // Gathered before the sweep for the same reason: the slot list has to be the
@@ -279,8 +282,8 @@ S implicit_value(double y_star, double dFdy, Residual&& F, const First& first,
       xad::derivative(corr) = 1.0;
       tape->computeAdjointsTo(mark);
     }
-    // Rewound BEFORE the rows are written, so the statement closed below carries
-    // them rather than the residual's own.
+    // Rewound BEFORE the partials are written, so the statement closed below
+    // carries them rather than the residual's own.
     tape->resetTo(mark);
     S out = y_star;
     // Read and cleared through the TAPE, by slot, so an input can arrive const --
@@ -290,12 +293,12 @@ S implicit_value(double y_star, double dFdy, Residual&& F, const First& first,
       // own adjoint goes back.
       const double adj = tape->derivative(slots[i]);
       tape->derivative(slots[i]) = held[i];
-      const double row = -adj;
-      if (row == 0.0) {
+      const double partial = -adj;
+      if (partial == 0.0) {
         continue;
       }
       // -(dF/dp)/(dF/dy) is the theorem; dF/dy divided the residual above.
-      tape->pushAll(&row, &slots[i], 1u);
+      tape->pushAll(&partial, &slots[i], 1u);
     }
     tape->registerOutput(out);
     return out;

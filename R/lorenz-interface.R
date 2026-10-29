@@ -101,16 +101,18 @@ Lorenz_Solver <- R6::R6Class(
         tibble::remove_rownames()
     },
 
-    #' @description Set the calibration target for \code{$fit()}.
-    #' @param times Numeric vector: the schedule \code{$fit()} replays, one entry
-    #'   per step. Normally a reference run's \code{$times()}, so each fit takes
-    #'   the same steps and the loss is a smooth function of the inputs.
+    #' @description Set the calibration target for
+    #'   \code{$loss_and_gradient()}.
+    #' @param schedule Numeric vector: the step times
+    #'   \code{$loss_and_gradient()} replays, one entry per step. Normally a
+    #'   reference run's \code{$times()}, so each evaluation takes the same steps
+    #'   and the loss is a smooth function of the inputs.
     #' @param target Numeric matrix of observed states, one row per entry of
     #'   \code{obs_indices} and one column per state variable.
-    #' @param obs_indices Integer indices (1-based) into \code{times} at which
+    #' @param obs_indices Integer indices (1-based) into \code{schedule} at which
     #'   each row of \code{target} was observed.
-    set_target = function(times, target, obs_indices) {
-      private$target <- list(times = as.numeric(times),
+    set_target = function(schedule, target, obs_indices) {
+      private$target <- list(schedule = as.numeric(schedule),
                              target = as.matrix(target),
                              obs_indices = as.integer(obs_indices))
       invisible(self)
@@ -121,17 +123,20 @@ Lorenz_Solver <- R6::R6Class(
     #'   replayed under this solver's \code{method}, except that a
     #'   \code{"rodas"} solver's is replayed under \code{"rkck"}: the
     #'   Rosenbrock stepper cannot be swept.
-    #' @param ic Initial state to fit from, or \code{NULL} to keep the system's.
-    #' @param params Parameters to fit at, or \code{NULL} to keep the system's.
+    #' @param initial_state Initial state to evaluate at, or \code{NULL} to keep
+    #'   the system's.
+    #' @param params Parameters to evaluate at, or \code{NULL} to keep the
+    #'   system's.
     #' @return A list with \code{loss} (sum of squared differences) and
-    #'   \code{gradient}:
-    #'   d(loss)/d(params), then d(loss)/d(ic), for whichever were given.
-    fit = function(ic = NULL, params = NULL) {
+    #'   \code{gradient}: d(loss)/d(params), then d(loss)/d(initial_state), for
+    #'   whichever were given.
+    loss_and_gradient = function(initial_state = NULL, params = NULL) {
       if (is.null(private$target)) {
-        stop("Must call set_target() before fit()")
+        stop("Must call set_target() before loss_and_gradient()")
       }
       t <- private$target
-      Solver_fit(self$ptr, t$times, t$target, t$obs_indices, ic, params)
+      Solver_loss_and_gradient(self$ptr, t$schedule, t$target, t$obs_indices,
+                               initial_state, params)
     }
   ),
   private = list(

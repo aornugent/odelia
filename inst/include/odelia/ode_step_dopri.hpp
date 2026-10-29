@@ -98,9 +98,9 @@ public:
     } else {
       util::stop("Substepping needs a System with a subsystem");
     }
-    // The seventh evaluation, in the row's `end_slot`: see solved_row.
+    // The seventh evaluation, at the row's end_stage: see solved_row.
     if constexpr (SolvesForValues<System>) {
-      ode::derivs(system, y, k[6], time + h, solved, end_slot);
+      ode::derivs(system, y, k[6], time + h, solved, end_stage);
     } else {
       ode::derivs(system, y, k[6], time + h);
     }
@@ -113,22 +113,22 @@ public:
     }
   }
 
-  // The step transposed, for as many seeds as are handed in; Step::step_adjoint
-  // says what the arguments are. The seventh evaluation is not recorded: the
-  // state the step ends at does not depend on it, only the error estimate and
-  // the dense output do.
-  void step_adjoint(active_system<System>& active,
+  // The step transposed, for as many output adjoints as are handed in;
+  // Step::step_adjoint says what the arguments are. The seventh evaluation is
+  // not recorded: the state the step ends at does not depend on it, only the
+  // error estimate and the dense output do.
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1,
                     double time, double step_size,
-                    const state_type& y, const adjoint_rows& lambda_out,
-                    adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint,
+                    const state_type& y, const adjoint_batch& lambda_out,
+                    adjoint_batch& lambda_in, adjoint_batch& parameter_adjoint,
                     const subsystem_substeps* substeps = nullptr);
-  void step_adjoint(active_system<System>& active,
+  void step_adjoint(adjoint_system<System>& active,
                     const solved_row<System>& solved,
                     double time, double step_size, const state_type& y,
-                    const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
-                    adjoint_rows& parameter_adjoint) {
+                    const adjoint_batch& lambda_out, adjoint_batch& lambda_in,
+                    adjoint_batch& parameter_adjoint) {
     step_adjoint(active, solved, nullptr, time, step_size, y, lambda_out,
                  lambda_in, parameter_adjoint);
   }
@@ -270,7 +270,7 @@ private:
 
   // The tableau as SubsystemSubsteps reads it: stage 5 is at t + h, a step
   // carries seven rate vectors, and the error reads the seventh, at the end.
-  static constexpr int stage_at_end = 5;
+  static constexpr int last_stage = 5;
   static constexpr int stage_rates = 7;
   static constexpr bool error_reads_end_rates = true;
   static constexpr double stage_fraction(int i) {
@@ -342,19 +342,19 @@ private:
 // from y, and the parameter rows alongside it: one recording of the step's six
 // rate evaluations and the combination closing them, as Step::step_adjoint.
 template <class System>
-void DopriStep<System>::step_adjoint(active_system<System>& active,
+void DopriStep<System>::step_adjoint(adjoint_system<System>& active,
                                      const solved_row<System>& solved,
                                      const carried_rates<System>* k1,
                                      double time, double step_size,
                                      const state_type& y,
-                                     const adjoint_rows& lambda_out,
-                                     adjoint_rows& lambda_in,
-                                     adjoint_rows& parameter_adjoint,
+                                     const adjoint_batch& lambda_out,
+                                     adjoint_batch& lambda_in,
+                                     adjoint_batch& parameter_adjoint,
                                      const subsystem_substeps* substeps) {
-  using scalar = active_scalar<double>;
+  using scalar = adjoint_scalar<double>;
   const double h = step_size;
   if (lambda_out.empty()) {
-    util::stop("step_adjoint: needs at least one seed");
+    util::stop("step_adjoint: needs at least one output adjoint");
   }
   util::check_length(y.size(), size);
 
@@ -368,7 +368,7 @@ void DopriStep<System>::step_adjoint(active_system<System>& active,
     bool k1_loaded = false;
     if constexpr (SolvesForValues<System>) {
       if (k1 != nullptr) {
-        ode::derivs(sys, y_start, rate[0], k1->time, k1->row, end_slot);
+        ode::derivs(sys, y_start, rate[0], k1->time, k1->row, end_stage);
         k1_loaded = true;
       }
     }

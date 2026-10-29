@@ -18,7 +18,7 @@
 // through the same adaptive loop.
 //
 // The Jacobian J = df/dy comes from the System's own ode_jacobian() hook when it
-// has one, else by forward-mode AD on a rebind_from()-able system (ode_jacobian.hpp).
+// has one, else by forward-mode AD on a rebind()-able system (ode_jacobian.hpp).
 // The time derivative df/dt is a finite difference, because the System stores
 // time as a plain double; a system declaring ode_autonomous() is not asked for
 // it. Both are formed once per (t_n, y_n) and kept across a retry of the same
@@ -40,7 +40,7 @@ public:
   using state_type = std::vector<value_type>;
 
   // True when a Jacobian can be had: the system's own hook, or the exact-AD
-  // route for a rebind_from()-able system on the passive double solver. False for
+  // route for a rebind()-able system on the passive double solver. False for
   // nested AD types until that path lands.
   static constexpr bool supported = Jacobian<System>::supported;
 
