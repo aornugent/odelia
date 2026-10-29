@@ -193,12 +193,17 @@ using solved_values_t = typename solved_values<System>::type;
 // The extent is one rate evaluation, which is what `derivs` is. A walk that hands
 // over nothing opens no extent, so a reload out of band cannot read a record and a
 // record cannot complete a state it was not taken at.
+//
+// `slot` is the evaluation's place in its step's row (see solved_row). The slot
+// and the time together name an evaluation, which the time alone does not: the
+// stage at t + h and the step's end share a time but not a state. A System that
+// reads another run's recording finds the same evaluation there by both.
 template <typename System>
 concept SolvesForValues =
   requires(System s, solved_values_t<System>& into,
-           const solved_values_t<System>& from) {
-    s.store_solved(into);
-    s.load_solved(from);
+           const solved_values_t<System>& from, std::size_t slot) {
+    s.store_solved(into, slot);
+    s.load_solved(from, slot);
     s.end_solved();
   };
 
@@ -260,23 +265,24 @@ inline const char* method_name(Method m) {
 // forward walk, the sweep and the record (step_record::solved) all have to agree
 // on the shape.
 //
-// SIX AND NOT FIVE. Five are the stages after the first; the sixth is the
-// evaluation at the state the step ends at, which first-same-as-last hands the
+// SIX AND NOT FIVE. Five are the stages after the first; the sixth, `end_slot`, is
+// the evaluation at the state the step ends at, which first-same-as-last hands the
 // next step as its own k1. The first stage has no entry: it is carried from the
 // step before or derived afresh, and step_record::k1_time says which. A SWEEP
 // reads 0..4 for its stages and, where the run carried k1 over, the sixth entry
 // of the step before (see carried_rates) -- and a FORWARD replay cannot
 // re-derive it at all, because re-deriving is exactly what it is replaying to
 // avoid, and a step whose k1 was re-derived is wrong at first order in h.
+inline constexpr std::size_t end_slot = 5;
 template <class System>
-using solved_row = std::array<solved_values_t<System>, 6>;
+using solved_row = std::array<solved_values_t<System>, end_slot + 1>;
 
 // A step's first rates where first-same-as-last carried them from the step
 // before: that step's sixth evaluation, the row it was taken in and the time it
 // ran at (step_record::k1_time says why that time is its own).
 template <class System>
 struct carried_rates {
-  const solved_values_t<System>& row;
+  const solved_row<System>& row;
   double time;
 };
 
@@ -317,7 +323,7 @@ struct step_record : instruction {
   bool subdivided = false;
 
   // Where this step's first rates came from. First-same-as-last hands a step the
-  // sixth evaluation of the step before, taken in that row's `solved[5]` at the
+  // sixth evaluation of the step before, taken in that row's `end_slot` at the
   // time it ran at, and that time is kept here: fl(t + h) is not always the time
   // the row below records, which a pinned interval or a replay sets exactly. NaN
   // where the run derived the rates afresh instead -- at the run's start, after
@@ -582,11 +588,12 @@ void derivs(T& obj, const StateType& y, StateType& dydt,
 // and has nothing to fail at.
 template <class System, class Values>
 struct solved_scope {
-  solved_scope(System& system, Values& values) : system_(system) {
+  solved_scope(System& system, Values& values, std::size_t slot)
+      : system_(system) {
     if constexpr (std::is_const_v<Values>) {
-      system_.load_solved(values);
+      system_.load_solved(values, slot);
     } else {
-      system_.store_solved(values);
+      system_.store_solved(values, slot);
     }
   }
   ~solved_scope() { system_.end_solved(); }
@@ -597,15 +604,15 @@ private:
   System& system_;
 };
 
-// One rate evaluation, handed what its inner solves are to write into, or what an
-// earlier pass wrote for it. The two differ only in constness; a System that
-// solves for nothing is never handed either.
-template <typename T, typename StateType, typename Values>
+// One rate evaluation, handed its slot of the step's row to write its inner solves
+// into, or to read what an earlier pass wrote; a const row says which.
+template <typename T, typename StateType, typename Row>
   requires SolvesForValues<T> &&
-           std::same_as<std::remove_const_t<Values>, solved_values_t<T>>
+           std::same_as<std::remove_const_t<Row>, solved_row<T>>
 void derivs(T& obj, const StateType& y, StateType& dydt, const double time,
-            Values& solved) {
-  const solved_scope<T, Values> extent{obj, solved};
+            Row& row, std::size_t slot) {
+  const solved_scope<T, std::remove_reference_t<decltype(row[slot])>> extent{
+      obj, row[slot], slot};
   internal::set_ode_state(obj, y, time);
   obj.ode_rates(dydt.begin());
 }
