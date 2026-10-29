@@ -400,6 +400,14 @@ concept HasSubsystem =
   s.subsystem_rates(time, y, y, out);
 };
 
+// A System that fills `scales` with one positive, finite multiplier per
+// component on its tolerance, for an adaptive step starting at `time`.
+template <typename System>
+concept ScalesTolerances = requires(const System& s, double time,
+                                    std::vector<double>& scales) {
+  { s.tolerance_scales(time, scales) } -> std::same_as<void>;
+};
+
 // Opt-in domain check. A system may declare
 //
 //   bool ode_state_valid(const state_type& y) const;

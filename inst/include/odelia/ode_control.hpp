@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cmath>
 #include <limits>
+#include <span>
 #include <odelia/ode_util.hpp>
 
 namespace odelia {
@@ -126,17 +127,24 @@ struct OdeControl {
 
   // A step's error as this rule reads it, in units of the tolerance: the largest
   // |yerr| / errlevel over components under gsl, their RMS under hairer, and
-  // infinite where any component's ratio is not finite.
+  // infinite where any component's ratio is not finite. `tolerance_scales`, one
+  // per component where given, multiply each component's errlevel (see
+  // ScalesTolerances); empty scales none.
   double error_ratio(size_t dim, double step_size,
                      const state_type &y,
                      const state_type &yerr,
-                     const state_type &dydt) const
+                     const state_type &dydt,
+                     std::span<const double> tolerance_scales = {}) const
   {
     double rmax = std::numeric_limits<double>::min();
+    const auto level = [&](size_t i) {
+      const double D0 = errlevel(y[i], dydt[i], step_size);
+      return tolerance_scales.empty() ? D0 : D0 * tolerance_scales[i];
+    };
 
     for (size_t i = 0; i < dim; i++)
     {
-      const double D0 = errlevel(y[i], dydt[i], step_size);
+      const double D0 = level(i);
       using std::abs;
       const double r = abs(yerr[i]) / abs(D0);
       // A non-finite ratio means the step left the model's valid domain: yerr
@@ -179,7 +187,7 @@ struct OdeControl {
       {
         // std::abs, not abs: with libstdc++ an unqualified abs on a double is
         // C's int abs(int), and the ratio becomes an integer division by zero.
-        const double rr = std::abs(yerr[i]) / std::abs(errlevel(y[i], dydt[i], step_size));
+        const double rr = std::abs(yerr[i]) / std::abs(level(i));
         ss += rr * rr;
       }
       // With no components, 0 / 0 would make the ratio NaN, and NaN would
@@ -193,10 +201,12 @@ struct OdeControl {
                           double step_size,
                           const state_type &y,
                           const state_type &yerr,
-                          const state_type &dydt)
+                          const state_type &dydt,
+                          std::span<const double> tolerance_scales = {})
   {
     const double S = 0.9;
-    const double rmax = error_ratio(dim, step_size, y, yerr, dydt);
+    const double rmax = error_ratio(dim, step_size, y, yerr, dydt,
+                                    tolerance_scales);
 
     if (!std::isfinite(rmax))
     {
@@ -345,6 +355,9 @@ struct OdeControl {
   // Whether an explicit step that spans no knot of a System's subsystem's
   // forcing may substep it (see SolverInternal::substeps_subsystem).
   bool substep_subsystem = true;
+  // The relative tolerance that chooses a subsystem's substeps; the absolute is
+  // 1e-4 of it. Loosening it saves little: substeps evaluate only its rates.
+  double substep_tol = 1e-9;
   bool last_rejected = false; // hairer: no growth on the step after a rejection
   double ratio_prev = 1e-4;   // hairer: the last accepted step's error ratio
 };

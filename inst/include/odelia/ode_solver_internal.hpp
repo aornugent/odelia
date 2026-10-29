@@ -220,10 +220,12 @@ private:
   // the subsystem exceeding both the rest's and the coupling error; under the
   // hairer rule's RMS, the sums of squares compare, so a subsystem of a few
   // components among many sets the step only where its error is large enough
-  // to. False under the implicit stepper, which measures none of these.
+  // to. Each part is read at the levels the step's `tolerance_scales` scaled.
+  // False under the implicit stepper, which measures none of these.
   bool subsystem_error_sets_step(const System& system, const state_type& u0,
                                  const std::vector<double>& input_slope,
-                                 double h, bool substepped) const;
+                                 double h, bool substepped,
+                                 std::span<const double> tolerance_scales) const;
   bool spans_subsystem_knot(const System& system, double step_end) const;
   void refuse_substeps_under_rodas(const subsystem_substeps* substeps) const {
     if (substeps != nullptr && method == Method::rodas) {
@@ -670,6 +672,21 @@ void SolverInternal<System>::step(System& system) {
   }
   std::optional<subsystem_substeps> substeps;
 
+  // The System's multiplier on each component's tolerance, read at the step's
+  // start and held across its retries; empty where it declares none. An
+  // infinite scale is refused too: on a component whose error level is zero it
+  // makes the level NaN, and every retry of the step is rejected.
+  state_type tolerance_scales;
+  if constexpr (ScalesTolerances<System>) {
+    system.tolerance_scales(time_orig, tolerance_scales);
+    util::check_length(tolerance_scales.size(), size);
+    for (const double s : tolerance_scales) {
+      if (!(s > 0.0 && std::isfinite(s))) {
+        util::stop("tolerance_scales: every scale must be positive and finite");
+      }
+    }
+  }
+
   while (true) {
     // Does this appear to be the last step before reaching `time_max`?
     const bool final_step = step_size > time_remaining;
@@ -698,7 +715,7 @@ void SolverInternal<System>::step(System& system) {
         if (substep_subsystem) {
           substeps = explicit_stepper([&](const auto& s) {
             return s.choose_substeps(system, time, step_size, y, dydt_in, u0,
-                                     input_slope, control.get_step_size_min());
+                                     input_slope, control);
           });
         }
       }
@@ -717,7 +734,7 @@ void SolverInternal<System>::step(System& system) {
     } else {
       step_size_next =
         control.adjust_step_size(size, stepper_order(), step_size,
-			         y, yerr, dydt_out);
+			         y, yerr, dydt_out, tolerance_scales);
       if (!state_valid(system, y)) {
         invalid = true;
         invalid_reason = "ode_state_valid() refused the state after the step";
@@ -786,7 +803,8 @@ void SolverInternal<System>::step(System& system) {
       save_dydt_out_as_in();
       if constexpr (HasSubsystem<System>) {
         subsystem_error_set_step_ = subsystem_error_sets_step(
-            system, u0, input_slope, step_size, substeps.has_value());
+            system, u0, input_slope, step_size, substeps.has_value(),
+            tolerance_scales);
       }
       push_step(system, {time, step_size, false, std::move(substeps)});
       if constexpr (HasSubsystem<System>) {
@@ -998,7 +1016,8 @@ bool SolverInternal<System>::substeps_subsystem(const System& system,
 template <class System>
 bool SolverInternal<System>::subsystem_error_sets_step(
     const System& system, const state_type& u0,
-    const std::vector<double>& input_slope, double h, bool substepped) const {
+    const std::vector<double>& input_slope, double h, bool substepped,
+    std::span<const double> tolerance_scales) const {
   if (method == Method::rodas) {
     return false;
   }
@@ -1014,9 +1033,11 @@ bool SolverInternal<System>::subsystem_error_sets_step(
         (s.inputs_at_last_stage[q] - u0[q] - h * input_slope[q]);
     }
   });
-  const double own_ratio = control.error_ratio(y.size(), h, y, own, dydt_out);
-  return own_ratio > control.error_ratio(y.size(), h, y, rest, dydt_out) &&
-    own_ratio > control.error_ratio(y.size(), h, y, coupling, dydt_out);
+  const auto ratio = [&](const state_type& err) {
+    return control.error_ratio(y.size(), h, y, err, dydt_out, tolerance_scales);
+  };
+  const double own_ratio = ratio(own);
+  return own_ratio > ratio(rest) && own_ratio > ratio(coupling);
 }
 
 template <class System>
