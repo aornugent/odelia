@@ -188,18 +188,29 @@ compile_substep_interface <- function() {
     static_assert(ode::HasSubsystem<StoreA>);
     static_assert(!ode::HasSubsystem<StoreP>);
 
+    // The store with a tolerance scale on its two layers.
+    struct ScaledStore : StoreA {
+      using StoreA::StoreA;
+      double store_scale = 1.0;
+      void tolerance_scales(double, std::vector<double>& scales) const {
+        scales = {1.0, store_scale, store_scale};
+      }
+    };
+
     ode::Method method_of(const std::string& name) {
       return name == "dopri" ? ode::Method::dopri :
         name == "rodas" ? ode::Method::rodas : ode::Method::rkck;
     }
 
     // The step-size rule by name, gsl unless asked otherwise.
-    ode::OdeControl control_at(double tol, const std::string& rule = "gsl") {
+    ode::OdeControl control_at(double tol, const std::string& rule = "gsl",
+                               double substep_tol = 1e-9) {
       ode::OdeControl ctl;
       ctl.set_tol_abs(tol);
       ctl.set_tol_rel(tol);
       ctl.set_controller(rule == "hairer" ? ode::Controller::hairer
                                           : ode::Controller::gsl);
+      ctl.substep_tol = substep_tol;
       return ctl;
     }
 
@@ -230,10 +241,11 @@ compile_substep_interface <- function() {
                          const std::vector<double>& y0, double fail_after,
                          const std::string& method, const std::string& rule,
                          bool substep_subsystem,
-                         const std::vector<double>& fractions) {
+                         const std::vector<double>& fractions,
+                         double substep_tol = 1e-9) {
       S s = store<S>(pars);
       s.fail_after = fail_after;
-      ode::OdeControl ctl = control_at(tol, rule);
+      ode::OdeControl ctl = control_at(tol, rule, substep_tol);
       ctl.substep_subsystem = substep_subsystem;
       ode::Solver<S> solver(s, ctl, method_of(method));
       solver.set_keep_states(true);
@@ -282,9 +294,40 @@ compile_substep_interface <- function() {
                           std::vector<double> pars, std::vector<double> y0,
                           double fail_after, std::string method,
                           std::string rule, bool substep,
-                          std::vector<double> fractions) {
+                          std::vector<double> fractions, double substep_tol) {
       return run_store<StoreA>(tol, t_end, pars, y0, fail_after, method, rule,
-                               substep, fractions);
+                               substep, fractions, substep_tol);
+    }
+
+    // A run with the tolerance on the store scaled by `store_scale`: where it
+    // lands, its steps and substepped steps, and where the unscaled store lands
+    // stepping them.
+    // [[Rcpp::export]]
+    Rcpp::List store_scaled_run(double tol, double t_end,
+                                std::vector<double> pars,
+                                std::vector<double> y0, double store_scale,
+                                std::string method = "rkck",
+                                std::string rule = "gsl") {
+      ScaledStore s(pars[0], pars[1], pars[2], pars[3], pars[4]);
+      s.store_scale = store_scale;
+      ode::Solver<ScaledStore> solver(s, control_at(tol, rule),
+                                      method_of(method));
+      solver.set_state(y0, 0.0);
+      solver.advance_adaptive({0.0, t_end});
+      const std::vector<ode::schedule_row> schedule = solver.steps_taken();
+      int substepped = 0;
+      for (const ode::schedule_row& row : schedule) {
+        substepped += row.subsystem.has_value();
+      }
+      ode::Solver<StoreA> pinned(store(pars), control_at(tol, rule),
+                                 method_of(method));
+      pinned.set_state(y0, 0.0);
+      pinned.advance_schedule(schedule);
+      return Rcpp::List::create(
+        Rcpp::_["y"] = solver.state(),
+        Rcpp::_["steps"] = (int) schedule.size() - 1,
+        Rcpp::_["substepped"] = substepped,
+        Rcpp::_["schedule_stepped"] = pinned.state());
     }
 
     // The error of a step as the rule reads it (OdeControl::error_ratio).
@@ -474,8 +517,10 @@ compile_substep_interface <- function() {
 }
 
 store_run <- function(tol, t_end, pars, y0, fail_after = 1e300, method = "rkck",
-                      rule = "gsl", substep = TRUE, fractions = numeric(0)) {
-  store_run_(tol, t_end, pars, y0, fail_after, method, rule, substep, fractions)
+                      rule = "gsl", substep = TRUE, fractions = numeric(0),
+                      substep_tol = 1e-9) {
+  store_run_(tol, t_end, pars, y0, fail_after, method, rule, substep, fractions,
+             substep_tol)
 }
 
 store_pars <- c(1.0, 0.8, 1e4, 200, 0.3)
@@ -556,6 +601,30 @@ for (rule in rules) testthat::test_that(sprintf("[%s] a replay takes the run's s
   expect_error(store_replay(store_pars, store_pars, store_y, store_y, 2.0, 1e-6,
                             "rodas", rule = rule),
                "taken only by method='rkck' or method='dopri'")
+})
+
+for (rule in rules) testthat::test_that(sprintf("[%s] the substeps' tolerance is the control's", rule), {
+  compile_substep_interface()
+  reference <- store_plain_run(1e-12, 2.0, store_pars, store_y)$y
+  tight <- store_run(1e-6, 2.0, store_pars, store_y, rule = rule)
+  loose <- store_run(1e-6, 2.0, store_pars, store_y, rule = rule,
+                     substep_tol = 1e-6)
+  expect_identical(store_run(1e-6, 2.0, store_pars, store_y, rule = rule,
+                             substep_tol = 1e-9), tight)
+  expect_lt(loose$substeps, tight$substeps)
+  expect_lt(max(abs(loose$y - reference)), 1e-5)
+})
+
+for (method in c("rkck", "dopri")) for (rule in rules) testthat::test_that(sprintf("[%s, %s] a tolerance scale on the store decides its steps, and a pinned run repeats them", method, rule), {
+  compile_substep_interface()
+  run <- store_run(1e-6, 2.0, store_pars, store_y, method = method, rule = rule)
+  ones <- store_scaled_run(1e-6, 2.0, store_pars, store_y, 1, method, rule)
+  expect_identical(ones$y, run$y)
+  expect_identical(ones$steps, run$steps)
+  expect_identical(ones$substepped, run$substepped)
+  loose <- store_scaled_run(1e-6, 2.0, store_pars, store_y, 100, method, rule)
+  expect_lt(loose$steps, run$steps)
+  expect_identical(loose$schedule_stepped, loose$y)
 })
 
 for (rule in rules) testthat::test_that(sprintf("[%s] a grid of a run's times is refused where a step would substep the store", rule), {
