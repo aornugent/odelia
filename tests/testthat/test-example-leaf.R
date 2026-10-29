@@ -56,7 +56,7 @@ testthat::test_that("the leaf thermal example, a compiled system with drivers, s
     runner$history()$T_LC
   }
   expect_equal(run("dopri"), run("rkck"), tolerance = 1e-6)
-  # The system has rebind_from(), so the implicit stepper takes its Jacobian by
+  # The system has rebind(), so the implicit stepper takes its Jacobian by
   # forward-mode AD and solves the same problem.
   expect_equal(run("rodas"), run("rkck"), tolerance = 1e-6)
 })

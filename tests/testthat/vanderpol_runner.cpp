@@ -18,7 +18,7 @@ using namespace odelia;
 //   y0' = y1
 //   y1' = ((1 - y0^2) * y1 - y0) / eps
 // small eps => stiff. Single parameter eps, templated scalar type with a
-// rebind_from() so the implicit stepper can differentiate the RHS.
+// rebind() so the implicit stepper can differentiate the RHS.
 template <typename T = double>
 class VdpSystem {
 public:
@@ -71,10 +71,10 @@ public:
 
   std::vector<double> pars() const { return { xad::value(eps) }; }
 
-  template <class S2> using rebind = VdpSystem<S2>;
+  template <class S2> using rebound = VdpSystem<S2>;
 
   template <typename U>
-  rebind<U> rebind_from() const {
+  rebound<U> rebind() const {
     VdpSystem<U> s(U(xad::value(eps)));
     std::vector<U> init{ U(xad::value(y0_init)), U(xad::value(y1_init)) };
     s.set_initial_state(init.begin(), t0);

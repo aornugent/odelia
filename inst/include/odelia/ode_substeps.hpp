@@ -8,11 +8,11 @@
 // for the solver's decision on the next step. The two explicit steppers derive
 // from this, each handing over its tableau:
 //
-//   static constexpr int stage_at_end;       the stage i, in 1..5, at t + h
+//   static constexpr int last_stage;         the stage i, in 1..5, at t + h
 //   static constexpr int stage_rates;        rate vectors a step carries, k[0..)
 //   static constexpr bool error_reads_end_rates;
 //                                            whether step_error reads the rates
-//                                            at the end state, in the last slot
+//                                            at the end state, in k.back()
 //   static constexpr double stability_limit; -h times a real rate the solution
 //                                            is stable down to
 //   static constexpr double stage_fraction(int i);
@@ -58,7 +58,7 @@ public:
   double subsystem_stiffness = 0.0;
   // The last step's own error estimate on the subsystem, whether or not it
   // substepped, and the subsystem's inputs at its stage at t + h.
-  state_type subsystem_own_error, inputs_at_end_stage;
+  state_type subsystem_own_error, inputs_at_last_stage;
 
   // The substeps of a step's predictor: the stepper on the subsystem from `y`
   // under inputs extrapolated from `u0` along `input_slope`, controlled at
@@ -151,18 +151,18 @@ private:
   // The substeps' relative tolerance; the absolute one is 1e-4 of it.
   static constexpr double substep_tol = 1e-9;
   // The subsystem's part of the stage at t + h.
-  state_type subsystem_at_end_stage;
+  state_type subsystem_at_last_stage;
 };
 
 template <class Stepper, class System>
 void SubsystemSubsteps<Stepper, System>::note_stage(int i, const System& system,
                                                     const state_type& at)
   requires HasSubsystem<System> {
-  if (i == Stepper::stage_at_end) {
+  if (i == Stepper::last_stage) {
     const auto [first, n] = system.subsystem();
     const auto from = at.begin() + static_cast<std::ptrdiff_t>(first);
-    subsystem_at_end_stage.assign(from, from + static_cast<std::ptrdiff_t>(n));
-    system.subsystem_inputs(inputs_at_end_stage);
+    subsystem_at_last_stage.assign(from, from + static_cast<std::ptrdiff_t>(n));
+    system.subsystem_inputs(inputs_at_last_stage);
   }
 }
 
@@ -176,9 +176,9 @@ void SubsystemSubsteps<Stepper, System>::record_subsystem(
   double rates = 0.0, states = 0.0;
   for (std::size_t q = 0; q < n; ++q) {
     const double rate = util::to_passive(dydt_out[first + q]) -
-      util::to_passive(k[Stepper::stage_at_end][first + q]);
+      util::to_passive(k[Stepper::last_stage][first + q]);
     const double state = util::to_passive(y[first + q]) -
-      util::to_passive(subsystem_at_end_stage[q]);
+      util::to_passive(subsystem_at_last_stage[q]);
     rates += rate * rate;
     states += state * state;
   }
@@ -223,8 +223,8 @@ subsystem_substeps SubsystemSubsteps<Stepper, System>::choose_substeps(
   std::sort(stops.begin(), stops.end());
   stops.erase(std::unique(stops.begin(), stops.end()), stops.end());
   // The rates at a substep's end, where the error reads them, go in the last
-  // slot and carry over as the next substep's first.
-  constexpr std::size_t end_slot = Stepper::stage_rates - 1;
+  // rate vector and carry over as the next substep's first.
+  constexpr std::size_t end_rates = Stepper::stage_rates - 1;
   subsystem_substeps chosen{std::move(input_slope), {}};
   double from = 0.0, substep = 1.0;
   for (const double stop : stops) {
@@ -232,7 +232,7 @@ subsystem_substeps SubsystemSubsteps<Stepper, System>::choose_substeps(
       const double end = std::min(from + substep, stop);
       take_substep(s, r, from, end, h, rates, next);
       if constexpr (Stepper::error_reads_end_rates) {
-        rates(end, next, r[end_slot]);
+        rates(end, next, r[end_rates]);
       }
       self().step_error(r, (end - from) * h, error);
       // Compared with the substep asked for: `end - from` rounds away from it.
@@ -251,7 +251,7 @@ subsystem_substeps SubsystemSubsteps<Stepper, System>::choose_substeps(
       std::swap(s, next);
       if (from < 1.0) {
         if constexpr (Stepper::error_reads_end_rates) {
-          std::swap(r[0], r[end_slot]);
+          std::swap(r[0], r[end_rates]);
         } else {
           rates(from, s, r[0]);
         }
@@ -327,7 +327,7 @@ std::vector<double> SubsystemSubsteps<Stepper, System>::take_substepped_step(
   // Corrector: the subsystem again over the same substeps, its inputs on the
   // line from u0 to those at the stage at t + h. Its end is the step's.
   const std::vector<S>& inputs_at_end =
-    stage_inputs[static_cast<std::size_t>(Stepper::stage_at_end - 1)];
+    stage_inputs[static_cast<std::size_t>(Stepper::last_stage - 1)];
   std::vector<S> end(subsystem.size);
   integrate_substeps(subsystem.first, substeps.ends, h, y0, k,
                      rates_on_line(sys, time, h, u0, inputs_at_end), end,

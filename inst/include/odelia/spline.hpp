@@ -394,7 +394,7 @@ public:
   // Every value here that carries the working scalar. The knot positions are not
   // among them: they stay double, which is what keeps the grid out of the
   // derivative.
-  // Both overloads, for the reason value_with_slope.hpp gives: visit_active dispatches
+  // Both overloads, for the reason with_slope.hpp gives: visit_active dispatches
   // on whether the call compiles, so a const object handed to a non-const walk is
   // passed over in silence rather than refused, and the rewinding forms in
   // implicit_node.hpp take their inputs const.

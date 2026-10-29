@@ -56,13 +56,13 @@ compile_vjp_interface <- function() {
       Rcpp::NumericVector small_block_vjp(std::vector<double> x,
                                           std::vector<double> output_adjoints) {
         xad::adj<double>::tape_type tape(false);
-        const odelia::ode::adjoint_rows seeds =
-            odelia::ode::adjoint_rows::one_row(output_adjoints);
-        odelia::ode::adjoint_rows input_adjoints;
+        const odelia::ode::adjoint_batch adjoints =
+            odelia::ode::adjoint_batch::one(output_adjoints);
+        odelia::ode::adjoint_batch input_adjoints;
         odelia::ode::vector_jacobian_product(
-            tape, x, seeds,
+            tape, x, adjoints,
             [](const auto& xa, auto& ya) { small_block(xa, ya); }, input_adjoints);
-        return Rcpp::wrap(input_adjoints.to_rows()[0]);
+        return Rcpp::wrap(input_adjoints.to_vectors()[0]);
       }
 
       // [[Rcpp::export]]
@@ -70,11 +70,11 @@ compile_vjp_interface <- function() {
                                          std::vector<double> output_adjoints) {
         std::vector<double> x(n_inputs, 0.5);
         xad::adj<double>::tape_type tape(false);
-        const odelia::ode::adjoint_rows seeds =
-            odelia::ode::adjoint_rows::one_row(output_adjoints);
-        odelia::ode::adjoint_rows input_adjoints;
+        const odelia::ode::adjoint_batch adjoints =
+            odelia::ode::adjoint_batch::one(output_adjoints);
+        odelia::ode::adjoint_batch input_adjoints;
         return double(odelia::ode::vector_jacobian_product(
-            tape, x, seeds,
+            tape, x, adjoints,
             [](const auto& xa, auto& ya) { padded_block(xa, ya); }, input_adjoints));
       }
 
@@ -87,13 +87,13 @@ compile_vjp_interface <- function() {
                                              std::vector<double> output_adjoints,
                                              int n_calls) {
         xad::adj<double>::tape_type tape(false);
-        const odelia::ode::adjoint_rows seeds =
-            odelia::ode::adjoint_rows::one_row(output_adjoints);
-        odelia::ode::adjoint_rows input_adjoints;
+        const odelia::ode::adjoint_batch adjoints =
+            odelia::ode::adjoint_batch::one(output_adjoints);
+        odelia::ode::adjoint_batch input_adjoints;
         std::vector<double> all_adjoints, sizes;
         for (int k = 0; k < n_calls; ++k) {
           sizes.push_back(double(odelia::ode::vector_jacobian_product(
-              tape, x, seeds,
+              tape, x, adjoints,
               [](const auto& xa, auto& ya) { small_block(xa, ya); }, input_adjoints)));
           for (double v : input_adjoints[0]) all_adjoints.push_back(v);
         }
@@ -115,13 +115,13 @@ compile_vjp_interface <- function() {
           std::vector<double> x, std::vector<double> output_adjoints) {
         xad::adj<double>::tape_type owned(false);
         xad::adj<double>::tape_type other;  // constructed active
-        const odelia::ode::adjoint_rows seeds =
-            odelia::ode::adjoint_rows::one_row(output_adjoints);
-        odelia::ode::adjoint_rows input_adjoints;
+        const odelia::ode::adjoint_batch adjoints =
+            odelia::ode::adjoint_batch::one(output_adjoints);
+        odelia::ode::adjoint_batch input_adjoints;
         odelia::ode::vector_jacobian_product(
-            owned, x, seeds,
+            owned, x, adjoints,
             [](const auto& xa, auto& ya) { small_block(xa, ya); }, input_adjoints);
-        return Rcpp::wrap(input_adjoints.to_rows()[0]);
+        return Rcpp::wrap(input_adjoints.to_vectors()[0]);
       }', verbose = FALSE)
     NULL
   }, error = function(e) e)
@@ -158,7 +158,7 @@ testthat::test_that("the recording size is a property of the block", {
   compile_vjp_interface()
 
   # One recording serves every output adjoint, so sweeping the same three-output
-  # block with one seeded adjoint and with three gives the same recording size.
+  # block with one output adjoint and with three gives the same recording size.
   # A product implemented as a loop of gradients would record once per output.
   expect_equal(padded_block_recording_size(10, c(1, 0, 0)),
                padded_block_recording_size(10, c(1, 2, 3)))
