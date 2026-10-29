@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <span>
@@ -49,12 +50,15 @@ public:
   // The adjoint of one step, from the state that step started at, for several
   // seeds at once. The two explicit steppers only: the Rosenbrock stepper
   // records no stages, so it carries no reverse counterpart.
+  // `substeps` holds the row's substeps where the step substepped the System's
+  // subsystem.
   void step_adjoint(active_system<System>& active,
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1, double time,
                     double step_size, const state_type& y,
                     const adjoint_rows& lambda_out, adjoint_rows& lambda_in,
-                    adjoint_rows& parameter_adjoint) {
+                    adjoint_rows& parameter_adjoint,
+                    const subsystem_substeps* substeps = nullptr) {
     if (method == Method::rodas) {
       util::stop("method='rodas' has no adjoint; use method='rkck' or "
                  "method='dopri'.");
@@ -66,10 +70,11 @@ public:
     resize(lambda_out.width());
     if (method == Method::dopri) {
       dopri_stepper.step_adjoint(active, solved, k1, time, step_size, y,
-                                 lambda_out, lambda_in, parameter_adjoint);
+                                 lambda_out, lambda_in, parameter_adjoint,
+                                 substeps);
     } else {
       stepper.step_adjoint(active, solved, k1, time, step_size, y,
-                           lambda_out, lambda_in, parameter_adjoint);
+                           lambda_out, lambda_in, parameter_adjoint, substeps);
     }
   }
 
@@ -145,19 +150,20 @@ public:
   }
 
   // One accepted step, into the record: the time it reached, the size that
-  // reached it, and the state there where the run was asked to keep states.
-  // `subdivided` marks a pinned interval crossed in more than one sub-step.
-  void push_step(System& system, double time_, double step_size,
-                 bool subdivided = false);
+  // reached it and any substeps, and the state there where the run was asked to
+  // keep states. `subdivided` marks a pinned interval crossed in more than one
+  // sub-step.
+  void push_step(System& system, instruction step, bool subdivided = false);
   // The insertion the caller just applied, as a row of its own: it holds the state
   // the map produced, at the time the row below it holds. Only schedule() has to
   // know that two rows share a time, and it drops these.
   void push_insertion(System& system);
   void step(System& system, double time_max_);
   void step_to(System& system, double time_max_);
-  // `reached` is the time a recording says this step ended at; NaN accumulates.
-  // `replay`, where a recording is being walked, is that step's own solved row.
-  void step_by(System& system, double step_size, double reached,
+  // A step of `row`'s size, over its substeps where it has them, to the time a
+  // recording says it ended at (a NaN time accumulates). `replay`, where a
+  // recording is being walked, is that step's own solved row.
+  void step_by(System& system, const instruction& row,
                const solved_row<System>* replay = nullptr);
   void step_euler(System& system, double time_max_);
 
@@ -199,6 +205,41 @@ public:
   void interpolate(double t, state_type& out) const;
 
 private:
+  // Whether a step from the current time to `step_end` substeps the System's
+  // subsystem: under an explicit stepper, where the step spans a knot of its
+  // forcing, or, where the control allows, where it is past the stepper's
+  // stability limit on it or follows a step whose size the stepper's error on
+  // it set.
+  bool substeps_subsystem(const System& system, double step_end) const;
+  // Whether the stepper's error on the subsystem set the size of the step just
+  // accepted: in the control's norm, the subsystem's part of the error exceeds
+  // the rest's, and would have been smaller as the coupling error of
+  // substepping -- the one the step measured where it substepped, and otherwise
+  // half the step times how far the inputs at t + h missed the line along the
+  // input slope. Under the gsl rule's max norm that is the stepper's error on
+  // the subsystem exceeding both the rest's and the coupling error; under the
+  // hairer rule's RMS, the sums of squares compare, so a subsystem of a few
+  // components among many sets the step only where its error is large enough
+  // to. False under the implicit stepper, which measures none of these.
+  bool subsystem_error_sets_step(const System& system, const state_type& u0,
+                                 const std::vector<double>& input_slope,
+                                 double h, bool substepped) const;
+  bool spans_subsystem_knot(const System& system, double step_end) const;
+  void refuse_substeps_under_rodas(const subsystem_substeps* substeps) const {
+    if (substeps != nullptr && method == Method::rodas) {
+      util::stop("A step that substepped a System's subsystem is taken only by "
+                 "method='rkck' or method='dopri', not method='rodas'");
+    }
+  }
+  // What both explicit steppers answer alike, asked of the one the method
+  // names; Cash-Karp's where the method is neither, which no caller reaches.
+  template <class F>
+  decltype(auto) explicit_stepper(F&& f) const {
+    if (method == Method::dopri) {
+      return f(dopri_stepper);
+    }
+    return f(stepper);
+  }
   void resize(size_t size_);
   void setup_dydt_in(System& system);
   void save_dydt_out_as_in();
@@ -214,22 +255,28 @@ private:
   // `replay` is the row an earlier run wrote, where a caller is replaying one:
   // the stages then load it instead of solving again, and nothing is cleared
   // because nothing is written.
+  //
+  // `substeps`, the explicit steppers' only, are the step's substeps of the
+  // System's subsystem, and `inputs` the subsystem's inputs at the step's start.
   void stepper_step(System& system, double time_, double step_size,
                     state_type& y_, state_type& yerr_,
                     const state_type& dydt_in_, state_type& dydt_out_,
-                    const solved_row<System>* replay = nullptr) {
+                    const solved_row<System>* replay = nullptr,
+                    const subsystem_substeps* substeps = nullptr,
+                    const state_type& inputs = {}) {
+    refuse_substeps_under_rodas(substeps);
     // Each stepper's last evaluation is at the state the step ends at, at this
     // time, which is what first-same-as-last carries on with dydt_out.
     dydt_out_time = time_ + step_size;
     // The two explicit steppers take a row the same way.
-    auto with_row = [&](auto& explicit_stepper) -> void {
+    auto with_row = [&](auto& explicit_stepper, const auto&... extra) -> void {
       // Into scratch, because a step that is rejected and retried writes here twice
       // and only the one that is accepted is committed -- which is what makes
       // "a rejected attempt writes the same slot as its retry" nothing anyone has
       // to arrange.
       if (replay != nullptr) {
         explicit_stepper.step(system, *replay, time_, step_size, y_, yerr_,
-                              dydt_in_, dydt_out_);
+                              dydt_in_, dydt_out_, extra...);
         // A replay that keeps its states keeps the rows it loaded too, so its
         // own recording can be swept with the same loads: a sweep of it then
         // hands each stage the value the replay stood in, exogenous and
@@ -244,11 +291,11 @@ private:
       } else {
         for (solved_values_t<System>& row : solved_scratch_) { row = {}; }
         explicit_stepper.step(system, solved_scratch_, time_, step_size, y_,
-                              yerr_, dydt_in_, dydt_out_);
+                              yerr_, dydt_in_, dydt_out_, extra...);
       }
     };
     if (method == Method::dopri) {
-      with_row(dopri_stepper);
+      with_row(dopri_stepper, substeps, inputs);
     } else if (method == Method::rodas) {
       if (replay != nullptr) {
         // RODAS takes no row at all, so it has nowhere to put one. Said here
@@ -270,7 +317,7 @@ private:
                    "non-active scalar); use method='rkck' or method='dopri'.");
       }
     } else {
-      with_row(stepper);
+      with_row(stepper, substeps, inputs);
     }
   }
   size_t stepper_order() const {
@@ -323,10 +370,10 @@ private:
   // different run, and nothing would say so.
   std::vector<step_record<System>> prev_steps;
   // What every run keeps, recording or not: the time each step reached, the
-  // size that reached it, and where the state widened. Separate from the
-  // records so a run that is only integrating stores 24 bytes a step rather
-  // than a record with a state and a row of solved values. The two are written
-  // together, row for row, and recording() refuses if they differ.
+  // size that reached it, where the state widened, and any substeps. Separate
+  // from the records so a run that is only integrating stores an instruction a
+  // step rather than a record with a state and a row of solved values. The two
+  // are written together, row for row, and recording() refuses if they differ.
   std::vector<instruction> prev_schedule;
   // Whether to keep the states. The caller's: a run whose gradient will be taken
   // needs them and a run that is only integrating does not. The same flag decides
@@ -356,6 +403,17 @@ private:
   double dydt_out_time = 0.0;
   double dydt_in_carried_at = std::numeric_limits<double>::quiet_NaN();
   double k1_carried_at = std::numeric_limits<double>::quiet_NaN();
+
+  // The subsystem's inputs at the start of the last accepted step, and its size,
+  // where that step was adaptive: what the next step's input slope is taken
+  // from. Any other step, and any re-seed, empties it.
+  struct last_inputs {
+    state_type inputs;
+    double step_size;
+  };
+  std::optional<last_inputs> last_inputs_;
+  // subsystem_error_sets_step for the last accepted adaptive step.
+  bool subsystem_error_set_step_ = false;
 };
 
 template <class System>
@@ -372,6 +430,9 @@ void SolverInternal<System>::reset(System& system) {
   prev_schedule.clear();
   step_size_last = control.step_size_initial;
   control.reset_memory();
+  stepper.subsystem_stiffness = 0.0;
+  dopri_stepper.subsystem_stiffness = 0.0;
+  subsystem_error_set_step_ = false;
   time_max = std::numeric_limits<double>::infinity();
   in_step = false;
   have_prev = false;
@@ -391,6 +452,7 @@ void SolverInternal<System>::set_state_from_system(System& system) {
   resize(system.ode_size());
   system.ode_state(y.begin());
   system.ode_rates(dydt_in.begin());
+  last_inputs_.reset();
   dydt_in_is_clean = true;
   dydt_in_carried_at = std::numeric_limits<double>::quiet_NaN();
   // The state the run starts from, into the record set_time just opened, once
@@ -406,11 +468,13 @@ void SolverInternal<System>::set_state_from_system(System& system) {
 // `y`, so a System that reaches a state by a route of its own is recorded at the
 // state it holds.
 template <class System>
-void SolverInternal<System>::push_step(System& system, double time_,
-                                       double step_size, bool subdivided) {
-  prev_schedule.push_back({time_, step_size});
+void SolverInternal<System>::push_step(System& system, instruction step,
+                                       bool subdivided) {
+  // An adaptive step sets these again once it is pushed.
+  last_inputs_.reset();
+  prev_schedule.push_back(step);
   if (keep_states_) {
-    step_record<System> record{{time_, step_size}, state_type()};
+    step_record<System> record{std::move(step), state_type()};
     record.state.resize(system.ode_size());
     system.ode_state(record.state.begin());
     record.solved = std::move(solved_scratch_);
@@ -540,7 +604,7 @@ void SolverInternal<System>::step_euler(System& system, double time_max_) {
   time = time_max;
   // Settle the system onto the new state at the new time.
   ode::internal::set_ode_state(system, y, time);
-  push_step(system, time, h);
+  push_step(system, {time, h});
   dydt_in_is_clean = false;
 }
 
@@ -586,6 +650,26 @@ void SolverInternal<System>::step(System& system) {
   setup_dydt_in(system);
   dydt_prev = dydt_in;
 
+  // Whether this step substeps the subsystem is decided here and held across
+  // its retries, which only shrink it. Its input slope is the trend since the
+  // last adaptive step, zero where there is none.
+  state_type u0;
+  std::vector<double> input_slope;
+  bool substep_subsystem = false;
+  if constexpr (HasSubsystem<System>) {
+    system.subsystem_inputs(u0);
+    substep_subsystem =
+      substeps_subsystem(system, std::min(time + step_size, time_max));
+    input_slope.assign(u0.size(), 0.0);
+    if (last_inputs_ && last_inputs_->inputs.size() == u0.size()) {
+      for (size_t q = 0; q < u0.size(); ++q) {
+        input_slope[q] =
+          (u0[q] - last_inputs_->inputs[q]) / last_inputs_->step_size;
+      }
+    }
+  }
+  std::optional<subsystem_substeps> substeps;
+
   while (true) {
     // Does this appear to be the last step before reaching `time_max`?
     const bool final_step = step_size > time_remaining;
@@ -608,7 +692,18 @@ void SolverInternal<System>::step(System& system) {
     bool invalid = false;
     std::string invalid_reason;
     try {
-      stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out);
+      // A step that substeps the subsystem chooses its substeps, then takes them
+      // as a replay does.
+      if constexpr (HasSubsystem<System>) {
+        if (substep_subsystem) {
+          substeps = explicit_stepper([&](const auto& s) {
+            return s.choose_substeps(system, time, step_size, y, dydt_in, u0,
+                                     input_slope, control.get_step_size_min());
+          });
+        }
+      }
+      stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, nullptr,
+                   substeps ? &*substeps : nullptr, u0);
     } catch (const util::DomainError& e) {
       invalid = true;
       invalid_reason = e.what();
@@ -689,7 +784,14 @@ void SolverInternal<System>::step(System& system) {
       time_prev = time_orig;
       have_prev = true;
       save_dydt_out_as_in();
-      push_step(system, time, step_size);
+      if constexpr (HasSubsystem<System>) {
+        subsystem_error_set_step_ = subsystem_error_sets_step(
+            system, u0, input_slope, step_size, substeps.has_value());
+      }
+      push_step(system, {time, step_size, false, std::move(substeps)});
+      if constexpr (HasSubsystem<System>) {
+        last_inputs_ = last_inputs{std::move(u0), step_size};
+      }
       in_step = false;
       return; // This exits the infinite loop.
     }
@@ -741,6 +843,16 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
   // this row, and a shrunken sub-step is a detail of how this run got there.
   const double step_size = time_max - time;
   setup_dydt_in(system);
+  // A grid holds no substeps, and a step across this interval with the
+  // subsystem taken with the rest can run past its stability limit, finitely.
+  if constexpr (HasSubsystem<System>) {
+    if (substeps_subsystem(system, time_max)) {
+      util::stop("A step to t = " + util::format_double(time_max) +
+                 " from t = " + util::format_double(time) + " would substep "
+                 "the System's subsystem, which a grid of times cannot; replay "
+                 "the run's program, its sizes and substeps with its times");
+    }
+  }
 
   // The sub-step, named apart from the interval above because the retry
   // shrinks it. Starts as the whole interval, so the common case is one step.
@@ -818,16 +930,16 @@ void SolverInternal<System>::step_to(System& system, double time_max_) {
   }
 
   time = time_max;
-  push_step(system, time, step_size, sub_steps > 1);
+  push_step(system, {time, step_size}, sub_steps > 1);
   in_step = false;
 }
 
 // This takes a step of the given size, regardless of what the integration error
 // says. advance_recorded() drives a replay through it, one recorded step each.
 template <class System>
-void SolverInternal<System>::step_by(System& system, double step_size,
-                                     double reached,
+void SolverInternal<System>::step_by(System& system, const instruction& row,
                                      const solved_row<System>* replay) {
+  const double step_size = row.step_size;
   if (!util::is_finite(step_size)) {
     util::stop("step_size must be finite!");
   }
@@ -837,15 +949,85 @@ void SolverInternal<System>::step_by(System& system, double step_size,
   in_step = true;
   have_prev = false; // a fixed step leaves no adaptive step to interpolate in
   setup_dydt_in(system);
-  stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay);
+  // A recorded step that substepped the subsystem takes the run's substeps on
+  // its own inputs. One that spans a knot was substepped by the run whatever the
+  // System said, so a row without its substeps there lost them.
+  state_type u0;
+  if constexpr (HasSubsystem<System>) {
+    if (row.subsystem) {
+      system.subsystem_inputs(u0);
+    } else if (spans_subsystem_knot(system, util::is_finite(row.time)
+                                                 ? row.time
+                                                 : time + step_size)) {
+      util::stop("The step from t = " + util::format_double(time) + " of size " +
+                 util::format_double(step_size) + " spans a knot of the "
+                 "subsystem's forcing, so the run substepped it, and this row "
+                 "carries no substeps; replay the run's program with them");
+    }
+  }
+  stepper_step(system, time, step_size, y, yerr, dydt_in, dydt_out, replay,
+               row.subsystem ? &*row.subsystem : nullptr, u0);
   save_dydt_out_as_in();
 
   // The time the run reached, where a recording says what it was, rather than
   // this time plus this size (see instruction).
-  time = util::is_finite(reached) ? reached : time + step_size;
+  time = util::is_finite(row.time) ? row.time : time + step_size;
   time_max = time;
-  push_step(system, time, step_size);
+  push_step(system, {time, step_size, false, row.subsystem});
   in_step = false;
+}
+
+template <class System>
+bool SolverInternal<System>::substeps_subsystem(const System& system,
+                                                double step_end) const {
+  if constexpr (HasSubsystem<System>) {
+    if (method == Method::rodas) {
+      return false;
+    }
+    return spans_subsystem_knot(system, step_end) ||
+      (control.substep_subsystem &&
+       (subsystem_error_set_step_ ||
+        explicit_stepper([&](const auto& s) {
+          return (step_end - time) * s.subsystem_stiffness > s.stability_limit;
+        })));
+  } else {
+    return false;
+  }
+}
+
+template <class System>
+bool SolverInternal<System>::subsystem_error_sets_step(
+    const System& system, const state_type& u0,
+    const std::vector<double>& input_slope, double h, bool substepped) const {
+  if (method == Method::rodas) {
+    return false;
+  }
+  const auto [first, n] = system.subsystem();
+  // Each part of the error on its own, the other's rows zero: a zero row is
+  // nothing to a max and nothing to a sum of squares.
+  state_type rest = yerr, own(y.size(), 0.0), coupling(y.size(), 0.0);
+  explicit_stepper([&](const auto& s) {
+    for (size_t q = 0; q < n; ++q) {
+      rest[first + q] = 0.0;
+      own[first + q] = s.subsystem_own_error[q];
+      coupling[first + q] = substepped ? yerr[first + q] : 0.5 * h *
+        (s.inputs_at_end_stage[q] - u0[q] - h * input_slope[q]);
+    }
+  });
+  const double own_ratio = control.error_ratio(y.size(), h, y, own, dydt_out);
+  return own_ratio > control.error_ratio(y.size(), h, y, rest, dydt_out) &&
+    own_ratio > control.error_ratio(y.size(), h, y, coupling, dydt_out);
+}
+
+template <class System>
+bool SolverInternal<System>::spans_subsystem_knot(const System& system,
+                                                  double step_end) const {
+  if constexpr (HasSubsystem<System>) {
+    return method != Method::rodas &&
+      !system.subsystem_knots(time, step_end).empty();
+  } else {
+    return false;
+  }
 }
 
 

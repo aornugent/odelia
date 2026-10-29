@@ -2,27 +2,35 @@
 #ifndef ODELIA_ODE_STEP_RKCK_HPP_
 #define ODELIA_ODE_STEP_RKCK_HPP_
 
+#include <algorithm>
 #include <array>
 #include <vector>
 #include <cstddef>
+#include <type_traits>
 #include <XAD/XAD.hpp>
 #include <odelia/adjoint.hpp>
 #include <odelia/ode_interface.hpp>
+#include <odelia/ode_substeps.hpp>
 
 namespace odelia {
 namespace ode {
 
+// Cash-Karp 4(5). A step that substeps a System's subsystem is
+// SubsystemSubsteps', on this tableau.
 template <class System>
-class Step {
+class Step : public SubsystemSubsteps<Step<System>, System> {
+  friend class SubsystemSubsteps<Step<System>, System>;
 public:
   using value_type = typename System::value_type;
   using state_type = std::vector<value_type>;
-  
+
   // The row a step's rate evaluations solve into and the first rates a step
   // carried in are solved_row and carried_rates (ode_interface.hpp).
 
   void resize(size_t size_);
   size_t order() const;
+  // Cash-Karp's solution is stable for h times a real rate down to -3.735.
+  static constexpr double stability_limit = 3.735;
   // `solved` is the row this step is about to create: what its rate evaluations
   // solve for goes in, in solved_row's order, and nothing is asked of the System
   // about where it is.
@@ -32,13 +40,18 @@ public:
   // the two happens is the constness of what was handed over and nothing else --
   // the rule `solved_scope` already follows one level down -- so there is no mode
   // here to keep, and none to hold a stale answer to.
+  //
+  // `substeps`, where the step substeps the System's subsystem, holds them, and
+  // `inputs` are the subsystem's at the step's start.
   template <class Row>
   void step(System& system, Row& solved,
             double time, double step_size,
 	    state_type &y,
 	    state_type &yerr,
 	    const state_type &dydt_in,
-	    state_type &dydt_out);
+	    state_type &dydt_out,
+            const subsystem_substeps* substeps = nullptr,
+            const state_type& inputs = {});
 
   // The step transposed, for as many seeds as are handed in: one recording of the
   // whole step, swept once per seed (see adjoint_rows). The active System is the
@@ -46,12 +59,15 @@ public:
   //
   // `k1` is how the run took this step's first rates where the step before
   // carried them, and null where the run derived them afresh at `time`.
+  // `substeps` holds the row's substeps where the step substepped the System's
+  // subsystem.
   void step_adjoint(active_system<System>& active,
                     const solved_row<System>& solved,
                     const carried_rates<System>* k1,
                     double time, double step_size,
                     const state_type &y, const adjoint_rows& lambda_out,
-                    adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint);
+                    adjoint_rows& lambda_in, adjoint_rows& parameter_adjoint,
+                    const subsystem_substeps* substeps = nullptr);
   // The same with the first rates derived afresh, which is what a caller
   // transposing one step on its own has: no step before it to carry them.
   void step_adjoint(active_system<System>& active,
@@ -96,6 +112,11 @@ private:
   template <class S>
   void step_end(const std::vector<S>& y, const std::vector<std::vector<S>>& k,
                 double h, std::vector<S>& out) const;
+  // And its error, h times the fifth- less the fourth-order weights, over
+  // `out`'s length.
+  template <class S>
+  void step_error(const std::vector<std::vector<S>>& k, double h,
+                  std::vector<S>& out) const;
   double stage_time(int i, double time, double h) const;
   const double* stage_row(int i) const;
   // stage_state for a stage count known at compile time: the same sums in the
@@ -107,12 +128,27 @@ private:
                          const std::vector<std::vector<S>>& k, double h,
                          std::vector<S>& out) const;
 
+  // The tableau as SubsystemSubsteps reads it: stage 4 is at t + h, a step
+  // carries six rate vectors, and the error reads none at the end state.
+  static constexpr int stage_at_end = 4;
+  static constexpr int stage_rates = 6;
+  static constexpr bool error_reads_end_rates = false;
+  static constexpr double stage_fraction(int i) { return ah[i - 1]; }
+  static double end_weight(int i) {
+    switch (i) {
+      case 2: return c3;
+      case 3: return c4;
+      case 5: return c6;
+      default: return 0.0;
+    }
+  }
+
   size_t size;
   std::vector<state_type> k{6};
   state_type ytmp;
 
   // Cash carp constants, from GSL.
-  static const double ah[];
+  static constexpr double ah[5] = {1.0 / 5.0, 0.3, 3.0 / 5.0, 1.0, 7.0 / 8.0};
   static const double b21;
   static const double b3[];
   static const double b4[];
@@ -151,7 +187,9 @@ void Step<System>::step(System& system,
                         state_type &y,
                         state_type &yerr,
                         const state_type &dydt_in,
-                        state_type &dydt_out) {
+                        state_type &dydt_out,
+                        const subsystem_substeps* substeps,
+                        const state_type& inputs) {
   const double h = step_size;
 
   // First-same-as-last: k1 is the previous step's dydt_out, so the step costs five
@@ -165,20 +203,30 @@ void Step<System>::step(System& system,
     } else {
       ode::derivs(system, at, into, stage_time(i, time, h));
     }
+    if constexpr (HasSubsystem<System>) {
+      this->note_stage(i, system, at);
+    }
   };
 
   std::copy(dydt_in.begin(), dydt_in.end(), k[0].begin());
-  // The stages written out, each at a compile-time stage count, so the kernel
-  // inlines into this function: a run-time stage index kept it out of line, a
-  // call per stage. The same kernels stage_state dispatches to, so the sweep
-  // still reverses exactly this arithmetic.
-  stage_state_fixed<1>(y, k, h, ytmp); rates_at(1, ytmp, k[1]);
-  stage_state_fixed<2>(y, k, h, ytmp); rates_at(2, ytmp, k[2]);
-  stage_state_fixed<3>(y, k, h, ytmp); rates_at(3, ytmp, k[3]);
-  stage_state_fixed<4>(y, k, h, ytmp); rates_at(4, ytmp, k[4]);
-  stage_state_fixed<5>(y, k, h, ytmp); rates_at(5, ytmp, k[5]);
-
-  step_end(y, k, h, y);
+  std::vector<double> subsystem_error;
+  if (substeps == nullptr) {
+    // The stages written out, each at a compile-time stage count, so the kernel
+    // inlines into this function: a run-time stage index kept it out of line, a
+    // call per stage. The same kernels stage_state dispatches to, so the sweep
+    // still reverses exactly this arithmetic.
+    stage_state_fixed<1>(y, k, h, ytmp); rates_at(1, ytmp, k[1]);
+    stage_state_fixed<2>(y, k, h, ytmp); rates_at(2, ytmp, k[2]);
+    stage_state_fixed<3>(y, k, h, ytmp); rates_at(3, ytmp, k[3]);
+    stage_state_fixed<4>(y, k, h, ytmp); rates_at(4, ytmp, k[4]);
+    stage_state_fixed<5>(y, k, h, ytmp); rates_at(5, ytmp, k[5]);
+    step_end(y, k, h, y);
+  } else if constexpr (HasSubsystem<System>) {
+    subsystem_error = this->take_substepped_step(system, time, h, y, k, y,
+                                                 *substeps, inputs, rates_at);
+  } else {
+    util::stop("Substepping needs a System with a subsystem");
+  }
   // The sixth evaluation, with a slot of its own: see `solved_row`.
   if constexpr (SolvesForValues<System>) {
     ode::derivs(system, y, dydt_out, time + h, solved[5]);
@@ -186,15 +234,10 @@ void Step<System>::step(System& system,
     ode::derivs(system, y, dydt_out, time + h);
   }
 
-  // Difference between 4th and 5th order, for error calculations
-  const value_type* const k0 = k[0].data();
-  const value_type* const k2 = k[2].data();
-  const value_type* const k3 = k[3].data();
-  const value_type* const k4 = k[4].data();
-  const value_type* const k5 = k[5].data();
-  for (size_t q = 0; q < size; ++q) {
-    yerr[q] = h * (ec[1] * k0[q] + ec[3] * k2[q] + ec[4] * k3[q] +
-                   ec[5] * k4[q] + ec[6] * k5[q]);
+  step_error(k, h, yerr);
+  // A substepped subsystem takes its error from the coupling.
+  if constexpr (HasSubsystem<System>) {
+    this->record_subsystem(system, y, k, dydt_out, yerr, subsystem_error);
   }
 }
 
@@ -243,11 +286,13 @@ void Step<System>::stage_state_fixed(const std::vector<S>& y,
                                      double h, std::vector<S>& out) const {
   // Stage 1 keeps its single term grouped as b21 * h * k1: h * (b21 * k1)
   // rounds differently, and the reference numbers were blessed on this one.
+  // Over y's own length, which is the whole state or a subsystem's.
+  const size_t n = y.size();
   if constexpr (I == 1) {
     const S* const k0 = k[0].data();
     const S* const yp = y.data();
     S* const op = out.data();
-    for (size_t q = 0; q < size; ++q) {
+    for (size_t q = 0; q < n; ++q) {
       op[q] = yp[q] + b21 * h * k0[q];
     }
     return;
@@ -257,7 +302,7 @@ void Step<System>::stage_state_fixed(const std::vector<S>& y,
   for (int m = 0; m < I; ++m) kp[m] = k[m].data();
   const S* const yp = y.data();
   S* const op = out.data();
-  for (size_t q = 0; q < size; ++q) {
+  for (size_t q = 0; q < n; ++q) {
     // Summed in ascending stage, then one h. Cash-Karp's rows are dense, so
     // this is a sum over every earlier stage rather than a term for the
     // immediate predecessor.
@@ -280,9 +325,25 @@ void Step<System>::step_end(const std::vector<S>& y,
   const S* const k5 = k[5].data();
   const S* const yp = y.data();
   S* const op = out.data();
-  for (size_t q = 0; q < size; ++q) {
+  const size_t n = y.size();
+  for (size_t q = 0; q < n; ++q) {
     const S combination = c1 * k0[q] + c3 * k2[q] + c4 * k3[q] + c6 * k5[q];
     op[q] = yp[q] + h * combination;
+  }
+}
+
+template <class System>
+template <class S>
+void Step<System>::step_error(const std::vector<std::vector<S>>& k, double h,
+                              std::vector<S>& out) const {
+  const S* const k0 = k[0].data();
+  const S* const k2 = k[2].data();
+  const S* const k3 = k[3].data();
+  const S* const k4 = k[4].data();
+  const S* const k5 = k[5].data();
+  for (size_t q = 0; q < out.size(); ++q) {
+    out[q] = h * (ec[1] * k0[q] + ec[3] * k2[q] + ec[4] * k3[q] +
+                  ec[5] * k4[q] + ec[6] * k5[q]);
   }
 }
 
@@ -305,7 +366,8 @@ void Step<System>::step_adjoint(active_system<System>& active,
                                 double time, double step_size,
                                 const state_type &y, const adjoint_rows& lambda_out,
                                 adjoint_rows& lambda_in,
-                                adjoint_rows& parameter_adjoint) {
+                                adjoint_rows& parameter_adjoint,
+                                const subsystem_substeps* substeps) {
   using scalar = active_scalar<double>;
   const double h = step_size;
   if (lambda_out.empty()) {
@@ -337,17 +399,32 @@ void Step<System>::step_adjoint(active_system<System>& active,
       ode::derivs(sys, y0, rate[0], k1 != nullptr ? k1->time : time);
     }
     ++recorded_rates;
-    for (int i = 1; i < 6; ++i) {
-      stage_state(i, y0, rate, h, stage);
+    auto rates_at = [&](int i, const std::vector<scalar>& at,
+                        std::vector<scalar>& into) -> void {
       if constexpr (SolvesForValues<System>) {
-        ode::derivs(sys, stage, rate[i], stage_time(i, time, h),
+        ode::derivs(sys, at, into, stage_time(i, time, h),
                     std::as_const(solved[i - 1]));
       } else {
-        ode::derivs(sys, stage, rate[i], stage_time(i, time, h));
+        ode::derivs(sys, at, into, stage_time(i, time, h));
       }
       ++recorded_rates;
+    };
+    if (substeps == nullptr) {
+      for (int i = 1; i < 6; ++i) {
+        stage_state(i, y0, rate, h, stage);
+        rates_at(i, stage, rate[i]);
+      }
+      step_end(y0, rate, h, y_end);
+    } else if constexpr (HasSubsystem<std::remove_cvref_t<decltype(sys)>>) {
+      // The subsystem's inputs at the start, off the evaluation that just ran
+      // there, as the run read them.
+      std::vector<scalar> inputs;
+      sys.subsystem_inputs(inputs);
+      this->take_substepped_step(sys, time, h, y0, rate, y_end, *substeps,
+                                 inputs, rates_at);
+    } else {
+      util::stop("Substepping needs a System with a subsystem");
     }
-    step_end(y0, rate, h, y_end);
   };
 
   ode::state_and_parameter_adjoints(active, y, lambda_out, whole_step, lambda_in,
@@ -355,10 +432,6 @@ void Step<System>::step_adjoint(active_system<System>& active,
 }
 
 // RKCK coefficients, from GSL
-template <class System>
-const double Step<System>::ah[] = {
-  1.0 / 5.0, 0.3, 3.0 / 5.0, 1.0, 7.0 / 8.0 };
-
 template <class System>
 const double Step<System>::b21 = 1.0 / 5.0;
 template <class System>
